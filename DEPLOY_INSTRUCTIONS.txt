@@ -1,0 +1,29 @@
+DEPLOYMENT INSTRUCTIONS FOR OFFLINE PCs
+========================================
+
+Quick Start:
+1. Copy the 'deployment' folder to any Windows PC (no internet needed)
+2. Navigate into the deployment folder
+3. Double-click DentalClinicApp.exe
+4. The Dental Clinic Management System will start immediately
+
+Requirements:
+- Windows 7 or later
+- No Python installation required
+- No internet connection required
+- All dependencies bundled in the executable
+
+What's Included:
+- DentalClinicApp.exe (fully standalone application)
+- uploads/ folder (for storing patient files and data)
+
+Data Storage:
+- All patient records and uploads are stored in the deployment folder
+- You can move the entire deployment folder to another PC anytime
+- All data moves with the executable (fully portable)
+
+Troubleshooting:
+- If Windows Defender blocks it, click "More info" then "Run anyway"
+- Always keep the 'uploads' folder alongside the .exe file
+- Database file (dental_clinic.db) will be created on first run in the deployment folder
+- All data is local to this folder, making it completely portable
