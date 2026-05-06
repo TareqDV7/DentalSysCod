@@ -10,9 +10,14 @@ import subprocess
 import os
 import platform
 import sqlite3
+import base64
+import hashlib
+import hmac
 import threading
 import webbrowser
 import json
+import secrets
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -51,6 +56,24 @@ CORS(app)
 DB_NAME = 'dental_clinic.db'
 UPLOAD_FOLDER = Path('uploads')
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+PAIRING_CODE_TTL_MINUTES = 5
+DEFAULT_LICENSE_DAYS = 30
+DEFAULT_LICENSE_GRACE_DAYS = 7
+
+SYNC_TABLES = [
+    'patients',
+    'appointments',
+    'visits',
+    'treatments',
+    'treatment_plans',
+    'treatment_procedures',
+    'patient_followups',
+    'expenses',
+    'billing',
+    'holidays'
+]
+MOBILE_ANDROID_PACKAGE_PATH = Path('deployment') / 'mobile' / 'android' / 'clinic-mobile.apk'
+MOBILE_IOS_PACKAGE_PATH = Path('deployment') / 'mobile' / 'ios' / 'clinic-mobile.ipa'
 
 
 def ensure_table_column(cursor, table_name, column_name, column_type):
@@ -62,7 +85,127 @@ def ensure_table_column(cursor, table_name, column_name, column_type):
         elif column_name == 'source_type':
             cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type} DEFAULT "manual"')
         else:
-            cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}')
+            # SQLite does not allow non-constant defaults like CURRENT_TIMESTAMP when
+            # adding a column. If the requested column_type contains such a default,
+            # add the column without the DEFAULT clause to remain compatible.
+            ct = column_type
+            if 'CURRENT_TIMESTAMP' in column_type or 'strftime' in column_type:
+                ct = column_type.split('DEFAULT')[0].strip()
+            cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {ct}')
+
+
+def ensure_updated_at_trigger(cursor, table_name):
+    cursor.execute(f'''
+        CREATE TRIGGER IF NOT EXISTS trg_{table_name}_updated_at
+        AFTER UPDATE ON {table_name}
+        FOR EACH ROW
+        BEGIN
+            UPDATE {table_name}
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE id = NEW.id;
+        END
+    ''')
+
+
+def get_db_connection(with_row_factory=False):
+    conn = sqlite3.connect(DB_NAME)
+    if with_row_factory:
+        conn.row_factory = sqlite3.Row
+    return conn
+
+
+def utc_now_iso():
+    return datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+
+
+def generate_pair_code():
+    return ''.join(secrets.choice('0123456789') for _ in range(6))
+
+
+def read_app_setting(cursor, key, default_value=None):
+    cursor.execute('SELECT value FROM app_settings WHERE key = ?', (key,))
+    row = cursor.fetchone()
+    if not row:
+        return default_value
+    return row[0]
+
+
+def write_app_setting(cursor, key, value):
+    cursor.execute('''
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+    ''', (key, str(value)))
+
+
+def get_or_create_license_signing_key(cursor):
+    key = read_app_setting(cursor, 'license_signing_key', '')
+    if key:
+        return key
+    key = secrets.token_urlsafe(48)
+    write_app_setting(cursor, 'license_signing_key', key)
+    return key
+
+
+def build_offline_license_payload(record, validity, device_id=''):
+    return {
+        'serial_number': record['serial_number'],
+        'clinic_name': record['clinic_name'],
+        'plan_name': record['plan_name'],
+        'status': record['status'],
+        'max_devices': record['max_devices'],
+        'expires_at': record['expires_at'],
+        'grace_until': record['grace_until'],
+        'licensed': bool(validity['licensed']),
+        'in_grace': bool(validity['in_grace']),
+        'device_id': device_id,
+        'issued_at': utc_now_iso(),
+    }
+
+
+def encode_offline_license_token(payload, signing_key):
+    payload_json = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    payload_part = base64.urlsafe_b64encode(payload_json).decode('ascii').rstrip('=')
+    signature = hmac.new(signing_key.encode('utf-8'), payload_json, hashlib.sha256).digest()
+    signature_part = base64.urlsafe_b64encode(signature).decode('ascii').rstrip('=')
+    return f'{payload_part}.{signature_part}'
+
+
+def decode_offline_license_token(token, signing_key):
+    try:
+        payload_part, signature_part = token.split('.', 1)
+        payload_bytes = base64.urlsafe_b64decode(payload_part + '=' * (-len(payload_part) % 4))
+        expected_signature = hmac.new(signing_key.encode('utf-8'), payload_bytes, hashlib.sha256).digest()
+        actual_signature = base64.urlsafe_b64decode(signature_part + '=' * (-len(signature_part) % 4))
+        if not hmac.compare_digest(expected_signature, actual_signature):
+            return None
+        return json.loads(payload_bytes.decode('utf-8'))
+    except Exception:
+        return None
+
+
+def serialize_offline_license(record, validity, signing_key, device_id=''):
+    payload = build_offline_license_payload(record, validity, device_id=device_id)
+    token = encode_offline_license_token(payload, signing_key)
+    return payload, token
+
+
+def verify_offline_license_token(token, signing_key):
+    payload = decode_offline_license_token(token, signing_key)
+    if not payload:
+        return None
+    expires_at = payload.get('expires_at') or ''
+    grace_until = payload.get('grace_until') or ''
+    status = payload.get('status') or 'active'
+    validity = evaluate_license_window(status, expires_at, grace_until)
+    if not validity['licensed']:
+        return None
+    return payload
+
+
+def get_table_columns(cursor, table_name):
+    cursor.execute(f'PRAGMA table_info({table_name})')
+    return [row[1] for row in cursor.fetchall()]
 
 
 def init_database():
@@ -263,6 +406,87 @@ def init_database():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pairing_requests (
+            pair_code TEXT PRIMARY KEY,
+            device_name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT NOT NULL,
+            consumed INTEGER DEFAULT 0
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS paired_devices (
+            device_id TEXT PRIMARY KEY,
+            device_name TEXT NOT NULL,
+            device_token TEXT NOT NULL UNIQUE,
+            paired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER DEFAULT 1
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sync_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            device_id TEXT,
+            table_count INTEGER DEFAULT 0,
+            record_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sync_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            entity_type TEXT,
+            entity_id INTEGER,
+            source_device_id TEXT,
+            details TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS licenses (
+            serial_number TEXT PRIMARY KEY,
+            clinic_name TEXT,
+            plan_name TEXT DEFAULT 'starter',
+            status TEXT DEFAULT 'active',
+            max_devices INTEGER DEFAULT 2,
+            expires_at TEXT,
+            grace_until TEXT,
+            activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS license_devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            serial_number TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            device_name TEXT,
+            first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER DEFAULT 1,
+            UNIQUE(serial_number, device_id),
+            FOREIGN KEY (serial_number) REFERENCES licenses(serial_number)
+        )
+    ''')
+
     ensure_table_column(cursor, 'expenses', 'payment_status', 'TEXT')
     ensure_table_column(cursor, 'expenses', 'patient_id', 'INTEGER')
     ensure_table_column(cursor, 'expenses', 'treatment_id', 'INTEGER')
@@ -278,6 +502,69 @@ def init_database():
     ensure_table_column(cursor, 'billing', 'paid_amount', 'REAL')
     ensure_table_column(cursor, 'billing', 'balance_due', 'REAL')
     ensure_table_column(cursor, 'billing', 'payment_status', 'TEXT')
+    ensure_table_column(cursor, 'patients', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'appointments', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'visits', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'treatments', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'treatment_plans', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'treatment_procedures', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'patient_followups', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'expenses', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'billing', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'holidays', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+
+    # New tables for features
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS treatment_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name_ar TEXT NOT NULL,
+            name_en TEXT DEFAULT '',
+            default_price REAL DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS patient_credit_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            type TEXT NOT NULL,
+            note TEXT DEFAULT '',
+            invoice_id INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Seed treatment_catalog only if empty
+    cursor.execute('SELECT COUNT(*) FROM treatment_catalog')
+    if cursor.fetchone()[0] == 0:
+        default_catalog = [
+            ('كشف', 'Consultation', 50),
+            ('تنظيف', 'Cleaning', 100),
+            ('حشوة', 'Filling', 150),
+            ('خلع', 'Extraction', 100),
+            ('سحب عصب', 'Root Canal', 400),
+            ('تركيبة', 'Crown/Prosthesis', 500),
+            ('مراجعة', 'Follow-up', 0),
+        ]
+        cursor.executemany('INSERT INTO treatment_catalog (name_ar, name_en, default_price) VALUES (?, ?, ?)', default_catalog)
+
+    # Add missing columns to existing tables
+    ensure_table_column(cursor, 'patient_followups', 'is_deleted', 'INTEGER DEFAULT 0')
+    ensure_table_column(cursor, 'patient_followups', 'entry_type', "TEXT DEFAULT 'new'")
+    ensure_table_column(cursor, 'patient_followups', 'tooth_number', 'TEXT DEFAULT ""')
+    ensure_table_column(cursor, 'patients', 'birth_date', 'TEXT DEFAULT ""')
+    ensure_table_column(cursor, 'patients', 'gender', 'TEXT DEFAULT ""')
+    ensure_table_column(cursor, 'patients', 'notes', 'TEXT DEFAULT ""')
+    ensure_table_column(cursor, 'billing', 'credit_used', 'REAL DEFAULT 0')
+    ensure_table_column(cursor, 'billing', 'discount_amount', 'REAL DEFAULT 0')
+    ensure_table_column(cursor, 'billing', 'remaining_amount', 'REAL DEFAULT 0')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_treatment_catalog_active ON treatment_catalog(is_active)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_credit_patient_id ON patient_credit_transactions(patient_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_followups_is_deleted ON patient_followups(is_deleted)')
 
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_treatment_plans_patient_id ON treatment_plans(patient_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date)')
@@ -296,6 +583,14 @@ def init_database():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_visit_date ON visits(visit_date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_followups_patient_id ON patient_followups(patient_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_followups_date ON patient_followups(followup_date)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_pairing_requests_expires_at ON pairing_requests(expires_at)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_paired_devices_last_seen_at ON paired_devices(last_seen_at)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_sync_events_created_at ON sync_events(created_at)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_license_devices_serial_number ON license_devices(serial_number)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status)')
+
+    for table_name in SYNC_TABLES:
+        ensure_updated_at_trigger(cursor, table_name)
 
     default_procedures = [
         ('Checkup', 0, 0, 0),
@@ -313,9 +608,39 @@ def init_database():
         VALUES (?, ?, ?, ?)
     ''', default_procedures)
 
+    cursor.execute('''
+        INSERT OR IGNORE INTO app_settings (key, value)
+        VALUES ('app_instance_id', ?)
+    ''', (str(uuid.uuid4()),))
+
+    cursor.execute('''
+        INSERT OR IGNORE INTO app_settings (key, value)
+        VALUES ('active_serial_number', '')
+    ''')
+
+    cursor.execute('''
+        INSERT OR IGNORE INTO app_settings (key, value)
+        VALUES ('mobile_android_download_url', '')
+    ''')
+
+    cursor.execute('''
+        INSERT OR IGNORE INTO app_settings (key, value)
+        VALUES ('mobile_ios_download_url', '')
+    ''')
+
+    cursor.execute('''
+        INSERT OR IGNORE INTO app_settings (key, value)
+        VALUES ('license_signing_key', '')
+    ''')
+
+    cursor.execute('''
+        INSERT OR IGNORE INTO treatment_procedures (id, name, requires_lab, active)
+        VALUES (0, 'مراجعة', 0, 1)
+    ''')
+
     conn.commit()
     conn.close()
-    print("✓ Database initialized successfully")
+    print("Database initialized successfully")
 
 
 def generate_invoice_number():
@@ -350,6 +675,18 @@ def normalize_datetime_input(value):
     return parsed.strftime('%Y-%m-%d %H:%M:%S')
 
 
+def is_friday_datetime(value):
+    if not value:
+        return False
+
+    normalized = str(value).strip().replace('T', ' ')
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    return parsed.weekday() == 4
+
+
 def normalize_date_input(value):
     if not value:
         return datetime.now().strftime('%Y-%m-%d')
@@ -362,6 +699,211 @@ def normalize_date_input(value):
             return datetime.strptime(cleaned[:10], '%Y-%m-%d').strftime('%Y-%m-%d')
         except ValueError:
             return datetime.now().strftime('%Y-%m-%d')
+
+
+def parse_date_input(value):
+    """Accept YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY and return YYYY-MM-DD or None."""
+    if not value:
+        return None
+    cleaned = str(value).strip()
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(cleaned[:10], fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+    return None
+
+
+def format_date_display(value):
+    """Convert YYYY-MM-DD to DD/MM/YYYY for display."""
+    if not value:
+        return ''
+    cleaned = str(value).strip()[:10]
+    try:
+        return datetime.strptime(cleaned, '%Y-%m-%d').strftime('%d/%m/%Y')
+    except ValueError:
+        return cleaned
+
+
+def format_date_input_placeholder():
+    """Return DD/MM/YYYY placeholder for date inputs."""
+    return 'DD/MM/YYYY'
+
+
+def normalize_api_date(value):
+    """Normalize API date filters to YYYY-MM-DD when possible."""
+    if not value:
+        return None
+    parsed = parse_date_input(value)
+    if parsed:
+        return parsed
+    cleaned = str(value).strip()
+    try:
+        return datetime.fromisoformat(cleaned[:10].replace('T', ' ')).strftime('%Y-%m-%d')
+    except ValueError:
+        return None
+
+
+def appointment_row_to_dict(row):
+    return {
+        'id': row[0],
+        'patient_id': row[1],
+        'appointment_date': row[2],
+        'duration': row[3],
+        'treatment_type': row[4],
+        'status': row[5],
+        'notes': row[6],
+        'created_at': row[7],
+        'patient_name': row[8],
+    }
+
+
+def build_date_clause(column_name, start_date, end_date):
+    if start_date and end_date:
+        return f' AND date({column_name}) BETWEEN ? AND ?', [start_date, end_date]
+    if start_date:
+        return f' AND date({column_name}) >= ?', [start_date]
+    if end_date:
+        return f' AND date({column_name}) <= ?', [end_date]
+    return '', []
+
+
+def calculate_age(birth_date_str):
+    """Return integer age from YYYY-MM-DD birth date, or None."""
+    if not birth_date_str:
+        return None
+    parsed = parse_date_input(birth_date_str)
+    if not parsed:
+        return None
+    try:
+        dob = datetime.strptime(parsed, '%Y-%m-%d').date()
+        today = datetime.now().date()
+        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    except ValueError:
+        return None
+
+
+def get_patient_credit_balance(cursor, patient_id):
+    """Return credit balance (positive means clinic owes patient)."""
+    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM patient_credit_transactions WHERE patient_id = ?', (patient_id,))
+    return float(cursor.fetchone()[0] or 0)
+
+
+def get_authenticated_device(cursor):
+    token = request.headers.get('X-Device-Token') or request.args.get('device_token')
+    if not token:
+        return None
+    cursor.execute('''
+        SELECT device_id, device_name, is_active
+        FROM paired_devices
+        WHERE device_token = ?
+    ''', (token,))
+    device = cursor.fetchone()
+    if not device or int(device[2]) != 1:
+        return None
+    cursor.execute('''
+        UPDATE paired_devices
+        SET last_seen_at = CURRENT_TIMESTAMP
+        WHERE device_id = ?
+    ''', (device[0],))
+    return {'device_id': device[0], 'device_name': device[1]}
+
+
+def upsert_row(cursor, table_name, row_data):
+    table_columns = get_table_columns(cursor, table_name)
+    payload = {}
+    for key, value in row_data.items():
+        if key in table_columns:
+            payload[key] = value
+
+    if 'id' not in payload:
+        return False
+
+    columns = list(payload.keys())
+    placeholders = ', '.join('?' for _ in columns)
+    cursor.execute(
+        f"INSERT OR REPLACE INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})",
+        tuple(payload[col] for col in columns)
+    )
+    return True
+
+
+def parse_timestamp_for_sync(value):
+    if not value:
+        return datetime.min
+    text = str(value).strip().replace('Z', '')
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return datetime.min
+
+
+def evaluate_license_window(status, expires_at, grace_until):
+    today = datetime.utcnow().date()
+    try:
+        expires_date = datetime.strptime(str(expires_at), '%Y-%m-%d').date() if expires_at else today
+    except ValueError:
+        expires_date = today
+    try:
+        grace_date = datetime.strptime(str(grace_until), '%Y-%m-%d').date() if grace_until else expires_date
+    except ValueError:
+        grace_date = expires_date
+
+    in_grace = today > expires_date and today <= grace_date
+    licensed = str(status or '') == 'active' and (today <= expires_date or in_grace)
+    return {
+        'licensed': licensed,
+        'in_grace': in_grace,
+        'expires_date': expires_date.isoformat(),
+        'grace_date': grace_date.isoformat()
+    }
+
+
+def fetch_license_record(cursor, serial_number):
+    cursor.execute('''
+        SELECT serial_number, clinic_name, plan_name, status, max_devices, expires_at, grace_until
+        FROM licenses
+        WHERE serial_number = ?
+    ''', (serial_number,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        'serial_number': row[0],
+        'clinic_name': row[1],
+        'plan_name': row[2],
+        'status': row[3],
+        'max_devices': row[4],
+        'expires_at': row[5],
+        'grace_until': row[6]
+    }
+
+
+def get_mobile_download_options(cursor):
+    android_setting = str(read_app_setting(cursor, 'mobile_android_download_url', '') or '').strip()
+    ios_setting = str(read_app_setting(cursor, 'mobile_ios_download_url', '') or '').strip()
+
+    android_url = android_setting or '/downloads/android'
+    ios_url = ios_setting or '/downloads/ios'
+
+    android_available = bool(android_setting) or MOBILE_ANDROID_PACKAGE_PATH.exists()
+    ios_available = bool(ios_setting) or MOBILE_IOS_PACKAGE_PATH.exists()
+
+    return {
+        'android': {
+            'platform': 'android',
+            'label': 'Android',
+            'url': android_url,
+            'available': android_available
+        },
+        'ios': {
+            'platform': 'ios',
+            'label': 'iOS',
+            'url': ios_url,
+            'available': ios_available
+        }
+    }
+
 
 # HTML Template
 HTML_TEMPLATE = '''
@@ -420,6 +962,8 @@ HTML_TEMPLATE = '''
         .container {
             max-width: 1460px;
             margin: 0 auto;
+            display: flex;
+            flex-direction: column;
             background: rgba(255, 255, 255, 0.88);
             border: 1px solid rgba(255, 255, 255, 0.85);
             backdrop-filter: blur(8px);
@@ -627,30 +1171,56 @@ HTML_TEMPLATE = '''
             color: #dce8f6;
         }
 
+        .app-body {
+            display: flex;
+            flex-direction: row;
+            flex: 1;
+            min-height: 0;
+        }
+
         .nav-tabs {
             display: flex;
-            gap: 8px;
-            padding: 12px;
+            flex-direction: column;
+            gap: 4px;
+            padding: 16px 10px;
             background: #f3f7fb;
-            border-bottom: 1px solid var(--line);
-            overflow-x: auto;
+            border-right: 1px solid var(--line);
+            overflow-y: auto;
+            width: 196px;
+            min-width: 196px;
+            flex-shrink: 0;
+        }
+
+        .nav-tabs-label {
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            padding: 4px 6px 10px;
         }
 
         body[data-theme="dark"] .nav-tabs {
             background: #10192a;
+            border-right-color: #1e2e42;
         }
 
         .nav-tab {
-            flex: 1 0 152px;
+            flex: none;
+            width: 100%;
+            text-align: left;
             border: 1px solid transparent;
             background: transparent;
-            border-radius: 12px;
+            border-radius: 10px;
             color: #35516d;
-            padding: 12px 14px;
+            padding: 11px 13px;
             font-weight: 700;
-            font-size: 0.95rem;
+            font-size: 0.92rem;
             cursor: pointer;
             transition: 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 9px;
         }
 
         .nav-tab:hover { background: #e8f1fa; }
@@ -676,7 +1246,27 @@ HTML_TEMPLATE = '''
             color: #f3f8ff;
         }
 
-        .content { padding: 28px; }
+        /* Collapsible sidebar quick-win: compact width and icon-only mode */
+        body.sidebar-collapsed .nav-tabs {
+            width: 72px;
+            min-width: 72px;
+            padding: 10px 6px;
+        }
+        body.sidebar-collapsed .nav-tab {
+            justify-content: center;
+            padding: 8px 6px;
+            gap: 0;
+        }
+        body.sidebar-collapsed .nav-tab span:not(.tab-icon) { display: none; }
+        body.sidebar-collapsed .nav-tabs-label { display: none; }
+
+        @media (max-width: 980px) {
+            .nav-tabs { width: 72px; min-width: 72px; }
+            .nav-tabs-label { display: none; }
+            .content { padding: 18px; }
+        }
+
+        .content { flex: 1; min-width: 0; padding: 28px; }
         .tab-content { display: none; }
         .tab-content.active { display: block; animation: fadeIn 0.25s ease; }
 
@@ -748,6 +1338,18 @@ HTML_TEMPLATE = '''
             color: var(--text);
         }
 
+        /* Design tokens (quick-win) */
+        :root {
+            --space-1: 6px;
+            --space-2: 10px;
+            --space-3: 14px;
+            --space-4: 18px;
+            --space-5: 24px;
+            --space-6: 32px;
+            --gap: var(--space-3);
+            --input-padding: 12px 14px;
+        }
+
         .form-group textarea { resize: vertical; min-height: 96px; }
 
         .form-group input:focus,
@@ -758,7 +1360,7 @@ HTML_TEMPLATE = '''
             box-shadow: 0 0 0 4px rgba(61, 149, 211, 0.14);
         }
 
-        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
 
         .btn {
             border: none;
@@ -766,8 +1368,8 @@ HTML_TEMPLATE = '''
             padding: 10px 16px;
             cursor: pointer;
             font-weight: 800;
-            font-size: 0.88rem;
-            transition: 0.2s ease;
+            font-size: 0.9rem;
+            transition: 0.18s ease;
             letter-spacing: 0.01em;
         }
 
@@ -776,6 +1378,10 @@ HTML_TEMPLATE = '''
         .btn-success { background: linear-gradient(135deg, #2c9e62 0%, #22b7a1 100%); color: #fff; }
         .btn-danger { background: linear-gradient(135deg, #da4c58 0%, #be3955 100%); color: #fff; }
         .btn-warning { background: linear-gradient(135deg, #f2ca53 0%, #e8a733 100%); color: #342300; }
+
+        /* Small / icon buttons */
+        .btn-sm { padding: 6px 10px; font-size: 0.85rem; border-radius: 10px; }
+        .btn-icon { padding: 6px 8px; font-size: 0.88rem; border-radius: 10px; }
 
         .table-container {
             margin-top: 16px;
@@ -792,9 +1398,9 @@ HTML_TEMPLATE = '''
 
         table { width: 100%; border-collapse: collapse; }
         table th {
-            padding: 12px;
+            padding: 14px 16px;
             text-align: left;
-            font-size: 0.84rem;
+            font-size: 0.95rem;
             letter-spacing: 0.02em;
             color: #49617b;
             background: #f5f9fd;
@@ -808,10 +1414,10 @@ HTML_TEMPLATE = '''
         }
 
         table td {
-            padding: 11px 12px;
+            padding: 14px 16px;
             border-bottom: 1px solid #edf2f7;
             vertical-align: top;
-            font-size: 0.92rem;
+            font-size: 0.95rem;
         }
 
         body[data-theme="dark"] table td {
@@ -839,6 +1445,12 @@ HTML_TEMPLATE = '''
         .badge-warning { background: #fff1d4; color: #8b5e00; }
         .badge-danger { background: #ffe2e5; color: #8d1f33; }
         .badge-info { background: #e3f1ff; color: #1f5d9e; }
+
+        .expense-status-select { padding: 4px 6px; font-size: 0.85rem; border-radius: 6px; border: 1px solid #cdd9e6; }
+        .expense-status-select[data-status="paid"] { background: #e0f4e8; color: #166942; }
+        .expense-status-select[data-status="postponed"] { background: #fff1d4; color: #8b5e00; }
+        body[data-theme="dark"] .expense-status-select[data-status="paid"] { background: #1a3a22; color: #6ee699; border-color: #2a5a32; }
+        body[data-theme="dark"] .expense-status-select[data-status="postponed"] { background: #2a2210; color: #d4a843; border-color: #4a3a10; }
 
         .action-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
         .action-buttons button { padding: 7px 12px; font-size: 0.8rem; }
@@ -914,6 +1526,22 @@ HTML_TEMPLATE = '''
 
         .calendar-day-number { font-weight: 800; color: #27415b; }
         .calendar-empty { font-size: 11px; color: #8ba0b5; margin-top: 6px; }
+        /* Date picker modal */
+        .date-picker-modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 10000; align-items: center; justify-content: center; }
+        .date-picker-modal.active { display: flex; }
+        .date-picker-modal-content { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); max-width: 320px; width: 90%; }
+        body[data-theme="dark"] .date-picker-modal-content { background: #0e1727; color: #f1f5f9; }
+        .date-picker-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .date-picker-modal-header button { background: none; border: none; font-size: 24px; cursor: pointer; color: #627386; }
+        .date-picker-modal-month { font-weight: 700; font-size: 1.1rem; text-align: center; }
+        .date-picker-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-top: 14px; }
+        .date-picker-day { text-align: center; padding: 6px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; border: 1px solid transparent; }
+        .date-picker-day:hover { background: #e8f1fa; }
+        .date-picker-day-name { font-weight: 700; font-size: 0.75rem; color: #627386; padding: 8px 0; }
+        body[data-theme="dark"] .date-picker-day:hover { background: rgba(255,255,255,0.08); }
+        .date-picker-day.empty { cursor: default; }
+        .date-picker-day.today { background: #e6f7f5; border-color: #13b5a7; color: #0f6d7b; font-weight: 700; }
+
 
         .calendar-event {
             font-size: 11px;
@@ -1053,12 +1681,24 @@ HTML_TEMPLATE = '''
         }
 
         @media (max-width: 1024px) {
+            .nav-tabs { width: 168px; min-width: 168px; padding: 12px 8px; }
             .content { padding: 20px; }
-            .nav-tab { flex-basis: 140px; }
             .appointments-calendar { grid-template-columns: repeat(4, 1fr); }
         }
 
         @media (max-width: 760px) {
+            .app-body { flex-direction: column; }
+            .nav-tabs {
+                flex-direction: row;
+                width: auto; min-width: 0;
+                border-right: none; border-bottom: 1px solid var(--line);
+                padding: 8px 10px;
+                overflow-x: auto; overflow-y: hidden;
+                gap: 6px;
+            }
+            html[dir="rtl"] .nav-tabs { flex-direction: row-reverse; border-left: none; order: 0; }
+            .nav-tab { flex: 0 0 auto; width: auto; padding: 9px 12px; }
+            .nav-tabs-label { display: none; }
             body { padding: 10px; }
             .header { padding: 20px; }
             .content { padding: 14px; }
@@ -1083,7 +1723,8 @@ HTML_TEMPLATE = '''
         html[dir="rtl"] .header { text-align: right; }
         html[dir="rtl"] .header-top { flex-direction: row-reverse; }
         html[dir="rtl"] .header-meta { justify-content: flex-start; }
-        html[dir="rtl"] .nav-tabs { flex-direction: row-reverse; }
+        html[dir="rtl"] .nav-tabs { border-right: none; border-left: 1px solid var(--line); order: 1; }
+        html[dir="rtl"] .nav-tab { text-align: right; }
         html[dir="rtl"] .form-row { direction: rtl; }
         html[dir="rtl"] .toolbar-row { flex-direction: row-reverse; }
         html[dir="rtl"] .action-buttons { flex-direction: row-reverse; }
@@ -1093,6 +1734,191 @@ HTML_TEMPLATE = '''
         html[dir="rtl"] .form-group label { text-align: right; display: block; }
         html[dir="rtl"] .modal-content { direction: rtl; text-align: right; }
         html[dir="rtl"] .close-modal { float: left; }
+
+        /* ── UI Polish ── */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid var(--line);
+        }
+        .page-header h2 { margin-bottom: 0; }
+        .page-header .header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .section-divider {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 24px 0 14px;
+        }
+        .section-divider span {
+            font-family: 'Space Grotesk', 'Manrope', sans-serif;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--text);
+            white-space: nowrap;
+        }
+        .section-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+        .stat-card { position: relative; overflow: hidden; }
+        .stat-card .stat-icon {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 2.4rem;
+            opacity: 0.18;
+            pointer-events: none;
+        }
+        html[dir="rtl"] .stat-card .stat-icon { right: auto; left: 14px; }
+        .stat-card h3, .stat-card p { position: relative; z-index: 1; }
+        .stat-card-teal { background: linear-gradient(135deg, #0f6d7b 0%, #13b5a7 100%) !important; }
+        .stat-card-blue { background: linear-gradient(135deg, #1d7fb7 0%, #3565b8 100%) !important; }
+        .stat-card-green { background: linear-gradient(135deg, #1f9a5f 0%, #22b7a1 100%) !important; }
+        .stat-card-amber { background: linear-gradient(135deg, #c47f10 0%, #d89e1f 100%) !important; color: #fff !important; }
+        body[data-theme="dark"] .stat-card-teal { background: linear-gradient(135deg, #0a4a53 0%, #0d7870 100%) !important; }
+        body[data-theme="dark"] .stat-card-blue { background: linear-gradient(135deg, #133a60 0%, #1d4a82 100%) !important; }
+        body[data-theme="dark"] .stat-card-green { background: linear-gradient(135deg, #0c4d30 0%, #0f6050 100%) !important; }
+        body[data-theme="dark"] .stat-card-amber { background: linear-gradient(135deg, #5a3a00 0%, #704800 100%) !important; }
+        .nav-tab .tab-icon { font-size: 1.05rem; flex-shrink: 0; }
+        table td { padding: 13px 12px; }
+        .holiday-panel { margin-top: 22px; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; }
+        .holiday-panel > summary {
+            cursor: pointer;
+            padding: 13px 16px;
+            background: var(--bg-1);
+            font-weight: 700;
+            color: var(--text);
+            list-style: none;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s ease;
+        }
+        .holiday-panel > summary:hover { background: var(--bg-2); }
+        .holiday-panel > summary::-webkit-details-marker { display: none; }
+        .holiday-panel > summary::before { content: '▸'; color: var(--muted); font-size: 0.78rem; }
+        .holiday-panel[open] > summary::before { content: '▾'; }
+        body[data-theme="dark"] .holiday-panel > summary { background: #111c30; }
+        body[data-theme="dark"] .holiday-panel[open] > summary { background: #0f1728; }
+        .holiday-panel-body { padding: 16px; border-top: 1px solid var(--line); background: var(--panel); }
+        .dashboard-toolbar { display: flex; justify-content: flex-end; margin-bottom: 20px; }
+
+        /* ── Profile Tabs ── */
+        .profile-tabs {
+            display: flex;
+            gap: 6px;
+            padding: 12px 0 0;
+            border-bottom: 2px solid var(--line);
+            margin-bottom: 18px;
+            flex-wrap: wrap;
+        }
+        .profile-tab {
+            border: none;
+            background: transparent;
+            padding: 9px 18px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--muted);
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            border-radius: 0;
+            transition: 0.18s ease;
+        }
+        .profile-tab:hover { color: var(--brand); }
+        .profile-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
+        body[data-theme="dark"] .profile-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .profile-tab-content { display: none; }
+        .profile-tab-content.active { display: block; animation: fadeIn 0.2s ease; }
+
+        /* ── Profile stat compact ── */
+        .profile-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        /* ── Collapsible form panel ── */
+        .form-panel {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .form-panel > summary {
+            cursor: pointer;
+            list-style: none;
+            padding: 13px 16px;
+            background: var(--bg-1);
+            font-weight: 800;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            user-select: none;
+            transition: background 0.15s;
+        }
+        .form-panel > summary:hover { background: var(--bg-2); }
+        .form-panel > summary::-webkit-details-marker { display: none; }
+        .form-panel > summary::before { content: '▸'; color: var(--muted); font-size: 0.8rem; transition: transform 0.2s; }
+        .form-panel[open] > summary::before { content: '▾'; }
+        .form-panel-body { padding: 16px; border-top: 1px solid var(--line); background: var(--panel); }
+        body[data-theme="dark"] .form-panel > summary { background: #111c30; }
+        body[data-theme="dark"] .form-panel-body { background: #0f1728; }
+
+        /* ── 3-col form row ── */
+        .form-row-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: var(--gap);
+        }
+        @media (max-width: 980px) { .form-row-3 { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 560px) { .form-row-3 { grid-template-columns: 1fr; } }
+
+        /* ── Section card ── */
+        .section-card {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 18px;
+            background: var(--panel);
+            margin-bottom: 18px;
+        }
+        .section-card-title {
+            font-family: 'Space Grotesk', 'Manrope', sans-serif;
+            font-size: 0.9rem;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 14px;
+        }
+        body[data-theme="dark"] .section-card { background: #0f1728; border-color: #253347; }
+
+        /* ── Readonly info grid ── */
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px 16px;
+        }
+        .info-field label {
+            font-size: 0.76rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            display: block;
+            margin-bottom: 3px;
+        }
+        .info-field span {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text);
+        }
     </style>
 </head>
 <body>
@@ -1111,33 +1937,50 @@ HTML_TEMPLATE = '''
             </div>
         </div>
         
+        <div class="app-body">
         <div class="nav-tabs">
-            <button class="nav-tab active" onclick="switchTab('dashboard', this)" data-en="Dashboard" data-ar="لوحة المعلومات">Dashboard</button>
-            <button class="nav-tab" onclick="switchTab('patients', this)" data-en="Patients" data-ar="المرضى">Patients</button>
-            <button class="nav-tab" onclick="switchTab('appointments', this)" data-en="Appointments" data-ar="المواعيد">Appointments</button>
-            <button class="nav-tab" onclick="switchTab('reports', this)" data-en="Reports" data-ar="التقارير">Reports</button>
-            <button class="nav-tab" onclick="switchTab('financial', this)" data-en="Financial" data-ar="المالي">Financial</button>
-            <button class="nav-tab" onclick="switchTab('support', this)" data-en="Support" data-ar="الدعم">Support</button>
+            <div class="nav-tabs-label" data-i18n="navigation">Navigation</div>
+            <button class="nav-tab active" onclick="switchTab('dashboard', this)"><span class="tab-icon">🏠</span><span data-en="Dashboard" data-ar="لوحة المعلومات">Dashboard</span></button>
+            <button class="nav-tab" onclick="switchTab('patients', this)"><span class="tab-icon">👥</span><span data-en="Patients" data-ar="المرضى">Patients</span></button>
+            <button class="nav-tab" onclick="switchTab('appointments', this)"><span class="tab-icon">📅</span><span data-en="Appointments" data-ar="المواعيد">Appointments</span></button>
+            <button class="nav-tab" onclick="switchTab('reports', this)"><span class="tab-icon">📊</span><span data-en="Reports" data-ar="التقارير">Reports</span></button>
+            <button class="nav-tab" onclick="switchTab('financial', this)"><span class="tab-icon">💰</span><span data-en="Financial" data-ar="المالي">Financial</span></button>
+            <button class="nav-tab" onclick="switchTab('support', this)"><span class="tab-icon">🔧</span><span data-en="Support" data-ar="الدعم">Support</span></button>
         </div>
-        
+
         <div class="content">
             <!-- Dashboard Tab -->
             <div id="dashboard" class="tab-content active">
-                <h2 data-i18n="dashboard_overview">Dashboard Overview</h2>
+                <div class="page-header">
+                    <h2 data-i18n="dashboard_overview">Dashboard Overview</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-primary" onclick="downloadBackup()" data-i18n="download_backup">💾 Download Backup</button>
+                    </div>
+                </div>
                 <div class="stats-grid" id="stats-grid">
-                    <div class="stat-card">
+                    <div class="stat-card stat-card-teal">
+                        <span class="stat-icon">👥</span>
                         <h3 id="total-patients">0</h3>
                         <p data-i18n="total_patients">Total Patients</p>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card stat-card-blue">
+                        <span class="stat-icon">📅</span>
                         <h3 id="today-appointments">0</h3>
                         <p data-i18n="todays_appointments">Today's Appointments</p>
                     </div>
+                    <div class="stat-card stat-card-green">
+                        <span class="stat-icon">🩺</span>
+                        <h3 id="total-visits">0</h3>
+                        <p data-i18n="total_visits">Total Visits</p>
+                    </div>
+                    <div class="stat-card stat-card-amber">
+                        <span class="stat-icon">💰</span>
+                        <h3 id="total-revenue">₪ 0</h3>
+                        <p data-i18n="total_revenue">Total Revenue</p>
+                    </div>
                 </div>
 
-                <button class="btn btn-primary" onclick="downloadBackup()" data-i18n="download_backup">Download Backup</button>
-                
-                <h3 data-i18n="recent_appointments">Recent Appointments</h3>
+                <div class="section-divider"><span data-i18n="recent_appointments">Recent Appointments</span></div>
                 <div class="table-container">
                     <table id="recent-appointments-table">
                         <thead>
@@ -1155,10 +1998,14 @@ HTML_TEMPLATE = '''
             
             <!-- Patients Tab -->
             <div id="patients" class="tab-content">
-                <h2 data-i18n="patient_management">Patient Management</h2>
-                <button class="btn btn-primary" onclick="showAddPatientModal()" data-i18n="add_new_patient">+ Add New Patient</button>
+                <div class="page-header">
+                    <h2 data-i18n="patient_management">Patient Management</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-primary" onclick="showAddPatientModal()" data-i18n="add_new_patient">+ Add New Patient</button>
+                    </div>
+                </div>
 
-                <div class="form-row" style="margin-top:16px; margin-bottom:0;">
+                <div class="form-row" style="margin-top:0; margin-bottom:0;">
                     <div class="form-group" style="margin-bottom:0;">
                         <label data-i18n="search_by_name_phone_email">Search by name, phone, or email</label>
                         <input type="text" id="patient-search-input" data-i18n-placeholder="search_placeholder" placeholder="Type patient name, phone, or email" oninput="filterPatientsTable()">
@@ -1189,8 +2036,12 @@ HTML_TEMPLATE = '''
             
             <!-- Appointments Tab -->
             <div id="appointments" class="tab-content">
-                <h2 data-i18n="appointments">Appointments</h2>
-                <button class="btn btn-primary" onclick="showAddAppointmentModal()" data-i18n="schedule_appointment">+ Schedule Appointment</button>
+                <div class="page-header">
+                    <h2 data-i18n="appointments">Appointments</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-primary" onclick="showAddAppointmentModal()" data-i18n="schedule_appointment">+ Schedule Appointment</button>
+                    </div>
+                </div>
 
                 <div class="calendar-controls">
                     <div class="toolbar-row" style="margin-top:0;">
@@ -1204,37 +2055,41 @@ HTML_TEMPLATE = '''
 
                 <div id="appointments-calendar" class="appointments-calendar"></div>
 
-                <h3 style="margin-top:18px;" data-i18n="holiday_management">Holiday Management</h3>
-                <form id="holiday-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label data-i18n="holiday_date">Holiday Date *</label>
-                            <input type="date" name="holiday_date" id="holiday-date" required>
-                        </div>
-                        <div class="form-group">
-                            <label data-i18n="holiday_name">Holiday Name *</label>
-                            <input type="text" name="name" required>
+                <details class="holiday-panel">
+                    <summary>📆 <span data-i18n="holiday_management">Holiday Management</span></summary>
+                    <div class="holiday-panel-body">
+                        <form id="holiday-form">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label data-i18n="holiday_date">Holiday Date *</label>
+                                    <input type="text" name="holiday_date" id="holiday-date" placeholder="DD/MM/YYYY" title="Enter date in DD/MM/YYYY format" required>
+                                </div>
+                                <div class="form-group">
+                                    <label data-i18n="holiday_name">Holiday Name *</label>
+                                    <input type="text" name="name" required>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label data-i18n="notes">Notes</label>
+                                <textarea name="notes" data-i18n-placeholder="optional_note" placeholder="Optional note"></textarea>
+                            </div>
+                            <button class="btn btn-primary" type="submit" data-i18n="add_holiday">Add Holiday</button>
+                        </form>
+                        <div class="table-container" style="margin-top:16px;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="date">Date</th>
+                                        <th data-i18n="holiday">Holiday</th>
+                                        <th data-i18n="notes">Notes</th>
+                                        <th data-i18n="actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="holidays-body"><tr><td colspan="4" data-i18n="no_holidays_yet">No holidays yet</td></tr></tbody>
+                            </table>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label data-i18n="notes">Notes</label>
-                        <textarea name="notes" data-i18n-placeholder="optional_note" placeholder="Optional note"></textarea>
-                    </div>
-                    <button class="btn btn-primary" type="submit" data-i18n="add_holiday">Add Holiday</button>
-                </form>
-                <div class="table-container" style="margin-top:16px;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th data-i18n="date">Date</th>
-                                <th data-i18n="holiday">Holiday</th>
-                                <th data-i18n="notes">Notes</th>
-                                <th data-i18n="actions">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="holidays-body"><tr><td colspan="4" data-i18n="no_holidays_yet">No holidays yet</td></tr></tbody>
-                    </table>
-                </div>
+                </details>
                 
                 <div class="table-container">
                     <table id="appointments-table">
@@ -1254,7 +2109,9 @@ HTML_TEMPLATE = '''
             </div>
 
             <div id="reports" class="tab-content">
-                <h2 data-i18n="reporting_system">Reporting System</h2>
+                <div class="page-header">
+                    <h2 data-i18n="reporting_system">Reporting System</h2>
+                </div>
                 <div class="sub-tabs" id="reports-sub-tabs">
                     <button class="sub-tab active" onclick="switchReportsSubTab('weekly', this)" data-i18n="weekly_tab">Weekly</button>
                     <button class="sub-tab" onclick="switchReportsSubTab('monthly', this)" data-i18n="monthly_tab">Monthly</button>
@@ -1263,7 +2120,12 @@ HTML_TEMPLATE = '''
 
                 <div id="reports-subtab-weekly" class="sub-tab-content active">
                     <div class="toolbar-row" style="margin-top:0;">
+                        <div class="form-group" style="margin:0;">
+                            <label data-i18n="start_date">Start Date</label>
+                            <input type="date" id="weekly-start-picker">
+                        </div>
                         <button class="btn btn-success" onclick="loadWeeklyReport()" data-i18n="this_week">This Week</button>
+                        <button class="btn btn-primary" onclick="loadWeeklyReportFromPicker()" data-i18n="run_report">Run Report</button>
                     </div>
                     <div id="weekly-report-range" class="search-status" data-i18n="weekly_range_not_selected">Weekly range not selected.</div>
                 </div>
@@ -1346,6 +2208,39 @@ HTML_TEMPLATE = '''
                             </div>
                         </div>
                     </details>
+
+                    <details id="treatment-catalog-panel" class="collapsible-box" ontoggle="if(this.open)loadTreatmentCatalogUI()" style="margin-top:12px;">
+                        <summary>إدارة العلاجات / Treatment Catalog</summary>
+                        <div style="margin-top:12px;">
+                            <form id="treatment-catalog-form">
+                                <input type="hidden" id="tc-id" value="">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>الاسم بالعربية *</label>
+                                        <input type="text" id="tc-name-ar" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>English Name</label>
+                                        <input type="text" id="tc-name-en">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>السعر الافتراضي</label>
+                                        <input type="number" step="0.01" min="0" id="tc-price" value="0">
+                                    </div>
+                                </div>
+                                <div class="toolbar-row" style="margin-top:0; margin-bottom:10px;">
+                                    <button class="btn btn-primary" type="submit">حفظ</button>
+                                    <button class="btn btn-warning" type="button" onclick="resetTreatmentCatalogForm()">إلغاء</button>
+                                </div>
+                            </form>
+                            <div class="table-container" style="margin-top:12px;">
+                                <table>
+                                    <thead><tr><th>الاسم بالعربية</th><th>English</th><th>السعر</th><th>الحالة</th><th>إجراءات</th></tr></thead>
+                                    <tbody id="treatment-catalog-body"><tr><td colspan="5">Loading...</td></tr></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </details>
                 </div>
 
                 <div class="stats-grid" style="margin-top:20px;">
@@ -1359,8 +2254,9 @@ HTML_TEMPLATE = '''
             </div>
 
             <div id="financial" class="tab-content">
-                <h2 data-i18n="financial_management">Financial Management</h2>
-
+                <div class="page-header">
+                    <h2 data-i18n="financial_management">Financial Management</h2>
+                </div>
                 <div class="sub-tabs" id="financial-sub-tabs">
                     <button class="sub-tab active" onclick="switchFinancialSubTab('management', this)" data-i18n="management_tab">Management</button>
                     <button class="sub-tab" onclick="switchFinancialSubTab('billing', this)" data-i18n="billing_tab">Billing</button>
@@ -1390,25 +2286,27 @@ HTML_TEMPLATE = '''
                     </table>
                 </div>
 
-                <h3 style="margin-top:20px;" data-i18n="expense_tracking">Expense Tracking</h3>
-                <div class="toolbar-row" style="margin-top:0; margin-bottom:8px;">
+                <details class="form-panel" open>
+                <summary>➕ <span data-i18n="expense_tracking">Expense Tracking</span></summary>
+                <div class="form-panel-body">
+                <div class="toolbar-row" style="margin-top:0; margin-bottom:10px;">
                     <label for="expense-filter-period" style="font-weight:600;" data-i18n="period">Period:</label>
-                    <select id="expense-filter-period" onchange="loadExpenses()" style="max-width:220px;">
+                    <select id="expense-filter-period" onchange="loadExpenses()" style="max-width:190px;">
                         <option value="all" data-i18n="all">All</option>
                         <option value="today" data-i18n="today">Today</option>
                         <option value="week" data-i18n="this_week">This Week</option>
                         <option value="month" data-i18n="this_month">This Month</option>
                     </select>
-                    <label for="expense-filter-status-select" style="font-weight:600; margin-left:16px;" data-i18n="status">Status:</label>
-                    <select id="expense-filter-status-select" onchange="loadExpenses()" style="max-width:220px;">
+                    <label for="expense-filter-status-select" style="font-weight:600;" data-i18n="status">Status:</label>
+                    <select id="expense-filter-status-select" onchange="loadExpenses()" style="max-width:190px;">
                         <option value="all" data-i18n="all_status">All Status</option>
                         <option value="paid" data-i18n="paid">Paid</option>
                         <option value="postponed" data-i18n="postponed">Postponed</option>
                     </select>
                 </div>
-                <div id="expense-filter-status" class="search-status" data-i18n="showing_all_expenses">Showing all expenses.</div>
+                <div id="expense-filter-status" class="search-status" style="margin-bottom:12px;" data-i18n="showing_all_expenses">Showing all expenses.</div>
                 <form id="expense-form">
-                    <div class="form-row">
+                    <div class="form-row-3">
                         <div class="form-group">
                             <label data-i18n="category_required">Category *</label>
                             <input type="text" name="category" required>
@@ -1417,11 +2315,15 @@ HTML_TEMPLATE = '''
                             <label data-i18n="amount_required">Amount (₪) *</label>
                             <input type="number" step="0.01" min="0" name="amount" required>
                         </div>
+                        <div class="form-group">
+                            <label data-i18n="vendor">Vendor</label>
+                            <input type="text" name="vendor">
+                        </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label data-i18n="date_required">Date *</label>
-                            <input type="date" name="expense_date" id="expense-date" required>
+                            <input type="text" name="expense_date" id="expense-date" placeholder="DD/MM/YYYY" title="Enter date in DD/MM/YYYY format" required>
                         </div>
                         <div class="form-group">
                             <label data-i18n="status_required">Status *</label>
@@ -1431,18 +2333,14 @@ HTML_TEMPLATE = '''
                             </select>
                         </div>
                     </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label data-i18n="vendor">Vendor</label>
-                            <input type="text" name="vendor">
-                        </div>
-                        <div class="form-group">
-                            <label data-i18n="notes">Notes</label>
-                            <textarea name="notes" data-i18n-placeholder="optional_note" placeholder="Optional note" style="min-height: 48px;"></textarea>
-                        </div>
+                    <div class="form-group">
+                        <label data-i18n="notes">Notes</label>
+                        <textarea name="notes" data-i18n-placeholder="optional_note" placeholder="Optional note" style="min-height: 48px;"></textarea>
                     </div>
                     <button class="btn btn-primary" type="submit" data-i18n="add_expense">Add Expense</button>
                 </form>
+                </div>
+                </details>
                 <div class="table-container" style="margin-top:16px;">
                     <table>
                         <thead>
@@ -1463,7 +2361,9 @@ HTML_TEMPLATE = '''
 
                 <div id="financial-subtab-billing" class="sub-tab-content">
 
-                <h3 style="margin-top:20px;" data-i18n="billing_management">Billing Management</h3>
+                <details class="form-panel" open>
+                <summary>➕ <span data-i18n="billing_management">Billing Management</span></summary>
+                <div class="form-panel-body">
                 <form id="billing-form">
                     <div class="form-row">
                         <div class="form-group">
@@ -1473,12 +2373,22 @@ HTML_TEMPLATE = '''
                             </select>
                         </div>
                         <div class="form-group">
+                            <label data-i18n="date">Date</label>
+                            <input type="text" name="payment_date" id="billing-date" placeholder="DD/MM/YYYY" title="Enter date in DD/MM/YYYY format">
+                        </div>
+                    </div>
+                    <div class="form-row-3">
+                        <div class="form-group">
                             <label data-i18n="subtotal_required">Subtotal *</label>
                             <input type="number" step="0.01" min="0" name="subtotal" required>
                         </div>
                         <div class="form-group">
                             <label data-i18n="discount">Discount</label>
                             <input type="number" step="0.01" min="0" name="discount" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label>Credit Used</label>
+                            <input type="number" step="0.01" min="0" name="credit_used" value="0" id="billing-credit-used">
                         </div>
                     </div>
                     <div class="form-row">
@@ -1490,13 +2400,11 @@ HTML_TEMPLATE = '''
                             <label data-i18n="payment_method">Payment Method</label>
                             <input type="text" name="payment_method" placeholder="Cash / Card / Transfer">
                         </div>
-                        <div class="form-group">
-                            <label data-i18n="date">Date</label>
-                            <input type="date" name="payment_date" id="billing-date">
-                        </div>
                     </div>
                     <button class="btn btn-primary" type="submit" data-i18n="create_invoice">Create Invoice</button>
                 </form>
+                </div>
+                </details>
                 <div class="table-container" style="margin-top:12px;">
                     <table>
                         <thead>
@@ -1570,8 +2478,10 @@ HTML_TEMPLATE = '''
             </div>
 
             <div id="support" class="tab-content">
-                <h2 data-i18n="technical_support">Technical Support</h2>
-                <h3 style="margin-top:20px;" data-i18n="audit_log">Audit Log</h3>
+                <div class="page-header">
+                    <h2 data-i18n="technical_support">Technical Support</h2>
+                </div>
+                <h3 style="margin-top:4px;" data-i18n="audit_log">Audit Log</h3>
                 <div class="table-container" style="margin-top:12px;">
                     <table>
                         <thead>
@@ -1592,10 +2502,11 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
         </div>
+        </div><!-- end app-body -->
     </div>
     
     <!-- Add Patient Modal -->
-    <div id="add-patient-modal" class="modal">
+    <div id="add-patient-modal" class="modal" onclick="if(event.target===this)closeModal('add-patient-modal')">
         <div class="modal-content">
             <div class="modal-header">
                 <span class="close-modal" onclick="closeModal('add-patient-modal')">&times;</span>
@@ -1615,7 +2526,7 @@ HTML_TEMPLATE = '''
                 <div class="form-row">
                     <div class="form-group">
                         <label data-i18n="date_of_birth">Date of Birth</label>
-                        <input type="date" name="date_of_birth">
+                        <div style="display:flex;gap:8px;align-items:flex-end;"><input type="text" name="date_of_birth" placeholder="DD/MM/YYYY" style="flex:1;"><button type="button" class="btn btn-warning" onclick="showDatePickerForPatient()" style="padding:11px 14px;min-width:48px;">📅</button></div>
                     </div>
                     <div class="form-group">
                         <label data-i18n="phone">Phone</label>
@@ -1640,7 +2551,7 @@ HTML_TEMPLATE = '''
     </div>
     
     <!-- Add Appointment Modal -->
-    <div id="add-appointment-modal" class="modal">
+    <div id="add-appointment-modal" class="modal" onclick="if(event.target===this)closeModal('add-appointment-modal')">
         <div class="modal-content">
             <div class="modal-header">
                 <span class="close-modal" onclick="closeModal('add-appointment-modal')">&times;</span>
@@ -1656,7 +2567,7 @@ HTML_TEMPLATE = '''
                 <div class="form-row">
                     <div class="form-group">
                         <label data-i18n="date_time_required">Date & Time *</label>
-                        <input type="datetime-local" name="appointment_date" required>
+                        <input type="datetime-local" name="appointment_date" title="Enter date and time (DD/MM/YYYY HH:MM)" required>
                     </div>
                     <div class="form-group">
                         <label data-i18n="duration_minutes">Duration (minutes)</label>
@@ -1686,8 +2597,75 @@ HTML_TEMPLATE = '''
         </div>
     </div>
     
+    <!-- Edit Patient Modal -->
+    <div id="edit-patient-modal" class="modal" onclick="if(event.target===this)closeModal('edit-patient-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close-modal" onclick="closeModal('edit-patient-modal')">&times;</span>
+                <h2 data-i18n="edit_personal_data">Edit Personal Data</h2>
+            </div>
+            <form id="edit-patient-form">
+                <input type="hidden" name="patient_id" id="edit-patient-id">
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="first_name">First Name</label><input type="text" name="first_name" id="edit-first-name"></div>
+                    <div class="form-group"><label data-i18n="last_name">Last Name</label><input type="text" name="last_name" id="edit-last-name"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="phone">Phone</label><input type="tel" name="phone" id="edit-phone"></div>
+                    <div class="form-group"><label><span data-i18n="date_of_birth">Date of Birth</span> (DD/MM/YYYY)</label><input type="text" name="date_of_birth" id="edit-dob" placeholder="DD/MM/YYYY" title="Enter date in DD/MM/YYYY format"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="gender">Gender</label><select name="gender" id="edit-gender"><option value="">--</option><option value="male" data-i18n="male">Male</option><option value="female" data-i18n="female">Female</option></select></div>
+                    <div class="form-group"><label data-i18n="address">Address</label><input type="text" name="address" id="edit-address"></div>
+                </div>
+                <div class="form-group"><label data-i18n="notes">Notes</label><textarea name="notes" id="edit-notes"></textarea></div>
+                <button type="submit" class="btn btn-primary" data-i18n="save">Save</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Followup Modal -->
+    <div id="edit-followup-modal" class="modal" onclick="if(event.target===this)closeModal('edit-followup-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close-modal" onclick="closeModal('edit-followup-modal')">&times;</span>
+                <h2 data-i18n="edit_entry">Edit Entry</h2>
+            </div>
+            <form id="edit-followup-form">
+                <input type="hidden" id="ef-patient-id">
+                <input type="hidden" id="ef-followup-id">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="date">Date</label>
+                        <input type="text" id="ef-date" placeholder="DD/MM/YYYY" title="Enter date in DD/MM/YYYY format">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="procedure">Procedure</label>
+                        <input type="text" id="ef-procedure">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="price">Price</label>
+                        <input type="number" step="0.01" min="0" id="ef-price" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="payment">Payment</label>
+                        <input type="number" step="0.01" min="0" id="ef-payment" value="0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="notes">Notes</label>
+                    <textarea id="ef-notes"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary" data-i18n="save">Save</button>
+                <button type="button" class="btn btn-warning" onclick="closeModal('edit-followup-modal')" data-i18n="cancel">Cancel</button>
+            </form>
+        </div>
+    </div>
+
     <!-- Full Patient Profile Modal -->
-    <div id="patient-profile-modal" class="modal">
+    <div id="patient-profile-modal" class="modal" onclick="if(event.target===this)closeModal('patient-profile-modal')">
         <div class="modal-content" style="max-width: 1100px;">
             <div class="modal-header">
                 <span class="close-modal" onclick="closeModal('patient-profile-modal')">&times;</span>
@@ -1705,6 +2683,9 @@ HTML_TEMPLATE = '''
         let billingCache = [];
         let currentPatientInvoicePayload = null;
         let currentProfilePatient = null;
+        let currentFollowupBalance = 0;
+        let patientProfileCache = {};
+        let followupsCache = {};
         let currentCalendarDate = new Date();
         let currentLanguage = localStorage.getItem('clinic-language') || 'en';
         let currentTheme = localStorage.getItem('clinic-theme') || 'light';
@@ -1742,13 +2723,18 @@ HTML_TEMPLATE = '''
                 patient_management: 'Patient Management',
                 add_new_patient: 'Add New Patient',
                 add_patient: 'Add Patient',
+                first_name: 'First Name',
                 first_name_required: 'First Name *',
+                last_name: 'Last Name',
                 last_name_required: 'Last Name *',
                 date_of_birth: 'Date of Birth',
                 phone: 'Phone',
                 phone_required: 'Phone *',
                 email: 'Email',
                 address: 'Address',
+                gender: 'Gender',
+                male: 'Male',
+                female: 'Female',
                 medical_history: 'Medical History',
                 search_by_name_phone_email: 'Search by name, phone, or email',
                 search_placeholder: 'Type patient name, phone, or email',
@@ -1922,7 +2908,28 @@ HTML_TEMPLATE = '''
                 unable_add_holiday: 'Unable to add holiday.',
                 unable_start_visit: 'Unable to start visit.',
                 visit_started: 'Visit started from appointment successfully.',
-                unknown: 'Unknown'
+                unknown: 'Unknown',
+                confirm_delete: 'Are you sure you want to delete?',
+                no_entry_found: 'Entry not found',
+                save_failed: 'Save failed',
+                age: 'Age',
+                age_unknown: 'Age not recorded',
+                edit_personal_data: 'Edit Personal Data',
+                edit_entry: 'Edit Entry',
+                save: 'Save',
+                credit_balance: 'Patient Credit Balance',
+                edit_notes: 'Edit Notes',
+                this_week: 'This Week',
+                session_count: 'Sessions',
+                patient_count: 'Patients',
+                new_entries: 'New Entries',
+                followups_count: 'Follow-ups',
+                overview: 'Overview',
+                patient_info: 'Patient Information',
+                total_visits: 'Total Visits',
+                total_revenue: 'Total Revenue',
+                navigation: 'Navigation',
+                notes: 'Notes'
             },
             ar: {
                 title: 'نظام إدارة عيادة الأسنان',
@@ -1953,13 +2960,18 @@ HTML_TEMPLATE = '''
                 patient_management: 'إدارة المرضى',
                 add_new_patient: 'إضافة مريض جديد',
                 add_patient: 'إضافة المريض',
+                first_name: 'الاسم الأول',
                 first_name_required: 'الاسم الأول *',
+                last_name: 'اسم العائلة',
                 last_name_required: 'اسم العائلة *',
                 date_of_birth: 'تاريخ الميلاد',
                 phone: 'رقم الهاتف',
                 phone_required: 'رقم الهاتف *',
                 email: 'البريد الإلكتروني',
                 address: 'العنوان',
+                gender: 'الجنس',
+                male: 'ذكر',
+                female: 'أنثى',
                 medical_history: 'التاريخ الطبي',
                 search_by_name_phone_email: 'ابحث بالاسم أو الهاتف أو البريد الإلكتروني',
                 search_placeholder: 'اكتب اسم المريض أو الهاتف أو البريد الإلكتروني',
@@ -2133,7 +3145,27 @@ HTML_TEMPLATE = '''
                 unable_add_holiday: 'تعذر إضافة العطلة.',
                 unable_start_visit: 'تعذر بدء الزيارة.',
                 visit_started: 'تم بدء الزيارة من الموعد بنجاح.',
-                unknown: 'غير معروف'
+                unknown: 'غير معروف',
+                confirm_delete: 'هل أنت متأكد من الحذف؟',
+                no_entry_found: 'لم يتم العثور على القيد',
+                save_failed: 'فشل الحفظ',
+                age: 'العمر',
+                age_unknown: 'العمر غير مسجل',
+                edit_personal_data: 'تعديل البيانات الشخصية',
+                edit_entry: 'تعديل القيد',
+                save: 'حفظ',
+                credit_balance: 'رصيد المريض لدى العيادة',
+                edit_notes: 'تعديل الملاحظات',
+                session_count: 'الجلسات',
+                patient_count: 'المرضى',
+                new_entries: 'علاجات جديدة',
+                followups_count: 'مراجعات',
+                overview: 'نظرة عامة',
+                patient_info: 'بيانات المريض',
+                total_visits: 'إجمالي الزيارات',
+                total_revenue: 'إجمالي الإيرادات',
+                navigation: 'التنقل',
+                notes: 'الملاحظات'
             }
         };
 
@@ -2228,6 +3260,13 @@ HTML_TEMPLATE = '''
         function toDatetimeLocalValue(dateObj) {
             const pad = (n) => String(n).padStart(2, '0');
             return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}T${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}`;
+        }
+
+        function isFridayDateTimeValue(value) {
+            if (!value) return false;
+            const normalized = String(value).trim().replace(' ', 'T');
+            const parsed = new Date(normalized);
+            return !Number.isNaN(parsed.getTime()) && parsed.getDay() === 5;
         }
 
         function monthLabel(dateObj) {
@@ -2442,8 +3481,188 @@ HTML_TEMPLATE = '''
                 loadProcedureCatalog();
             }
         }
-        
+
+        let treatmentCatalogCache = [];
+        async function loadTreatmentCatalogUI() {
+            const rows = await fetch('/api/treatment-catalog?include_inactive=1').then(r => r.json()).catch(() => []);
+            treatmentCatalogCache = Array.isArray(rows) ? rows : [];
+            const tbody = document.getElementById('treatment-catalog-body');
+            if (!tbody) return;
+            if (!treatmentCatalogCache.length) {
+                tbody.innerHTML = '<tr><td colspan="5">لا توجد بيانات</td></tr>';
+                return;
+            }
+            tbody.innerHTML = treatmentCatalogCache.map(item => `
+                <tr>
+                    <td>${item.name_ar || ''}</td>
+                    <td>${item.name_en || ''}</td>
+                    <td>₪${parseFloat(item.default_price||0).toFixed(2)}</td>
+                    <td>${item.is_active ? '✓ نشط' : '✗ معطل'}</td>
+                    <td>
+                        <button class="btn btn-primary btn-sm" onclick="editTreatmentCatalog(${item.id})">تعديل</button>
+                        <button class="btn btn-warning btn-sm" onclick="toggleTreatmentCatalog(${item.id},${item.is_active})">${item.is_active?'تعطيل':'تفعيل'}</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+        function resetTreatmentCatalogForm() {
+            document.getElementById('tc-id').value = '';
+            document.getElementById('tc-name-ar').value = '';
+            document.getElementById('tc-name-en').value = '';
+            document.getElementById('tc-price').value = '0';
+        }
+        function editTreatmentCatalog(id) {
+            const item = treatmentCatalogCache.find(x => Number(x.id) === Number(id));
+            if (!item) return;
+            document.getElementById('tc-id').value = item.id;
+            document.getElementById('tc-name-ar').value = item.name_ar || '';
+            document.getElementById('tc-name-en').value = item.name_en || '';
+            document.getElementById('tc-price').value = parseFloat(item.default_price||0).toFixed(2);
+        }
+        async function toggleTreatmentCatalog(id, currentActive) {
+            await fetch(`/api/treatment-catalog/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({is_active: currentActive ? 0 : 1})
+            });
+            loadTreatmentCatalogUI();
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            const tcForm = document.getElementById('treatment-catalog-form');
+            if (tcForm) {
+                tcForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const idVal = document.getElementById('tc-id').value.trim();
+                    const payload = {
+                        name_ar: document.getElementById('tc-name-ar').value.trim(),
+                        name_en: document.getElementById('tc-name-en').value.trim(),
+                        default_price: parseFloat(document.getElementById('tc-price').value || 0)
+                    };
+                    if (!payload.name_ar) { alert('الاسم بالعربية مطلوب'); return; }
+                    const url = idVal ? `/api/treatment-catalog/${idVal}` : '/api/treatment-catalog';
+                    const method = idVal ? 'PUT' : 'POST';
+                    const resp = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+                    if (resp.ok) {
+                        resetTreatmentCatalogForm();
+                        loadTreatmentCatalogUI();
+                    } else {
+                        alert('فشل الحفظ');
+                    }
+                });
+            }
+        });
+
+        // Quick sidebar collapse behavior: click the small "Navigation" label to toggle
+        document.addEventListener('DOMContentLoaded', function() {
+            const navLabel = document.querySelector('.nav-tabs-label');
+            if (navLabel) {
+                navLabel.style.cursor = 'pointer';
+                navLabel.title = 'Toggle navigation';
+                navLabel.addEventListener('click', () => document.body.classList.toggle('sidebar-collapsed'));
+            }
+            // Auto-collapse on narrower screens
+            function updateSidebarOnResize() {
+                if (window.innerWidth <= 980) document.body.classList.add('sidebar-collapsed');
+                else document.body.classList.remove('sidebar-collapsed');
+            }
+            updateSidebarOnResize();
+            window.addEventListener('resize', updateSidebarOnResize);
+        });
+
         // Modal functions
+        
+        function showDatePickerForPatient() {
+            showCalendarPickerModal((selectedDate) => {
+                const dateInput = document.querySelector('#add-patient-form input[name="date_of_birth"]');
+                if (dateInput && selectedDate) {
+                    dateInput.value = selectedDate;
+                }
+            });
+        }
+
+        function showCalendarPickerModal(onDateSelect) {
+            if (!document.getElementById('date-picker-modal')) {
+                const modal = document.createElement('div');
+                modal.id = 'date-picker-modal';
+                modal.className = 'date-picker-modal';
+                modal.innerHTML = `
+                    <div class="date-picker-modal-content">
+                        <div class="date-picker-modal-header">
+                            <button type="button" onclick="changePickerMonth(-1)">❮</button>
+                            <div class="date-picker-modal-month" id="picker-month-label"></div>
+                            <button type="button" onclick="changePickerMonth(1)">❯</button>
+                        </div>
+                        <div id="picker-calendar-grid" class="date-picker-grid"></div>
+                        <div style="display: flex; gap: 8px; margin-top: 16px;">
+                            <button class="btn btn-warning" type="button" onclick="closePickerModal()">Cancel</button>
+                            <button class="btn btn-primary" type="button" onclick="selectTodayInPicker()">Today</button>
+                        </div>
+                    </div>
+                </div>
+                `;
+                document.body.appendChild(modal);
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) closePickerModal();
+                });
+            }
+            window.datePickerCallback = onDateSelect;
+            window.pickerDate = new Date();
+            renderPickerCalendar();
+            document.getElementById('date-picker-modal').classList.add('active');
+        }
+
+        function renderPickerCalendar() {
+            const year = window.pickerDate.getFullYear();
+            const month = window.pickerDate.getMonth();
+            const firstDay = new Date(year, month, 1);
+            const startDay = firstDay.getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const monthLabelEl = document.getElementById('picker-month-label');
+            const today = new Date();
+            const locale = currentLanguage === 'ar' ? 'ar-EG' : 'en-US';
+            const monthStr = window.pickerDate.toLocaleDateString(locale, { month: 'long', year: 'numeric' });
+            monthLabelEl.textContent = monthStr;
+            const dayNames = currentLanguage === 'ar'
+                ? ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
+                : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            const gridEl = document.getElementById('picker-calendar-grid');
+            gridEl.innerHTML = dayNames.map(d => `<div class="date-picker-day-name">${d}</div>`).join('') +
+                Array.from({length: startDay}, () => '<div class="date-picker-day empty"></div>').join('') +
+                Array.from({length: daysInMonth}, (_, i) => {
+                    const day = i + 1;
+                    const dateStr = `${String(day).padStart(2, '0')}/${String(month + 1).padStart(2, '0')}/${year}`;
+                    const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
+                    const todayClass = isToday ? 'today' : '';
+                    return `<div class="date-picker-day ${todayClass}" onclick="selectPickerDate('${dateStr}')">${day}</div>`;
+                }).join('');
+        }
+
+        function changePickerMonth(offset) {
+            if (!window.pickerDate) window.pickerDate = new Date();
+            window.pickerDate = new Date(window.pickerDate.getFullYear(), window.pickerDate.getMonth() + offset, 1);
+            renderPickerCalendar();
+        }
+
+        function selectPickerDate(dateStr) {
+            if (window.datePickerCallback) {
+                window.datePickerCallback(dateStr);
+            }
+            closePickerModal();
+        }
+
+        function selectTodayInPicker() {
+            const today = new Date();
+            const day = String(today.getDate()).padStart(2, '0');
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const year = today.getFullYear();
+            selectPickerDate(`${day}/${month}/${year}`);
+        }
+
+        function closePickerModal() {
+            const modal = document.getElementById('date-picker-modal');
+            if (modal) modal.classList.remove('active');
+        }
+
         function showAddPatientModal() {
             document.getElementById('add-patient-modal').classList.add('active');
         }
@@ -2457,9 +3676,22 @@ HTML_TEMPLATE = '''
             const dateInput = document.querySelector('#add-appointment-form [name="appointment_date"]');
             if (dateInput) {
                 if (preferredDate) {
-                    dateInput.value = preferredDate;
+                    const parsedPreferred = new Date(String(preferredDate).replace(' ', 'T'));
+                    if (!Number.isNaN(parsedPreferred.getTime()) && parsedPreferred.getDay() === 5) {
+                        parsedPreferred.setDate(parsedPreferred.getDate() + 1);
+                    }
+                    dateInput.value = toDatetimeLocalValue(parsedPreferred);
                 } else if (!dateInput.value) {
-                    dateInput.value = toDatetimeLocalValue(new Date(Date.now() + 60 * 60 * 1000));
+                    const defaultDate = new Date(Date.now() + 60 * 60 * 1000);
+                    if (defaultDate.getDay() === 5) {
+                        defaultDate.setDate(defaultDate.getDate() + 1);
+                    }
+                    dateInput.value = toDatetimeLocalValue(defaultDate);
+                }
+                if (isFridayDateTimeValue(dateInput.value)) {
+                    const adjustedDate = new Date(String(dateInput.value).replace(' ', 'T'));
+                    adjustedDate.setDate(adjustedDate.getDate() + 1);
+                    dateInput.value = toDatetimeLocalValue(adjustedDate);
                 }
             }
             document.getElementById('add-appointment-modal').classList.add('active');
@@ -2468,7 +3700,13 @@ HTML_TEMPLATE = '''
         function closeModal(modalId) {
             document.getElementById(modalId).classList.remove('active');
         }
-        
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal.active').forEach(m => m.classList.remove('active'));
+            }
+        });
+
         // Load patients into select dropdown
         async function loadPatientsSelect(selectId) {
             const response = await fetch('/api/patients');
@@ -2485,13 +3723,17 @@ HTML_TEMPLATE = '''
             const stats = await fetch('/api/stats').then(r => r.json());
             document.getElementById('total-patients').textContent = stats.total_patients;
             document.getElementById('today-appointments').textContent = stats.today_appointments;
+            const visitsEl = document.getElementById('total-visits');
+            if (visitsEl) visitsEl.textContent = stats.total_visits ?? 0;
+            const revenueEl = document.getElementById('total-revenue');
+            if (revenueEl) revenueEl.textContent = '₪ ' + (parseFloat(stats.total_revenue) || 0).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
             
             const appointments = await fetch('/api/appointments/recent').then(r => r.json());
             const tbody = document.getElementById('recent-appointments-body');
             tbody.innerHTML = appointments.map(apt => `
                 <tr>
                     <td>${apt.patient_name}</td>
-                    <td>${new Date(apt.appointment_date).toLocaleString()}</td>
+                    <td>${formatApptDate(apt.appointment_date)}</td>
                     <td>${apt.treatment_type || t('no_data', 'No data')}</td>
                     <td><span class="badge badge-${apt.status === 'completed' ? 'success' : apt.status === 'scheduled' ? 'info' : 'warning'}">${apt.status}</span></td>
                 </tr>
@@ -2511,7 +3753,7 @@ HTML_TEMPLATE = '''
                 <tr>
                     <td>${patient.id}</td>
                     <td><a href="#" onclick="viewPatientProfile(${patient.id}); return false;">${patient.first_name} ${patient.last_name}</a></td>
-                    <td>${patient.date_of_birth || t('no_data', 'No data')}</td>
+                    <td>${formatDateDisplay(patient.date_of_birth) || t('no_data', 'No data')}</td>
                     <td>${patient.phone || t('no_data', 'No data')}</td>
                     <td>${patient.email || t('no_data', 'No data')}</td>
                     <td>
@@ -2586,7 +3828,7 @@ HTML_TEMPLATE = '''
                 <tr>
                     <td>${apt.id}</td>
                     <td><a href="#" onclick="viewPatientProfile(${apt.patient_id}); return false;">${apt.patient_name}</a></td>
-                    <td>${new Date(apt.appointment_date).toLocaleString()}</td>
+                    <td>${formatApptDate(apt.appointment_date)}</td>
                     <td>${apt.duration} ${t('min', 'min')}</td>
                     <td>${apt.treatment_type || t('no_data', 'No data')}</td>
                     <td><span class="badge badge-${apt.status === 'completed' ? 'success' : apt.status === 'scheduled' ? 'info' : 'warning'}">${apt.status}</span></td>
@@ -2636,7 +3878,8 @@ HTML_TEMPLATE = '''
                 : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
             calendar.innerHTML = dayNames.map(d => `<div class="calendar-day-header">${d}</div>`).join('') + Array.from({length: startDay}, () => '<div></div>').join('') + Array.from({length: daysInMonth}, (_, i) => {
                 const day = i + 1;
-                const isHoliday = holidaySet.has(day);
+                const isFriday = new Date(year, month, day).getDay() === 5;
+                const isHoliday = isFriday || holidaySet.has(day);
                 const holidayMarker = isHoliday ? `<div style="font-size:9px;color:#da4c58;font-weight:700;margin-bottom:3px;">🏖️ ${t('holiday_label', 'Holiday')}</div>` : '';
                 const items = (grouped[day] || []).slice(0, 3).map(apt => {
                     const aptTime = new Date(apt.appointment_date).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
@@ -2748,17 +3991,26 @@ HTML_TEMPLATE = '''
             document.getElementById('report-profit').textContent = '₪ ' + reportProfit.toFixed(2);
 
             const rangeText = startDate && endDate
-                ? `${t('range', 'Range')}: ${startDate} - ${endDate}`
+                ? `${t('range', 'Range')}: ${formatDateDisplay(startDate)} - ${formatDateDisplay(endDate)}`
                 : `${t('range', 'Range')}: ${t('full_period', 'full period')}`;
             document.getElementById('weekly-report-range').textContent = rangeText;
         }
 
+        async function loadWeeklyReportFromPicker() {
+            const pickerVal = document.getElementById('weekly-start-picker')?.value;
+            const baseDate = pickerVal ? new Date(pickerVal + 'T00:00:00') : new Date();
+            const { startDate, endDate } = getWeekBounds(baseDate);
+            await _doLoadWeeklyReport(startDate, endDate);
+        }
+
         async function loadWeeklyReport() {
             const { startDate, endDate } = getWeekBounds(new Date());
-            document.getElementById('report-start-date').value = startDate;
-            document.getElementById('report-end-date').value = endDate;
+            await _doLoadWeeklyReport(startDate, endDate);
+        }
+
+        async function _doLoadWeeklyReport(startDate, endDate) {
             const weekly = await fetch(`/api/reports/weekly?week_start=${encodeURIComponent(startDate)}`).then(r => r.json());
-            document.getElementById('report-visits').textContent = weekly.visits;
+            document.getElementById('report-visits').textContent = weekly.session_count ?? weekly.visits ?? 0;
             const weeklyRevenue = parseCurrency(weekly.revenue);
             const weeklyExpenses = parseCurrency(weekly.expenses);
             const weeklyLabExpenses = parseCurrency(weekly.lab_expenses);
@@ -2770,12 +4022,12 @@ HTML_TEMPLATE = '''
             document.getElementById('report-clinic-gross-profit').textContent = '₪ ' + weeklyClinicGrossProfit.toFixed(2);
             document.getElementById('report-profit').textContent = '₪ ' + weeklyProfit.toFixed(2);
             document.getElementById('weekly-report-range').textContent = t('weekly_range_text', 'Weekly range: {start} to {end}')
-                .replace('{start}', weekly.week_start)
-                .replace('{end}', weekly.week_end);
+                .replace('{start}', weekly.week_start_display || weekly.week_start)
+                .replace('{end}', weekly.week_end_display || weekly.week_end);
         }
 
         async function loadMonthlyReport() {
-            const monthInput = document.getElementById('report-month');
+            const monthInput = document.getElementById('report-month-picker');
             const monthValue = monthInput?.value || new Date().toISOString().slice(0, 7);
             if (monthInput && !monthInput.value) monthInput.value = monthValue;
 
@@ -2863,7 +4115,7 @@ HTML_TEMPLATE = '''
                     <td>₪ ${parseCurrency(item.total_to_pay).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.total_paid).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.outstanding).toFixed(2)}</td>
-                    <td>${item.last_followup_date || ''}</td>
+                    <td>${formatDateDisplay(item.last_followup_date) || ''}</td>
                     <td>${parseInt(item.overdue_days || 0, 10)}</td>
                 </tr>
             `).join('');
@@ -2891,7 +4143,7 @@ HTML_TEMPLATE = '''
                     <td>₪ ${parseCurrency(item.paid_amount).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.balance_due).toFixed(2)}</td>
                     <td>${item.payment_status || ''}</td>
-                    <td>${item.payment_date || ''}</td>
+                    <td>${formatDateDisplay(item.payment_date) || ''}</td>
                     <td>
                         <button class="btn btn-primary" onclick="printBillingInvoice(${item.id})">${t('print_invoice', 'Print Invoice')}</button>
                         <button class="btn btn-danger" onclick="deleteBillingRecord(${item.id})">${t('delete', 'Delete')}</button>
@@ -2901,8 +4153,9 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteBillingRecord(id) {
-            if (!confirm(t('delete', 'Delete') + '?')) return;
-            await fetch(`/api/billing/${id}`, { method: 'DELETE' });
+            if (!confirm(t('confirm_delete', 'Are you sure you want to delete?'))) return;
+            const resp = await fetch(`/api/billing/${id}`, { method: 'DELETE' });
+            if (!resp.ok) { alert('Delete failed'); return; }
             loadBilling();
             loadAuditLogs();
         }
@@ -3007,39 +4260,9 @@ HTML_TEMPLATE = '''
         }
 
         function printBillingInvoice(billingId) {
-            const item = billingCache.find(row => Number(row.id) === Number(billingId));
-            if (!item) {
-                alert(t('invoice_preview_unavailable', 'No invoice data to print yet.'));
-                return;
-            }
-
             const printLang = getInvoicePrintLanguage();
-
-            const amount = parseCurrency(item.amount);
-            const paid = parseCurrency(item.paid_amount);
-            const left = parseCurrency(item.balance_due);
-            const rows = `
-                <tr>
-                    <td>${item.payment_date || ''}</td>
-                    <td>${item.invoice_number || ''} - ${item.patient_name || ''}</td>
-                    <td>₪ ${amount.toFixed(2)}</td>
-                    <td>₪ ${paid.toFixed(2)}</td>
-                    <td>₪ ${left.toFixed(2)}</td>
-                </tr>
-            `;
-            const doctorName = getDoctorNameForLanguage(printLang);
-            const html = invoiceDocumentTemplate({
-                title: tForLang(printLang, 'print_invoice', 'Print Invoice'),
-                subtitle: `${tForLang(printLang, 'patient', 'Patient')}: ${item.patient_name || ''} | ${doctorName}`,
-                rows,
-                totals: {
-                    total_to_pay: amount,
-                    total_paid: paid,
-                    total_left: left
-                },
-                lang: printLang
-            });
-            openPrintWindow(html);
+            const lang = printLang === 'ar' ? 'ar' : 'en';
+            window.open(`/invoice/${billingId}?lang=${lang}`, '_blank');
         }
 
         function printInvoicePayload(payload) {
@@ -3099,7 +4322,7 @@ HTML_TEMPLATE = '''
             tbody.innerHTML = items.map(item => `
                 <tr>
                     <td>${item.id}</td>
-                    <td>${item.created_at || ''}</td>
+                    <td>${formatDateDisplay((item.created_at||'').slice(0,10))} ${(item.created_at||'').slice(11,16)}</td>
                     <td>${item.action_type || ''}</td>
                     <td>${item.entity_type || ''}${item.entity_id ? ` #${item.entity_id}` : ''}</td>
                     <td>${item.details || ''}</td>
@@ -3166,7 +4389,7 @@ HTML_TEMPLATE = '''
                     <td>${item.category || ''}</td>
                     <td>₪ ${parseCurrency(item.amount).toFixed(2)}</td>
                     <td>
-                        <select class="expense-status-select" style="padding: 4px 6px; font-size: 0.85rem; border-radius: 6px; border: 1px solid #cdd9e6; background: ${item.payment_status === 'paid' ? '#e0f4e8' : '#fff1d4'};" onchange="updateExpenseStatus(${item.id}, this.value)">
+                        <select class="expense-status-select" data-status="${item.payment_status || 'postponed'}" onchange="this.dataset.status=this.value;updateExpenseStatus(${item.id}, this.value)">
                             <option value="paid" ${item.payment_status === 'paid' ? 'selected' : ''}>${t('paid', 'Paid')}</option>
                             <option value="postponed" ${item.payment_status === 'postponed' ? 'selected' : ''}>${t('postponed', 'Postponed')}</option>
                         </select>
@@ -3215,7 +4438,14 @@ HTML_TEMPLATE = '''
             window.location.href = '/api/backup';
         }
 
-        let currentFollowupBalance = 0;
+        function switchProfileTab(tabName, btn) {
+            const modal = document.getElementById('patient-profile-modal');
+            modal.querySelectorAll('.profile-tab').forEach(b => b.classList.remove('active'));
+            modal.querySelectorAll('.profile-tab-content').forEach(p => p.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            const panel = modal.querySelector(`#profile-tab-${tabName}`);
+            if (panel) panel.classList.add('active');
+        }
 
         async function viewPatientProfile(patientId) {
             if (!treatmentProceduresCache.length) {
@@ -3224,8 +4454,10 @@ HTML_TEMPLATE = '''
             const profile = await fetch(`/api/patients/${patientId}/full-profile`).then(r => r.json());
             const patient = profile.patient;
             currentProfilePatient = patient;
+            patientProfileCache[patientId] = patient;
             const content = document.getElementById('patient-profile-content');
             const followups = profile.followups || [];
+            followupsCache[patientId] = followups;
             const followupTotals = followups.reduce((acc, item) => {
                 acc.totalToPay += parseCurrency(item.price || 0);
                 acc.totalPaid += parseCurrency(item.payment || 0);
@@ -3236,91 +4468,132 @@ HTML_TEMPLATE = '''
             const totalLeft = Math.max(0, totalToPay - totalPaid);
             currentFollowupBalance = totalLeft;
             content.innerHTML = `
-                <div class="stats-grid">
-                    <div class="stat-card"><h3>${patient.first_name} ${patient.last_name}</h3><p>${patient.phone || t('no_phone', 'No phone')}</p></div>
-                    <div class="stat-card"><h3>${profile.appointments.length}</h3><p>${t('appointments', 'Appointments')}</p></div>
-                    <div class="stat-card"><h3>${followups.length}</h3><p>${t('followups', 'Follow-ups')}</p></div>
-                    <div class="stat-card">
+                <div class="profile-stats">
+                    <div class="stat-card stat-card-teal">
+                        <h3 style="font-size:1.3rem;">${patient.first_name} ${patient.last_name}</h3>
+                        <p>📞 ${patient.phone || t('no_phone', 'No phone')}</p>
+                        ${profile.age != null ? `<p>🎂 ${profile.age} ${currentLanguage==='ar'?'سنة':'yrs'}${profile.birth_date_display ? ' · ' + profile.birth_date_display : ''}</p>` : ''}
+                    </div>
+                    <div class="stat-card stat-card-blue">
+                        <h3>${profile.appointments.length}</h3>
+                        <p>${t('appointments', 'Appointments')}</p>
+                    </div>
+                    <div class="stat-card stat-card-green">
+                        <h3>${followups.length}</h3>
+                        <p>${t('followups_count', 'Follow-ups')}</p>
+                    </div>
+                    <div class="stat-card stat-card-amber">
                         <h3>₪${currentFollowupBalance.toFixed(2)}</h3>
-                        <p>${t('current_balance', 'Current balance')}</p>
-                        <p style="margin-top: 8px; margin-bottom: 2px; font-size: 0.85rem;">${t('total_to_pay', 'Total to pay')}: ₪${totalToPay.toFixed(2)}</p>
-                        <p style="margin-bottom: 2px; font-size: 0.85rem;">${t('paid', 'Paid')}: ₪${totalPaid.toFixed(2)}</p>
-                        <p style="margin-bottom: 0; font-size: 0.85rem;">${t('left', 'Left')}: ₪${totalLeft.toFixed(2)}</p>
+                        <p>${t('current_balance', 'Balance Due')}</p>
+                        <p style="font-size:0.8rem;opacity:0.88;">↑ ₪${totalToPay.toFixed(2)} &nbsp;✓ ₪${totalPaid.toFixed(2)}</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>₪${(profile.credit_balance||0).toFixed(2)}</h3>
+                        <p>${t('credit_balance','Credit Balance')}</p>
                     </div>
                 </div>
-                <div class="toolbar-row" style="margin-top: 0; margin-bottom: 14px;">
-                    <button class="btn btn-primary" type="button" onclick="openAppointmentFromProfile(${patient.id})">+ ${t('book_for_patient', 'Book Appointment for This Patient')}</button>
-                    <button class="btn btn-success" type="button" onclick="printPatientInvoiceById(${patient.id})">${t('print_invoice', 'Print Invoice')}</button>
-                    <button class="btn btn-warning" type="button" onclick="switchTab('appointments')">${t('open_calendar', 'Open Calendar')}</button>
-                </div>
-                <div class="form-row" style="margin-top: 10px;">
-                    <div class="form-group">
-                        <label>${t('patient_name', 'Patient Name')}</label>
-                        <input type="text" value="${patient.first_name} ${patient.last_name}" readonly>
+
+                <nav class="profile-tabs">
+                    <button class="profile-tab active" onclick="switchProfileTab('overview', this)">${t('overview','Overview')}</button>
+                    <button class="profile-tab" onclick="switchProfileTab('followups', this)">${t('followup_sheet','Follow-ups')} (${followups.length})</button>
+                    <button class="profile-tab" onclick="switchProfileTab('images', this)">${t('medical_images','Images')} (${profile.medical_images.length})</button>
+                </nav>
+
+                <div id="profile-tab-overview" class="profile-tab-content active">
+                    <div class="toolbar-row" style="margin-top:0; margin-bottom:16px; flex-wrap:wrap;">
+                        <button class="btn btn-primary" type="button" onclick="openAppointmentFromProfile(${patient.id})">+ ${t('book_for_patient', 'Book Appointment')}</button>
+                        <button class="btn btn-success" type="button" onclick="printPatientInvoiceById(${patient.id})">${t('print_invoice', 'Print Invoice')}</button>
+                        <button class="btn btn-warning" type="button" onclick="switchTab('appointments')">${t('open_calendar', 'Open Calendar')}</button>
+                        <button class="btn btn-primary" type="button" onclick="showEditPatientModalById(${patient.id})">${t('edit_personal_data','Edit Info')}</button>
                     </div>
-                    <div class="form-group">
-                        <label>${t('phone', 'Phone')}</label>
-                        <input type="text" value="${patient.phone || ''}" readonly>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>${t('medical_history', 'Medical History')}</label>
-                    <textarea readonly>${patient.medical_history || ''}</textarea>
-                </div>
-                <h3 style="margin-top:20px;">${t('followup_sheet', 'Patient Follow-up Sheet')}</h3>
-                <form id="patient-followup-form">
-                    <div class="form-row">
-                        <div class="form-group"><label>${t('date', 'Date')}</label><input type="date" name="followup_date" required></div>
-                        <div class="form-group">
-                            <label>${t('select_procedure', 'Select Procedure')}</label>
-                            <select name="procedure_id" id="followup-procedure-id">
-                                <option value="">${t('other', 'Other')}</option>
-                                ${treatmentProceduresCache.map(item => `<option value="${item.id}">${item.name}</option>`).join('')}
-                            </select>
+                    <div class="section-card">
+                        <div class="section-card-title">${t('patient_info','Patient Information')}</div>
+                        <div class="info-grid">
+                            <div class="info-field"><label>${t('patient_name','Name')}</label><span>${patient.first_name} ${patient.last_name}</span></div>
+                            <div class="info-field"><label>${t('phone','Phone')}</label><span>${patient.phone || '—'}</span></div>
+                            ${profile.birth_date_display ? `<div class="info-field"><label>${t('date_of_birth','Date of Birth')}</label><span>${profile.birth_date_display}</span></div>` : ''}
+                            ${patient.gender ? `<div class="info-field"><label>${t('gender','Gender')}</label><span>${patient.gender}</span></div>` : ''}
+                            ${patient.address ? `<div class="info-field"><label>${t('address','Address')}</label><span>${patient.address}</span></div>` : ''}
                         </div>
-                        <div class="form-group" id="followup-custom-procedure-wrap">
-                            <label>${t('custom_procedure_name', 'Custom Procedure Name')}</label>
-                            <input type="text" name="treatment_procedure" id="followup-custom-procedure" placeholder="${t('custom_procedure_placeholder', 'Type procedure name')}">
-                        </div>
+                        ${patient.medical_history ? `<div style="margin-top:14px;"><div class="info-field"><label>${t('medical_history','Medical History')}</label><span style="display:block;white-space:pre-wrap;font-weight:400;line-height:1.6;">${patient.medical_history}</span></div></div>` : ''}
+                        ${patient.notes ? `<div style="margin-top:10px;"><div class="info-field"><label>${t('notes','Notes')}</label><span style="display:block;white-space:pre-wrap;font-weight:400;line-height:1.6;">${patient.notes}</span></div></div>` : ''}
                     </div>
-                    <div class="form-row">
-                        <div class="form-group"><label>${t('price', 'Price')}</label><input type="number" step="0.01" min="0" name="price" id="followup-price" value="0" required></div>
-                        <div class="form-group"><label>${t('lab_expense', 'Lab Expense')}</label><input type="number" step="0.01" min="0" name="lab_expense" id="followup-lab-expense" value="0"></div>
-                        <div class="form-group"><label>${t('payment', 'Payment')}</label><input type="number" step="0.01" min="0" name="payment" id="followup-payment" value="0" required></div>
-                        <div class="form-group"><label>${t('notes', 'Notes')}</label><textarea name="notes" placeholder="${t('optional_note', 'Optional note')}"></textarea></div>
-                    </div>
-                    <input type="hidden" name="requires_lab" id="followup-requires-lab" value="0">
-                    <input type="hidden" name="patient_id" value="${patient.id}">
-                    <button class="btn btn-primary" type="submit">${t('add_entry', 'Add Entry')}</button>
-                </form>
-                <div class="table-container" style="margin-top:16px;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>${t('date', 'Date')}</th>
-                                <th>${t('treatment_procedure', 'Treatment Procedure')}</th>
-                                <th>${t('price', 'Price')}</th>
-                                <th>${t('lab_expense', 'Lab Expense')}</th>
-                                <th>${t('clinic_profit', 'Clinic Profit')}</th>
-                                <th>${t('payment', 'Payment')}</th>
-                                <th>${t('balance', 'Balance')}</th>
-                                <th>${t('notes', 'Notes')}</th>
-                            </tr>
-                        </thead>
-                        <tbody id="patient-followups-body">${renderFollowupsRows(followups)}</tbody>
-                    </table>
                 </div>
-                <h3 style="margin-top:20px;">${t('medical_images', 'Medical Images')}</h3>
-                <form id="upload-image-form" enctype="multipart/form-data">
-                    <input type="hidden" name="patient_id" value="${patient.id}">
-                    <div class="form-row">
-                        <div class="form-group"><input type="file" name="image" accept="image/*" required></div>
-                        <div class="form-group"><input type="text" name="notes" placeholder="${t('image_notes', 'Image notes')}"></div>
+
+                <div id="profile-tab-followups" class="profile-tab-content">
+                    <details class="form-panel" open>
+                        <summary>➕ ${t('add_entry','Add New Entry')}</summary>
+                        <div class="form-panel-body">
+                        <form id="patient-followup-form">
+                            <div class="form-row">
+                                <div class="form-group"><label>${t('date','Date')}</label><input type="text" name="followup_date" placeholder="DD/MM/YYYY" title="Enter date in DD/MM/YYYY format" required></div>
+                                <div class="form-group">
+                                    <label>${t('select_procedure','Select Procedure')}</label>
+                                    <select name="procedure_id" id="followup-procedure-id">
+                                        <option value="">${t('other','Other / Custom')}</option>
+                                        ${treatmentProceduresCache.map(item => `<option value="${item.id}">${item.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="form-group" id="followup-custom-procedure-wrap">
+                                    <label>${t('custom_procedure_name','Procedure Name')}</label>
+                                    <input type="text" name="treatment_procedure" id="followup-custom-procedure" placeholder="${t('custom_procedure_placeholder','Type procedure name')}">
+                                </div>
+                            </div>
+                            <div class="form-row-3">
+                                <div class="form-group"><label>${t('price','Price')}</label><input type="number" step="0.01" min="0" name="price" id="followup-price" value="0" required></div>
+                                <div class="form-group"><label>${t('lab_expense','Lab Expense')}</label><input type="number" step="0.01" min="0" name="lab_expense" id="followup-lab-expense" value="0"></div>
+                                <div class="form-group"><label>${t('payment','Payment')}</label><input type="number" step="0.01" min="0" name="payment" id="followup-payment" value="0" required></div>
+                            </div>
+                            <div class="form-group">
+                                <label>${t('notes','Notes')}</label>
+                                <textarea name="notes" placeholder="${t('optional_note','Optional note')}" style="min-height:60px;"></textarea>
+                            </div>
+                            <input type="hidden" name="requires_lab" id="followup-requires-lab" value="0">
+                            <input type="hidden" name="patient_id" value="${patient.id}">
+                            <button class="btn btn-primary" type="submit">${t('add_entry','Add Entry')}</button>
+                        </form>
+                        </div>
+                    </details>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>${t('date','Date')}</th>
+                                    <th>${t('treatment_procedure','Procedure')}</th>
+                                    <th>${t('price','Price')}</th>
+                                    <th>${t('lab_expense','Lab')}</th>
+                                    <th>${t('clinic_profit','Profit')}</th>
+                                    <th>${t('payment','Payment')}</th>
+                                    <th>${t('balance','Balance')}</th>
+                                    <th>${t('notes','Notes')}</th>
+                                    <th>${t('actions','Actions')}</th>
+                                </tr>
+                            </thead>
+                            <tbody id="patient-followups-body">${renderFollowupsRows(followups)}</tbody>
+                        </table>
                     </div>
-                    <button class="btn btn-primary" type="submit">${t('upload_image', 'Upload Image')}</button>
-                </form>
-                <div class="table-container" style="margin-top:16px;">
-                    <table><thead><tr><th>${t('file', 'File')}</th><th>${t('uploaded', 'Uploaded')}</th><th>${t('notes', 'Notes')}</th></tr></thead><tbody>${profile.medical_images.map(img => `<tr><td>${img.file_name}</td><td>${img.uploaded_at}</td><td>${img.notes || ''}</td></tr>`).join('')}</tbody></table>
+                </div>
+
+                <div id="profile-tab-images" class="profile-tab-content">
+                    <details class="form-panel" open>
+                        <summary>📤 ${t('upload_image','Upload Image')}</summary>
+                        <div class="form-panel-body">
+                        <form id="upload-image-form" enctype="multipart/form-data">
+                            <input type="hidden" name="patient_id" value="${patient.id}">
+                            <div class="form-row">
+                                <div class="form-group"><label>${t('file','File')}</label><input type="file" name="image" accept="image/*" required></div>
+                                <div class="form-group"><label>${t('notes','Notes')}</label><input type="text" name="notes" placeholder="${t('image_notes','Image notes')}"></div>
+                            </div>
+                            <button class="btn btn-primary" type="submit">${t('upload_image','Upload')}</button>
+                        </form>
+                        </div>
+                    </details>
+                    <div class="table-container" style="margin-top:12px;">
+                        <table>
+                            <thead><tr><th>${t('file','File')}</th><th>${t('uploaded','Uploaded')}</th><th>${t('notes','Notes')}</th></tr></thead>
+                            <tbody>${profile.medical_images.map(img => `<tr><td>${img.file_name}</td><td>${img.uploaded_at}</td><td>${img.notes || ''}</td></tr>`).join('') || `<tr><td colspan="3">${t('no_data','No images yet')}</td></tr>`}</tbody>
+                        </table>
+                    </div>
                 </div>
             `;
             document.getElementById('patient-profile-modal').classList.add('active');
@@ -3346,23 +4619,48 @@ HTML_TEMPLATE = '''
                     alert(payload.error || t('unable_save_followup', 'Unable to save follow-up.'));
                     return;
                 }
-                viewPatientProfile(patientId);
+                await viewPatientProfile(patientId);
+                const followupsBtn = document.querySelector('#patient-profile-modal .profile-tab:nth-child(2)');
+                if (followupsBtn) switchProfileTab('followups', followupsBtn);
             });
             document.getElementById('upload-image-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 await fetch('/api/medical-images', {method:'POST', body: formData});
-                viewPatientProfile(patientId);
+                await viewPatientProfile(patientId);
+                const imagesBtn = document.querySelector('#patient-profile-modal .profile-tab:nth-child(3)');
+                if (imagesBtn) switchProfileTab('images', imagesBtn);
             });
+        }
+
+        function formatDateDisplay(dateStr) {
+            if (!dateStr) return '';
+            const parts = String(dateStr).substring(0, 10).split('-');
+            if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+            return dateStr;
+        }
+
+        function formatApptDate(dateStr) {
+            if (!dateStr) return '';
+            try {
+                const d = new Date(String(dateStr).replace(' ', 'T'));
+                if (isNaN(d.getTime())) return dateStr;
+                const day = String(d.getDate()).padStart(2,'0');
+                const mon = String(d.getMonth()+1).padStart(2,'0');
+                const yr = d.getFullYear();
+                const hr = String(d.getHours()).padStart(2,'0');
+                const mn = String(d.getMinutes()).padStart(2,'0');
+                return `${day}/${mon}/${yr} ${hr}:${mn}`;
+            } catch(_) { return dateStr; }
         }
 
         function renderFollowupsRows(followups) {
             if (!followups || !followups.length) {
-                return `<tr><td colspan="8">${t('no_entries_yet', 'No entries yet')}</td></tr>`;
+                return `<tr><td colspan="9">${t('no_entries_yet', 'No entries yet')}</td></tr>`;
             }
             return followups.map(item => `
                 <tr>
-                    <td>${item.followup_date || ''}</td>
+                    <td>${formatDateDisplay(item.followup_date) || ''}</td>
                     <td>${item.treatment_procedure || t('no_data', 'No data')}</td>
                     <td>₪${parseFloat(item.price || 0).toFixed(2)}</td>
                     <td>₪${parseFloat(item.lab_expense || 0).toFixed(2)}</td>
@@ -3370,9 +4668,112 @@ HTML_TEMPLATE = '''
                     <td>₪${parseFloat(item.payment || 0).toFixed(2)}</td>
                     <td>₪${parseFloat(item.remaining_amount || 0).toFixed(2)}</td>
                     <td>${item.notes || ''}</td>
+                    <td>
+                        <button class="btn btn-warning btn-icon" onclick="deleteFollowup(${item.patient_id},${item.id})">🗑</button>
+                        <button class="btn btn-primary btn-icon" onclick="editFollowupById(${item.patient_id},${item.id})">✏</button>
+                    </td>
                 </tr>
             `).join('');
         }
+
+        async function deleteFollowup(patientId, followupId) {
+            if (!confirm(t('confirm_delete', 'Are you sure you want to delete?'))) return;
+            const resp = await fetch(`/api/patients/${patientId}/followups/${followupId}`, {method:'DELETE'});
+            if (!resp.ok) {
+                alert('Delete failed');
+                return;
+            }
+            viewPatientProfile(patientId);
+        }
+
+        let currentEditFollowup = null;
+        async function editFollowup(item) {
+            currentEditFollowup = item;
+            document.getElementById('ef-patient-id').value = item.patient_id || '';
+            document.getElementById('ef-followup-id').value = item.id || '';
+            document.getElementById('ef-date').value = formatDateDisplay(item.followup_date) || '';
+            document.getElementById('ef-procedure').value = item.treatment_procedure || '';
+            document.getElementById('ef-price').value = parseFloat(item.price || 0).toFixed(2);
+            document.getElementById('ef-payment').value = parseFloat(item.payment || 0).toFixed(2);
+            document.getElementById('ef-notes').value = item.notes || '';
+            document.getElementById('edit-followup-modal').classList.add('active');
+        }
+
+        function editFollowupById(patientId, followupId) {
+            const list = followupsCache[patientId] || [];
+            const item = list.find(f => Number(f.id) === Number(followupId));
+            if (!item) { alert(t('no_entry_found', 'Entry not found')); return; }
+            editFollowup(item);
+        }
+
+        function showEditPatientModal(patientId, patient) {
+            document.getElementById('edit-patient-id').value = patientId;
+            document.getElementById('edit-first-name').value = patient.first_name || '';
+            document.getElementById('edit-last-name').value = patient.last_name || '';
+            document.getElementById('edit-phone').value = patient.phone || '';
+            document.getElementById('edit-dob').value = formatDateDisplay(patient.date_of_birth) || '';
+            document.getElementById('edit-gender').value = patient.gender || '';
+            document.getElementById('edit-address').value = patient.address || '';
+            document.getElementById('edit-notes').value = patient.notes || '';
+            document.getElementById('edit-patient-modal').classList.add('active');
+        }
+
+        function showEditPatientModalById(patientId) {
+            const patient = patientProfileCache[patientId];
+            if (!patient) { alert('Patient data not loaded'); return; }
+            showEditPatientModal(patientId, patient);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const editForm = document.getElementById('edit-patient-form');
+            if (editForm) {
+                editForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const data = Object.fromEntries(new FormData(e.target));
+                    const patientId = data.patient_id;
+                    delete data.patient_id;
+                    const resp = await fetch(`/api/patients/${patientId}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                    if (resp.ok) {
+                        closeModal('edit-patient-modal');
+                        viewPatientProfile(parseInt(patientId));
+                        loadPatients();
+                    } else {
+                        alert(t('save_failed', 'Save failed'));
+                    }
+                });
+            }
+            const editFollowupForm = document.getElementById('edit-followup-form');
+            if (editFollowupForm) {
+                editFollowupForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const patientId = document.getElementById('ef-patient-id').value;
+                    const followupId = document.getElementById('ef-followup-id').value;
+                    const payload = {
+                        ...currentEditFollowup,
+                        followup_date: document.getElementById('ef-date').value,
+                        treatment_procedure: document.getElementById('ef-procedure').value,
+                        price: parseFloat(document.getElementById('ef-price').value || 0),
+                        payment: parseFloat(document.getElementById('ef-payment').value || 0),
+                        notes: document.getElementById('ef-notes').value
+                    };
+                    const resp = await fetch(`/api/patients/${patientId}/followups/${followupId}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    if (resp.ok) {
+                        closeModal('edit-followup-modal');
+                        viewPatientProfile(parseInt(patientId));
+                    } else {
+                        alert(t('save_failed', 'Save failed'));
+                    }
+                });
+            }
+        });
 
         async function openAppointmentFromProfile(patientId) {
             closeModal('patient-profile-modal');
@@ -3385,11 +4786,16 @@ HTML_TEMPLATE = '''
             e.preventDefault();
             const formData = new FormData(e.target);
             const data = Object.fromEntries(formData);
-            await fetch('/api/patients', {
+            const resp = await fetch('/api/patients', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(data)
             });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                alert(err.error || t('save_failed', 'Save failed'));
+                return;
+            }
             closeModal('add-patient-modal');
             e.target.reset();
             loadPatients();
@@ -3399,6 +4805,10 @@ HTML_TEMPLATE = '''
             e.preventDefault();
             const formData = new FormData(e.target);
             const data = Object.fromEntries(formData);
+            if (isFridayDateTimeValue(data.appointment_date)) {
+                alert('Friday is a permanent holiday.');
+                return;
+            }
             const response = await fetch('/api/appointments', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -3429,7 +4839,13 @@ HTML_TEMPLATE = '''
             }
             e.target.reset();
             const expenseDateInput = document.getElementById('expense-date');
-            if (expenseDateInput) expenseDateInput.value = new Date().toISOString().slice(0, 10);
+            if (expenseDateInput) {
+                const today = new Date();
+                const day = String(today.getDate()).padStart(2, '0');
+                const month = String(today.getMonth() + 1).padStart(2, '0');
+                const year = today.getFullYear();
+                expenseDateInput.value = `${day}/${month}/${year}`;
+            }
             loadExpenses();
             loadReports();
             loadDashboard();
@@ -3454,7 +4870,13 @@ HTML_TEMPLATE = '''
 
                 e.target.reset();
                 const billingDateInput = document.getElementById('billing-date');
-                if (billingDateInput) billingDateInput.value = new Date().toISOString().slice(0, 10);
+                if (billingDateInput) {
+                    const today = new Date();
+                    const day = String(today.getDate()).padStart(2, '0');
+                    const month = String(today.getMonth() + 1).padStart(2, '0');
+                    const year = today.getFullYear();
+                    billingDateInput.value = `${day}/${month}/${year}`;
+                }
                 loadBilling();
                 loadReceivables();
                 loadAuditLogs();
@@ -3527,10 +4949,14 @@ HTML_TEMPLATE = '''
 
         // Delete functions
         async function deletePatient(id) {
-            if (confirm(t('confirm_delete_patient', 'Are you sure you want to delete this patient?'))) {
-                await fetch(`/api/patients/${id}`, {method: 'DELETE'});
-                loadPatients();
+            if (!confirm(t('confirm_delete_patient', 'Are you sure you want to delete this patient?'))) return;
+            const resp = await fetch(`/api/patients/${id}`, {method: 'DELETE'});
+            if (!resp.ok) {
+                const p = await resp.json().catch(() => ({}));
+                alert(p.error || 'Delete failed');
+                return;
             }
+            loadPatients();
         }
         
         async function updateAppointmentStatus(id, status) {
@@ -3561,9 +4987,14 @@ HTML_TEMPLATE = '''
         loadSupportSection();
         loadTreatmentProcedures();
         const expenseDateInput = document.getElementById('expense-date');
-        if (expenseDateInput) expenseDateInput.value = new Date().toISOString().slice(0, 10);
         const billingDateInput = document.getElementById('billing-date');
-        if (billingDateInput) billingDateInput.value = new Date().toISOString().slice(0, 10);
+        const today = new Date();
+        const day = String(today.getDate()).padStart(2, '0');
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const year = today.getFullYear();
+        const todayStr = `${day}/${month}/${year}`;
+        if (expenseDateInput) expenseDateInput.value = todayStr;
+        if (billingDateInput) billingDateInput.value = todayStr;
         applyTheme();
         applyLanguage();
         
@@ -3574,9 +5005,314 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
+MOBILE_PORTAL_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinic Mobile Downloads</title>
+    <style>
+        :root {
+            --bg-1: #f1f7f8;
+            --bg-2: #e7f0ff;
+            --panel: #ffffff;
+            --line: #dbe4ef;
+            --text: #11243a;
+            --brand: #0f6d7b;
+            --brand-2: #1d7fb7;
+            --muted: #627386;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(1200px 500px at 100% -30%, #cfe7ff 0%, transparent 60%),
+                radial-gradient(1000px 500px at -10% 0%, #cff3ec 0%, transparent 58%),
+                linear-gradient(160deg, var(--bg-1), var(--bg-2));
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .card {
+            width: min(680px, 100%);
+            background: rgba(255,255,255,0.94);
+            border: 1px solid #e2ebf5;
+            border-radius: 18px;
+            box-shadow: 0 14px 36px rgba(19, 39, 66, 0.12);
+            overflow: hidden;
+        }
+        .header {
+            padding: 18px 18px 14px;
+            color: #fff;
+            background: linear-gradient(140deg, var(--brand) 0%, var(--brand-2) 100%);
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 1.15rem;
+        }
+        .header p {
+            margin: 8px 0 0;
+            opacity: 0.9;
+            font-size: 0.92rem;
+        }
+        .body { padding: 16px; }
+        .field { margin-bottom: 12px; }
+        .field label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        input {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 11px 12px;
+            font-size: 0.98rem;
+        }
+        .actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+        button, a.btn {
+            border: none;
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-weight: 700;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        button.primary, a.primary {
+            color: #fff;
+            background: linear-gradient(140deg, var(--brand) 0%, var(--brand-2) 100%);
+        }
+        button.secondary {
+            color: var(--text);
+            background: #eef4fb;
+        }
+        button:disabled, a.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        .hidden { display: none; }
+        .meta {
+            margin-top: 12px;
+            font-size: 0.9rem;
+            color: var(--muted);
+        }
+        .platform-grid {
+            margin-top: 14px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 10px;
+        }
+        .platform {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 12px;
+            background: #fff;
+        }
+        .platform h3 { margin: 0 0 8px; }
+        .platform p {
+            margin: 0 0 10px;
+            color: var(--muted);
+            font-size: 0.9rem;
+            min-height: 36px;
+        }
+        .status {
+            margin-top: 12px;
+            font-size: 0.9rem;
+            min-height: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <h1>Clinic Mobile Downloads</h1>
+            <p>Login with your serial number and choose Android or iOS.</p>
+        </div>
+        <div class="body">
+            <div id="login-box">
+                <div class="field">
+                    <label for="serial-input">Serial Number</label>
+                    <input id="serial-input" placeholder="DENTAL-123456" />
+                </div>
+                <div class="actions">
+                    <button class="primary" onclick="loginWithSerial()">Login</button>
+                </div>
+            </div>
+
+            <div id="download-box" class="hidden">
+                <div class="meta" id="license-meta"></div>
+                <div class="platform-grid">
+                    <div class="platform">
+                        <h3>Android</h3>
+                        <p>Download and install the Android clinic companion app.</p>
+                        <a id="android-btn" class="btn primary" href="#" target="_blank" rel="noopener">Download Android</a>
+                    </div>
+                    <div class="platform">
+                        <h3>iOS</h3>
+                        <p>Download the iOS build/TestFlight link for clinic users.</p>
+                        <a id="ios-btn" class="btn primary" href="#" target="_blank" rel="noopener">Download iOS</a>
+                    </div>
+                </div>
+                <div class="actions">
+                    <button class="secondary" onclick="resetPortal()">Use another serial</button>
+                </div>
+            </div>
+
+            <div id="status" class="status"></div>
+        </div>
+    </div>
+
+    <script>
+        const OFFLINE_LICENSE_KEY = 'clinic_offline_license_token';
+
+        function setStatus(message, isError = false) {
+            const status = document.getElementById('status');
+            status.textContent = message || '';
+            status.style.color = isError ? '#c7254e' : '#2d6a4f';
+        }
+
+        function setDownloadButton(anchorId, option) {
+            const btn = document.getElementById(anchorId);
+            if (!option || !option.available || !option.url) {
+                btn.classList.add('disabled');
+                btn.removeAttribute('href');
+                return;
+            }
+            btn.classList.remove('disabled');
+            btn.href = option.url;
+        }
+
+        function renderLicense(payload) {
+            document.getElementById('login-box').classList.add('hidden');
+            document.getElementById('download-box').classList.remove('hidden');
+            const meta = `Clinic: ${payload.clinic_name || '-'} | Plan: ${payload.plan_name || '-'} | Expires: ${payload.expires_at || '-'}`;
+            document.getElementById('license-meta').textContent = meta;
+            setStatus('License ready.');
+        }
+
+        async function restoreOfflineLicense() {
+            const savedToken = localStorage.getItem(OFFLINE_LICENSE_KEY);
+            if (!savedToken) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/license/offline-verify', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({offline_license_token: savedToken})
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    localStorage.removeItem(OFFLINE_LICENSE_KEY);
+                    return;
+                }
+
+                renderLicense(payload.offline_license || {});
+                const downloads = payload.downloads || {};
+                if (downloads.android) {
+                    setDownloadButton('android-btn', downloads.android);
+                }
+                if (downloads.ios) {
+                    setDownloadButton('ios-btn', downloads.ios);
+                }
+            } catch (_) {
+                // Silent by design: offline restore should not bother the user.
+            }
+        }
+
+        async function loginWithSerial() {
+            const serial = document.getElementById('serial-input').value.trim().toUpperCase();
+            if (!serial) {
+                setStatus('Please enter your serial number.', true);
+                return;
+            }
+
+            setStatus('Checking serial...');
+            try {
+                const response = await fetch('/api/license/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({serial_number: serial})
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    setStatus(payload.error || 'Login failed.', true);
+                    return;
+                }
+
+                if (payload.offline_license_token) {
+                    localStorage.setItem(OFFLINE_LICENSE_KEY, payload.offline_license_token);
+                }
+
+                renderLicense(payload);
+
+                setDownloadButton('android-btn', payload.downloads?.android);
+                setDownloadButton('ios-btn', payload.downloads?.ios);
+                setStatus('Login successful.');
+            } catch (error) {
+                setStatus('Network error while validating serial.', true);
+            }
+        }
+
+        function resetPortal() {
+            localStorage.removeItem(OFFLINE_LICENSE_KEY);
+            document.getElementById('download-box').classList.add('hidden');
+            document.getElementById('login-box').classList.remove('hidden');
+            document.getElementById('serial-input').value = '';
+            setStatus('');
+        }
+
+        document.addEventListener('DOMContentLoaded', restoreOfflineLicense);
+    </script>
+</body>
+</html>
+'''
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
+
+
+@app.route('/mobile-download')
+def mobile_download():
+    return render_template_string(MOBILE_PORTAL_TEMPLATE)
+
+
+@app.route('/downloads/android')
+def download_android_package():
+    if not MOBILE_ANDROID_PACKAGE_PATH.exists():
+        return jsonify({'error': 'Android package is not uploaded yet'}), 404
+    return send_file(
+        MOBILE_ANDROID_PACKAGE_PATH,
+        as_attachment=True,
+        download_name='clinic-mobile-android.apk'
+    )
+
+
+@app.route('/downloads/ios')
+def download_ios_package():
+    if not MOBILE_IOS_PACKAGE_PATH.exists():
+        return jsonify({'error': 'iOS package is not uploaded yet'}), 404
+    return send_file(
+        MOBILE_IOS_PACKAGE_PATH,
+        as_attachment=True,
+        download_name='clinic-mobile-ios.ipa'
+    )
 
 # API Routes
 @app.route('/api/stats')
@@ -3618,32 +5354,31 @@ def get_stats():
 @app.route('/api/patients', methods=['GET', 'POST'])
 def patients():
     conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
+
     if request.method == 'GET':
         cursor.execute('SELECT * FROM patients ORDER BY id DESC')
-        patients = []
-        for row in cursor.fetchall():
-            patients.append({
-                'id': row[0],
-                'first_name': row[1],
-                'last_name': row[2],
-                'date_of_birth': row[3],
-                'phone': row[4],
-                'email': row[5],
-                'address': row[6],
-                'medical_history': row[7],
-                'created_at': row[8]
-            })
+        patients_list = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        return jsonify(patients)
+        return jsonify(patients_list)
     
     else:  # POST
-        data = request.json
+        data = request.json or {}
+        if not data.get('first_name') or not data.get('last_name'):
+            conn.close()
+            return jsonify({'error': 'First name and last name are required'}), 400
+        birth_date = data.get('date_of_birth')
+        if birth_date:
+            parsed_date = parse_date_input(birth_date)
+            if not parsed_date:
+                conn.close()
+                return jsonify({'error': 'Invalid date of birth format. Use DD/MM/YYYY.'}), 400
+            birth_date = parsed_date
         cursor.execute('''
             INSERT INTO patients (first_name, last_name, date_of_birth, phone, email, address, medical_history)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (data['first_name'], data['last_name'], data.get('date_of_birth'), 
+        ''', (data['first_name'], data['last_name'], birth_date,
               data.get('phone'), data.get('email'), data.get('address'), data.get('medical_history')))
         conn.commit()
         conn.close()
@@ -3653,7 +5388,10 @@ def patients():
 def delete_patient(patient_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Soft-delete dependent records first to avoid orphans
+    cursor.execute('UPDATE patient_followups SET is_deleted = 1 WHERE patient_id = ?', (patient_id,))
     cursor.execute('DELETE FROM patients WHERE id = ?', (patient_id,))
+    append_audit_log(cursor, 'delete', 'patient', patient_id, {'patient_id': patient_id})
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -3695,13 +5433,16 @@ def patient_full_profile(patient_id):
             SELECT pf.*, tp.requires_lab as procedure_requires_lab
             FROM patient_followups pf
             LEFT JOIN treatment_procedures tp ON tp.id = pf.procedure_id
-            WHERE pf.patient_id = ?
+            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0
             ORDER BY pf.followup_date DESC, pf.id DESC
         ''', (patient_id,)),
         'medical_images': fetch_all('''
             SELECT * FROM medical_images WHERE patient_id = ? ORDER BY uploaded_at DESC
         ''', (patient_id,))
     }
+    profile['age'] = calculate_age(dict(patient).get('date_of_birth'))
+    profile['birth_date_display'] = format_date_display(dict(patient).get('date_of_birth'))
+    profile['credit_balance'] = get_patient_credit_balance(cursor, patient_id)
     conn.close()
     return jsonify(profile)
 
@@ -3882,6 +5623,17 @@ def patient_followups(patient_id):
         lab_expense = 0
         clinic_profit = price
 
+    # Parse followup date to ensure YYYY-MM-DD format
+    followup_date = data.get('followup_date')
+    if not followup_date:
+        conn.close()
+        return jsonify({'error': 'Followup date is required'}), 400
+    
+    parsed_followup_date = parse_date_input(followup_date)
+    if not parsed_followup_date:
+        conn.close()
+        return jsonify({'error': 'Invalid followup date format. Use DD/MM/YYYY.'}), 400
+
     cursor.execute('''
         INSERT INTO patient_followups (
             patient_id, followup_date, tooth_no, diagnosis, treatment_procedure, procedure_id,
@@ -3889,7 +5641,7 @@ def patient_followups(patient_id):
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         patient_id,
-        data.get('followup_date'),
+        parsed_followup_date,
         data.get('tooth_no'),
         data.get('diagnosis'),
         treatment_procedure,
@@ -3903,7 +5655,6 @@ def patient_followups(patient_id):
     ))
 
     followup_id = cursor.lastrowid
-    followup_date = normalize_date_input(data.get('followup_date'))
 
     append_audit_log(cursor, 'create', 'patient_followup', followup_id, {
         'patient_id': patient_id,
@@ -3924,7 +5675,7 @@ def patient_followups(patient_id):
         ''', (
             treatment_procedure,
             lab_expense,
-            followup_date,
+            parsed_followup_date,
             patient_full_name,
             f"Auto from follow-up: {patient_full_name} - {treatment_procedure}",
             'postponed',
@@ -3944,6 +5695,76 @@ def patient_followups(patient_id):
     conn.close()
     return jsonify({'success': True})
 
+@app.route('/api/patients/<int:patient_id>/followups/<int:followup_id>', methods=['DELETE', 'PUT'])
+def followup_detail(patient_id, followup_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if request.method == 'DELETE':
+        cursor.execute(
+            'UPDATE patient_followups SET is_deleted = 1 WHERE id = ? AND patient_id = ?',
+            (followup_id, patient_id)
+        )
+        append_audit_log(cursor, 'delete', 'patient_followup', followup_id, {'patient_id': patient_id})
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+
+    # PUT — update existing followup
+    data = request.json or {}
+
+    def as_float(value, default=0):
+        try:
+            if value in (None, ''):
+                return float(default)
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    followup_date = data.get('followup_date')
+    if not followup_date:
+        conn.close()
+        return jsonify({'error': 'Followup date is required'}), 400
+    parsed_date = parse_date_input(followup_date)
+    if not parsed_date:
+        conn.close()
+        return jsonify({'error': 'Invalid followup date format. Use DD/MM/YYYY.'}), 400
+
+    price = as_float(data.get('price'))
+    payment = as_float(data.get('payment'))
+    lab_expense = as_float(data.get('lab_expense'))
+    clinic_profit = as_float(data.get('clinic_profit', price - lab_expense))
+
+    cursor.execute('''
+        SELECT COALESCE(SUM(price), 0), COALESCE(SUM(payment), 0)
+        FROM patient_followups
+        WHERE patient_id = ? AND (is_deleted IS NULL OR is_deleted != 1) AND id != ?
+    ''', (patient_id, followup_id))
+    prev = cursor.fetchone() or (0, 0)
+    previous_balance = max(float(prev[0]) - float(prev[1]), 0)
+    remaining_amount = max(previous_balance + price - payment, 0)
+
+    cursor.execute('''
+        UPDATE patient_followups
+        SET followup_date = ?, treatment_procedure = ?, price = ?, lab_expense = ?,
+            clinic_profit = ?, payment = ?, remaining_amount = ?, notes = ?
+        WHERE id = ? AND patient_id = ?
+    ''', (
+        parsed_date, data.get('treatment_procedure'), price, lab_expense,
+        clinic_profit, payment, remaining_amount, data.get('notes'),
+        followup_id, patient_id
+    ))
+    append_audit_log(cursor, 'update', 'patient_followup', followup_id, {
+        'patient_id': patient_id,
+        'treatment_procedure': data.get('treatment_procedure'),
+        'price': price,
+        'payment': payment,
+    })
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 @app.route('/api/appointments', methods=['GET', 'POST'])
 def appointments():
     conn = sqlite3.connect(DB_NAME)
@@ -3954,26 +5775,14 @@ def appointments():
             SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
             FROM appointments a
             JOIN patients p ON a.patient_id = p.id
-            ORDER BY a.appointment_date DESC
+            ORDER BY datetime(a.appointment_date) DESC, a.id DESC
         ''')
-        appointments = []
-        for row in cursor.fetchall():
-            appointments.append({
-                'id': row[0],
-                'patient_id': row[1],
-                'appointment_date': row[2],
-                'duration': row[3],
-                'treatment_type': row[4],
-                'status': row[5],
-                'notes': row[6],
-                'created_at': row[7],
-                'patient_name': row[8]
-            })
+        appointments = [appointment_row_to_dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify(appointments)
     
     else:  # POST
-        data = request.json
+        data = request.get_json(silent=True) or {}
         try:
             patient_id = int(data.get('patient_id'))
         except (TypeError, ValueError):
@@ -3995,6 +5804,10 @@ def appointments():
         except ValueError as exc:
             conn.close()
             return jsonify({'error': str(exc)}), 400
+
+        if is_friday_datetime(appointment_date):
+            conn.close()
+            return jsonify({'error': 'Friday is a permanent holiday'}), 400
 
         cursor.execute('SELECT id FROM patients WHERE id = ?', (patient_id,))
         if not cursor.fetchone():
@@ -4042,22 +5855,10 @@ def recent_appointments():
         SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
-        ORDER BY a.appointment_date DESC
+        ORDER BY datetime(a.appointment_date) DESC, a.id DESC
         LIMIT 10
     ''')
-    appointments = []
-    for row in cursor.fetchall():
-        appointments.append({
-            'id': row[0],
-            'patient_id': row[1],
-            'appointment_date': row[2],
-            'duration': row[3],
-            'treatment_type': row[4],
-            'status': row[5],
-            'notes': row[6],
-            'created_at': row[7],
-            'patient_name': row[8]
-        })
+    appointments = [appointment_row_to_dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify(appointments)
 
@@ -4065,8 +5866,15 @@ def recent_appointments():
 def update_appointment_status(appointment_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    data = request.json
-    cursor.execute('UPDATE appointments SET status = ? WHERE id = ?', (data['status'], appointment_id))
+    data = request.get_json(silent=True) or {}
+    status = str(data.get('status') or '').strip().lower()
+    if status not in {'scheduled', 'completed', 'cancelled', 'no_show'}:
+        conn.close()
+        return jsonify({'error': 'Invalid appointment status'}), 400
+    cursor.execute('UPDATE appointments SET status = ? WHERE id = ?', (status, appointment_id))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Appointment not found'}), 404
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -4100,7 +5908,10 @@ def treatment_plans():
         conn.close()
         return jsonify(plans)
 
-    data = request.json
+    data = request.json or {}
+    if not data.get('patient_id') or not data.get('plan_name'):
+        conn.close()
+        return jsonify({'error': 'patient_id and plan_name are required'}), 400
     cursor.execute('''
         INSERT INTO treatment_plans (patient_id, plan_name, goals, estimated_cost, status, start_date, end_date, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -4122,7 +5933,10 @@ def treatment_plan_detail(plan_id):
         conn.close()
         return jsonify({'success': True})
 
-    data = request.json
+    data = request.json or {}
+    if not data.get('plan_name'):
+        conn.close()
+        return jsonify({'error': 'plan_name is required'}), 400
     cursor.execute('''
         UPDATE treatment_plans
         SET plan_name = ?, goals = ?, estimated_cost = ?, status = ?, start_date = ?, end_date = ?, notes = ?
@@ -4156,11 +5970,20 @@ def expenses():
         conn.close()
         return jsonify(rows)
 
-    data = request.json
+    data = request.get_json(silent=True) or {}
+    # Parse expense date to ensure YYYY-MM-DD format
+    expense_date = data.get('expense_date')
+    if expense_date:
+        parsed_date = parse_date_input(expense_date)
+        if not parsed_date:
+            conn.close()
+            return jsonify({'error': 'Invalid expense date format. Use DD/MM/YYYY.'}), 400
+        expense_date = parsed_date
+    
     cursor.execute('''
         INSERT INTO expenses (category, amount, expense_date, vendor, notes, payment_status)
         VALUES (?, ?, ?, ?, ?, ?)
-    ''', (data['category'], data['amount'], data.get('expense_date'), data.get('vendor'), data.get('notes'), data.get('payment_status', 'pending')))
+    ''', (data['category'], data['amount'], expense_date, data.get('vendor'), data.get('notes'), data.get('payment_status', 'pending')))
     append_audit_log(cursor, 'create', 'expense', cursor.lastrowid, {
         'source_type': 'manual',
         'category': data.get('category'),
@@ -4191,52 +6014,47 @@ def delete_or_update_expense(expense_id):
 
 @app.route('/api/reports/summary')
 def reports_summary():
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
+    start_date = normalize_api_date(request.args.get('start_date'))
+    end_date = normalize_api_date(request.args.get('end_date'))
+    if request.args.get('start_date') and not start_date:
+        return jsonify({'error': 'Invalid start_date'}), 400
+    if request.args.get('end_date') and not end_date:
+        return jsonify({'error': 'Invalid end_date'}), 400
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    def date_clause(column_name):
-        if start_date and end_date:
-            return f' AND date({column_name}) BETWEEN ? AND ?', [start_date, end_date]
-        if start_date:
-            return f' AND date({column_name}) >= ?', [start_date]
-        if end_date:
-            return f' AND date({column_name}) <= ?', [end_date]
-        return '', []
-
-    clause, params = date_clause('appointment_date')
+    clause, params = build_date_clause('appointment_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM appointments WHERE 1=1{clause}', params)
     appointments_count = cursor.fetchone()[0]
 
-    clause, params = date_clause('visit_date')
+    clause, params = build_date_clause('visit_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM visits WHERE 1=1{clause}', params)
     visits_count = cursor.fetchone()[0]
 
     # Reports revenue source matches dashboard: patient follow-up payments only.
-    clause, params = date_clause('followup_date')
+    clause, params = build_date_clause('followup_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE 1=1{clause}', params)
     revenue = cursor.fetchone()[0]
 
-    clause, params = date_clause('followup_date')
+    clause, params = build_date_clause('followup_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE 1=1{clause}', params)
     lab_expenses = cursor.fetchone()[0]
 
-    clause, params = date_clause('followup_date')
+    clause, params = build_date_clause('followup_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE 1=1{clause}', params)
     clinic_gross_profit = cursor.fetchone()[0]
 
-    clause, params = date_clause('expense_date')
+    clause, params = build_date_clause('expense_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND 1=1{clause}', params)
     expenses_paid = cursor.fetchone()[0]
     
-    clause, params = date_clause('expense_date')
+    clause, params = build_date_clause('expense_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND 1=1{clause}', params)
     expenses_postponed = cursor.fetchone()[0]
     
     expenses_total = float(expenses_paid or 0) + float(expenses_postponed or 0)
 
-    clause, params = date_clause('start_date')
+    clause, params = build_date_clause('start_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM treatment_plans WHERE 1=1{clause}', params)
     plans_count = cursor.fetchone()[0]
 
@@ -4279,6 +6097,24 @@ def reports_weekly():
     cursor.execute('SELECT COUNT(*) FROM visits WHERE date(visit_date) BETWEEN ? AND ?', (start_str, end_str))
     visits_count = cursor.fetchone()[0]
 
+    # Count distinct teeth (excluding follow-ups marked as 'مراجعة')
+    cursor.execute('''
+        SELECT COUNT(DISTINCT tooth_no) FROM patient_followups 
+        WHERE date(followup_date) BETWEEN ? AND ? 
+        AND COALESCE(is_deleted, 0) = 0 
+        AND treatment_procedure != 'مراجعة'
+    ''', (start_str, end_str))
+    distinct_teeth = cursor.fetchone()[0] or 0
+
+    # Count follow-ups (مراجعة entries)
+    cursor.execute('''
+        SELECT COUNT(*) FROM patient_followups 
+        WHERE date(followup_date) BETWEEN ? AND ? 
+        AND COALESCE(is_deleted, 0) = 0 
+        AND treatment_procedure = 'مراجعة'
+    ''', (start_str, end_str))
+    follow_ups_count = cursor.fetchone()[0] or 0
+
     cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     revenue = cursor.fetchone()[0]
 
@@ -4299,12 +6135,31 @@ def reports_weekly():
     cursor.execute('SELECT COUNT(*) FROM treatment_plans WHERE date(start_date) BETWEEN ? AND ?', (start_str, end_str))
     plans_count = cursor.fetchone()[0]
 
+    cursor.execute('SELECT COUNT(*) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?', (start_str, end_str))
+    invoice_count = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    session_count = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(DISTINCT patient_id) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    patient_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND entry_type = 'followup' AND date(followup_date) BETWEEN ? AND ?", (start_str, end_str))
+    followups_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND (entry_type = 'new' OR entry_type IS NULL OR entry_type = '') AND date(followup_date) BETWEEN ? AND ?", (start_str, end_str))
+    new_entries_count = cursor.fetchone()[0]
+
     conn.close()
     return jsonify({
         'week_start': start_str,
         'week_end': end_str,
+        'week_start_display': format_date_display(start_str),
+        'week_end_display': format_date_display(end_str),
         'appointments': appointments_count,
         'visits': visits_count,
+        'distinct_teeth': distinct_teeth,
+        'follow_ups': follow_ups_count,
         'revenue': float(revenue or 0),
         'lab_expenses': float(lab_expenses or 0),
         'clinic_gross_profit': float(clinic_gross_profit or 0),
@@ -4312,7 +6167,12 @@ def reports_weekly():
         'expenses_paid': float(expenses_paid or 0),
         'expenses_postponed': float(expenses_postponed or 0),
         'profit': float(revenue or 0) - expenses_total,
-        'treatment_plans': plans_count
+        'treatment_plans': plans_count,
+        'invoice_count': invoice_count,
+        'session_count': session_count,
+        'patient_count': patient_count,
+        'followups': followups_count,
+        'new_entries': new_entries_count
     })
 
 @app.route('/api/reports/receivables')
@@ -4476,10 +6336,21 @@ def holidays():
         return jsonify(rows)
 
     data = request.json
+    holiday_date = data.get('holiday_date')
+    if not holiday_date:
+        conn.close()
+        return jsonify({'error': 'Holiday date is required'}), 400
+    
+    # Parse holiday date to ensure YYYY-MM-DD format
+    parsed_date = parse_date_input(holiday_date)
+    if not parsed_date:
+        conn.close()
+        return jsonify({'error': 'Invalid holiday date format. Use DD/MM/YYYY.'}), 400
+    
     cursor.execute('''
         INSERT INTO holidays (holiday_date, name, notes)
         VALUES (?, ?, ?)
-    ''', (data.get('holiday_date'), data.get('name'), data.get('notes')))
+    ''', (parsed_date, data.get('name'), data.get('notes')))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -4754,7 +6625,10 @@ def billing():
         return jsonify(billing_records)
     
     else:  # POST
-        data = request.json
+        data = request.json or {}
+        if not data.get('patient_id'):
+            conn.close()
+            return jsonify({'error': 'patient_id is required'}), 400
         try:
             subtotal = float(data.get('subtotal', data.get('amount', 0)))
             discount = float(data.get('discount', 0))
@@ -4784,6 +6658,16 @@ def billing():
             payment_status = 'pending'
 
         invoice_number = data.get('invoice_number') or generate_invoice_number()
+        
+        # Parse payment date to ensure YYYY-MM-DD format
+        payment_date = data.get('payment_date')
+        if payment_date:
+            parsed_date = parse_date_input(payment_date)
+            if not parsed_date:
+                conn.close()
+                return jsonify({'error': 'Invalid payment date format. Use DD/MM/YYYY.'}), 400
+            payment_date = parsed_date
+        
         cursor.execute('''
             INSERT INTO billing (
                 patient_id, treatment_id, invoice_number, amount,
@@ -4802,7 +6686,7 @@ def billing():
             balance_due,
             data.get('payment_method'),
             payment_status,
-            data.get('payment_date')
+            payment_date
         ))
         append_audit_log(cursor, 'create', 'billing', cursor.lastrowid, {
             'patient_id': data.get('patient_id'),
@@ -4828,6 +6712,690 @@ def delete_billing(billing_id):
     conn.close()
     return jsonify({'success': True})
 
+
+@app.route('/invoice/<int:billing_id>')
+def billing_invoice(billing_id):
+    lang = request.args.get('lang', 'en')
+    is_ar = lang == 'ar'
+    direction = 'rtl' if is_ar else 'ltr'
+    align = 'right' if is_ar else 'left'
+
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT b.*, p.first_name || ' ' || p.last_name AS patient_name
+        FROM billing b
+        LEFT JOIN patients p ON b.patient_id = p.id
+        WHERE b.id = ?
+    ''', (billing_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return 'Invoice not found', 404
+
+    b = dict(row)
+    labels = {
+        'en': {
+            'title': 'Invoice', 'patient': 'Patient', 'invoice_no': 'Invoice #',
+            'date': 'Date', 'subtotal': 'Subtotal', 'discount': 'Discount',
+            'total': 'Total', 'paid': 'Paid', 'balance': 'Balance Due',
+            'method': 'Payment Method', 'status': 'Status', 'clinic': 'Dr. Wasfy Barzaq Dental Clinic'
+        },
+        'ar': {
+            'title': 'فاتورة', 'patient': 'المريض', 'invoice_no': 'رقم الفاتورة',
+            'date': 'التاريخ', 'subtotal': 'الإجمالي قبل الخصم', 'discount': 'الخصم',
+            'total': 'الإجمالي', 'paid': 'المدفوع', 'balance': 'الرصيد المستحق',
+            'method': 'طريقة الدفع', 'status': 'الحالة', 'clinic': 'عيادة د. وصفي برزق للأسنان'
+        }
+    }
+    lbl = labels.get(lang, labels['en'])
+    currency = '₪'
+
+    html = f'''<!DOCTYPE html>
+<html lang="{lang}" dir="{direction}">
+<head>
+<meta charset="UTF-8">
+<title>{lbl["title"]} {b.get("invoice_number","")}</title>
+<style>
+  body {{ font-family: Arial, sans-serif; margin: 32px; color: #222; direction: {direction}; }}
+  h1 {{ margin: 0 0 4px 0; font-size: 22px; }}
+  .clinic {{ color: #555; margin-bottom: 20px; }}
+  table {{ width: 100%; border-collapse: collapse; margin-top: 16px; }}
+  th, td {{ border: 1px solid #ddd; padding: 10px 12px; text-align: {align}; }}
+  th {{ background: #f5f5f5; font-weight: 600; }}
+  .total-row td {{ font-weight: 700; background: #f9f9f9; }}
+  @media print {{ body {{ margin: 16px; }} }}
+</style>
+</head>
+<body>
+<h1>{lbl["title"]}</h1>
+<div class="clinic">{lbl["clinic"]}</div>
+<table>
+  <tr><th>{lbl["invoice_no"]}</th><td>{b.get("invoice_number","—")}</td></tr>
+  <tr><th>{lbl["patient"]}</th><td>{b.get("patient_name","—")}</td></tr>
+  <tr><th>{lbl["date"]}</th><td>{b.get("payment_date") or b.get("created_at","—")}</td></tr>
+  <tr><th>{lbl["method"]}</th><td>{b.get("payment_method") or "—"}</td></tr>
+  <tr><th>{lbl["status"]}</th><td>{b.get("payment_status","—")}</td></tr>
+  <tr><th>{lbl["subtotal"]}</th><td>{currency} {float(b.get("subtotal") or 0):.2f}</td></tr>
+  <tr><th>{lbl["discount"]}</th><td>{currency} {float(b.get("discount") or 0):.2f}</td></tr>
+  <tr class="total-row"><th>{lbl["total"]}</th><td>{currency} {float(b.get("amount") or 0):.2f}</td></tr>
+  <tr><th>{lbl["paid"]}</th><td>{currency} {float(b.get("paid_amount") or 0):.2f}</td></tr>
+  <tr class="total-row"><th>{lbl["balance"]}</th><td>{currency} {float(b.get("balance_due") or 0):.2f}</td></tr>
+</table>
+<script>window.onload = function() {{ window.print(); }}</script>
+</body>
+</html>'''
+    return html
+
+
+@app.route('/api/pairing/start', methods=['POST'])
+def start_pairing():
+    data = request.json or {}
+    device_name = str(data.get('device_name') or 'Mobile Device').strip()
+    if not device_name:
+        return jsonify({'error': 'Device name is required'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM pairing_requests WHERE consumed = 1 OR datetime(expires_at) < datetime("now")')
+
+    expires_at = (datetime.utcnow() + timedelta(minutes=PAIRING_CODE_TTL_MINUTES)).strftime('%Y-%m-%d %H:%M:%S')
+    pair_code = generate_pair_code()
+    for _ in range(5):
+        cursor.execute('SELECT pair_code FROM pairing_requests WHERE pair_code = ?', (pair_code,))
+        if not cursor.fetchone():
+            break
+        pair_code = generate_pair_code()
+
+    cursor.execute('''
+        INSERT INTO pairing_requests (pair_code, device_name, expires_at)
+        VALUES (?, ?, ?)
+    ''', (pair_code, device_name, expires_at))
+    append_audit_log(cursor, 'create', 'pairing_request', None, {'device_name': device_name, 'pair_code': pair_code})
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'success': True,
+        'pair_code': pair_code,
+        'expires_at': expires_at,
+        'ttl_minutes': PAIRING_CODE_TTL_MINUTES
+    })
+
+
+@app.route('/api/pairing/complete', methods=['POST'])
+def complete_pairing():
+    data = request.json or {}
+    pair_code = str(data.get('pair_code') or '').strip()
+    if not pair_code:
+        return jsonify({'error': 'Pair code is required'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT pair_code, device_name, expires_at, consumed
+        FROM pairing_requests
+        WHERE pair_code = ?
+    ''', (pair_code,))
+    request_row = cursor.fetchone()
+    if not request_row:
+        conn.close()
+        return jsonify({'error': 'Invalid pair code'}), 404
+
+    expires_at = datetime.strptime(request_row[2], '%Y-%m-%d %H:%M:%S')
+    if int(request_row[3]) == 1 or datetime.utcnow() > expires_at:
+        conn.close()
+        return jsonify({'error': 'Pair code expired'}), 410
+
+    device_id = str(data.get('device_id') or uuid.uuid4()).strip()
+    device_name = str(data.get('device_name') or request_row[1] or 'Mobile Device').strip()
+    device_token = secrets.token_urlsafe(32)
+
+    cursor.execute('''
+        INSERT INTO paired_devices (device_id, device_name, device_token, paired_at, last_seen_at, is_active)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
+        ON CONFLICT(device_id) DO UPDATE SET
+            device_name = excluded.device_name,
+            device_token = excluded.device_token,
+            last_seen_at = CURRENT_TIMESTAMP,
+            is_active = 1
+    ''', (device_id, device_name, device_token))
+
+    cursor.execute('UPDATE pairing_requests SET consumed = 1 WHERE pair_code = ?', (pair_code,))
+    append_audit_log(cursor, 'create', 'paired_device', None, {'device_id': device_id, 'device_name': device_name})
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'success': True,
+        'device_id': device_id,
+        'device_name': device_name,
+        'device_token': device_token
+    })
+
+
+@app.route('/api/sync/export')
+def sync_export():
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    device = get_authenticated_device(cursor)
+    if not device:
+        conn.close()
+        return jsonify({'error': 'Unauthorized device token'}), 401
+
+    snapshot_tables = {}
+    total_records = 0
+    for table_name in SYNC_TABLES:
+        cursor.execute(f'SELECT * FROM {table_name} ORDER BY id ASC')
+        rows = [dict(row) for row in cursor.fetchall()]
+        snapshot_tables[table_name] = rows
+        total_records += len(rows)
+
+    app_instance_id = read_app_setting(cursor, 'app_instance_id', '')
+    cursor.execute('''
+        INSERT INTO sync_snapshots (source, device_id, table_count, record_count)
+        VALUES (?, ?, ?, ?)
+    ''', ('export', device['device_id'], len(SYNC_TABLES), total_records))
+    cursor.execute('''
+        INSERT INTO sync_events (event_type, source_device_id, details)
+        VALUES (?, ?, ?)
+    ''', ('snapshot_export', device['device_id'], json.dumps({'record_count': total_records})))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'success': True,
+        'generated_at': utc_now_iso(),
+        'source_instance_id': app_instance_id,
+        'table_count': len(SYNC_TABLES),
+        'record_count': total_records,
+        'tables': snapshot_tables
+    })
+
+
+@app.route('/api/sync/import', methods=['POST'])
+def sync_import():
+    payload = request.json or {}
+    incoming_tables = payload.get('tables')
+    if not isinstance(incoming_tables, dict):
+        return jsonify({'error': 'Invalid payload: tables is required'}), 400
+
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    device = get_authenticated_device(cursor)
+    if not device:
+        conn.close()
+        return jsonify({'error': 'Unauthorized device token'}), 401
+
+    applied_total = 0
+    skipped_total = 0
+    by_table = {}
+
+    for table_name in SYNC_TABLES:
+        incoming_rows = incoming_tables.get(table_name, [])
+        if not isinstance(incoming_rows, list):
+            continue
+
+        applied = 0
+        skipped = 0
+        for row_data in incoming_rows:
+            if not isinstance(row_data, dict):
+                skipped += 1
+                continue
+
+            entity_id = row_data.get('id')
+            if entity_id is None:
+                skipped += 1
+                continue
+
+            cursor.execute(f'SELECT updated_at, created_at FROM {table_name} WHERE id = ?', (entity_id,))
+            existing = cursor.fetchone()
+            if existing:
+                local_updated = parse_timestamp_for_sync(existing['updated_at'] or existing['created_at'])
+                incoming_updated = parse_timestamp_for_sync(row_data.get('updated_at') or row_data.get('created_at'))
+                if incoming_updated <= local_updated:
+                    skipped += 1
+                    continue
+
+            if upsert_row(cursor, table_name, row_data):
+                applied += 1
+            else:
+                skipped += 1
+
+        by_table[table_name] = {'applied': applied, 'skipped': skipped}
+        applied_total += applied
+        skipped_total += skipped
+
+    cursor.execute('''
+        INSERT INTO sync_snapshots (source, device_id, table_count, record_count)
+        VALUES (?, ?, ?, ?)
+    ''', ('import', device['device_id'], len(by_table), applied_total))
+    cursor.execute('''
+        INSERT INTO sync_events (event_type, source_device_id, details)
+        VALUES (?, ?, ?)
+    ''', ('snapshot_import', device['device_id'], json.dumps({'applied_total': applied_total, 'skipped_total': skipped_total})))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'success': True,
+        'applied_total': applied_total,
+        'skipped_total': skipped_total,
+        'by_table': by_table
+    })
+
+
+@app.route('/api/license/activate', methods=['POST'])
+def activate_license():
+    data = request.json or {}
+    serial_number = str(data.get('serial_number') or '').strip().upper()
+    clinic_name = str(data.get('clinic_name') or '').strip()
+    device_id = str(data.get('device_id') or '').strip()
+    device_name = str(data.get('device_name') or '').strip()
+
+    if len(serial_number) < 8:
+        return jsonify({'error': 'Serial number must be at least 8 characters'}), 400
+
+    try:
+        max_devices = int(data.get('max_devices', 2))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'max_devices must be a number'}), 400
+
+    if max_devices < 1:
+        return jsonify({'error': 'max_devices must be at least 1'}), 400
+
+    plan_name = str(data.get('plan_name') or 'starter').strip() or 'starter'
+    now_dt = datetime.utcnow()
+    expires_at = (now_dt + timedelta(days=DEFAULT_LICENSE_DAYS)).strftime('%Y-%m-%d')
+    grace_until = (datetime.strptime(expires_at, '%Y-%m-%d') + timedelta(days=DEFAULT_LICENSE_GRACE_DAYS)).strftime('%Y-%m-%d')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT serial_number, status, max_devices, expires_at, grace_until FROM licenses WHERE serial_number = ?', (serial_number,))
+    existing = cursor.fetchone()
+
+    if existing:
+        existing_status = str(existing[1] or 'active')
+        if existing_status in ('revoked', 'suspended'):
+            conn.close()
+            return jsonify({'error': f'License is {existing_status}'}), 403
+
+        cursor.execute('''
+            UPDATE licenses
+            SET clinic_name = ?, plan_name = ?, status = 'active',
+                max_devices = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE serial_number = ?
+        ''', (clinic_name, plan_name, max_devices, serial_number))
+        expires_at = existing[3] or expires_at
+        grace_until = existing[4] or grace_until
+    else:
+        cursor.execute('''
+            INSERT INTO licenses (
+                serial_number, clinic_name, plan_name, status,
+                max_devices, expires_at, grace_until, activated_at, updated_at
+            )
+            VALUES (?, ?, ?, 'active', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ''', (serial_number, clinic_name, plan_name, max_devices, expires_at, grace_until))
+
+    if device_id:
+        cursor.execute('SELECT max_devices FROM licenses WHERE serial_number = ?', (serial_number,))
+        license_row = cursor.fetchone()
+        limit_count = int(license_row[0] or 1)
+
+        cursor.execute('''
+            SELECT 1 FROM license_devices
+            WHERE serial_number = ? AND device_id = ?
+        ''', (serial_number, device_id))
+        existing_binding = cursor.fetchone()
+
+        if not existing_binding:
+            cursor.execute('''
+                SELECT COUNT(*) FROM license_devices
+                WHERE serial_number = ? AND is_active = 1
+            ''', (serial_number,))
+            active_device_count = int(cursor.fetchone()[0] or 0)
+            if active_device_count >= limit_count:
+                conn.close()
+                return jsonify({'error': f'Max active devices reached ({limit_count})'}), 403
+
+        cursor.execute('''
+            INSERT INTO license_devices (serial_number, device_id, device_name, first_seen_at, last_seen_at, is_active)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
+            ON CONFLICT(serial_number, device_id) DO UPDATE SET
+                device_name = excluded.device_name,
+                last_seen_at = CURRENT_TIMESTAMP,
+                is_active = 1
+        ''', (serial_number, device_id, device_name))
+
+    write_app_setting(cursor, 'active_serial_number', serial_number)
+    append_audit_log(cursor, 'activate', 'license', None, {
+        'serial_number': serial_number,
+        'clinic_name': clinic_name,
+        'plan_name': plan_name,
+        'device_id': device_id
+    })
+    # Create a device-bound offline license token (if possible)
+    signing_key = get_or_create_license_signing_key(cursor)
+    record = fetch_license_record(cursor, serial_number)
+    offline_license_token = ''
+    offline_license_payload = {}
+    if record:
+        validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
+        offline_license_payload, offline_license_token = serialize_offline_license(record, validity, signing_key, device_id=device_id)
+
+    conn.commit()
+    conn.close()
+
+    resp = {
+        'success': True,
+        'serial_number': serial_number,
+        'plan_name': plan_name,
+        'expires_at': expires_at,
+        'grace_until': grace_until
+    }
+    if offline_license_token:
+        resp['offline_license_token'] = offline_license_token
+        resp['offline_license'] = offline_license_payload
+
+    return jsonify(resp)
+
+
+@app.route('/api/license/login', methods=['POST'])
+def license_login():
+    data = request.json or {}
+    serial_number = str(data.get('serial_number') or '').strip().upper()
+    if len(serial_number) < 8:
+        return jsonify({'error': 'Serial number must be at least 8 characters'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    record = fetch_license_record(cursor, serial_number)
+    if not record:
+        conn.close()
+        return jsonify({'error': 'Serial not found'}), 404
+
+    validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
+    if not validity['licensed']:
+        conn.close()
+        return jsonify({
+            'error': 'Serial is not active for login',
+            'status': record['status'],
+            'expires_at': record['expires_at'],
+            'grace_until': record['grace_until']
+        }), 403
+
+    downloads = get_mobile_download_options(cursor)
+    write_app_setting(cursor, 'active_serial_number', serial_number)
+    append_audit_log(cursor, 'login', 'license', None, {'serial_number': serial_number, 'portal': 'mobile-download'})
+
+    signing_key = get_or_create_license_signing_key(cursor)
+    payload = build_offline_license_payload(record, validity)
+    offline_license_token = encode_offline_license_token(payload, signing_key)
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'success': True,
+        'serial_number': serial_number,
+        'clinic_name': record['clinic_name'],
+        'plan_name': record['plan_name'],
+        'status': record['status'],
+        'expires_at': record['expires_at'],
+        'grace_until': record['grace_until'],
+        'in_grace': validity['in_grace'],
+        'offline_license_token': offline_license_token,
+        'offline_license': payload,
+        'downloads': downloads
+    })
+
+
+@app.route('/api/license/offline-verify', methods=['POST'])
+def license_offline_verify():
+    data = request.json or {}
+    token = str(data.get('offline_license_token') or '').strip()
+    device_id = str(data.get('device_id') or '').strip()
+    if not token:
+        return jsonify({'error': 'Offline license token is required'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    signing_key = get_or_create_license_signing_key(cursor)
+    payload = verify_offline_license_token(token, signing_key)
+    if not payload:
+        conn.close()
+        return jsonify({'error': 'Offline license is invalid or expired'}), 403
+
+    # If the token was issued bound to a device, and the requester supplied a device_id,
+    # ensure they match. If token has no device_id, it's considered unbound.
+    token_device = str(payload.get('device_id') or '').strip()
+    if token_device and device_id and token_device != device_id:
+        conn.close()
+        return jsonify({'error': 'License token locked to different device', 'detail': 'Device mismatch'}), 403
+
+    downloads = get_mobile_download_options(cursor)
+    conn.close()
+    return jsonify({'success': True, 'offline_license': payload, 'downloads': downloads})
+
+
+@app.route('/api/mobile/download-links', methods=['GET', 'POST'])
+def mobile_download_links():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if request.method == 'GET':
+        serial_number = str(request.args.get('serial_number') or '').strip().upper()
+        if serial_number:
+            record = fetch_license_record(cursor, serial_number)
+            if not record:
+                conn.close()
+                return jsonify({'error': 'Serial not found'}), 404
+            validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
+            if not validity['licensed']:
+                conn.close()
+                return jsonify({'error': 'Serial is not active'}), 403
+
+        links = get_mobile_download_options(cursor)
+        conn.close()
+        return jsonify({'success': True, 'downloads': links})
+
+    data = request.json or {}
+    android_url = str(data.get('android_url') or '').strip()
+    ios_url = str(data.get('ios_url') or '').strip()
+
+    if not android_url and not ios_url:
+        conn.close()
+        return jsonify({'error': 'At least one URL is required'}), 400
+
+    if android_url:
+        write_app_setting(cursor, 'mobile_android_download_url', android_url)
+    if ios_url:
+        write_app_setting(cursor, 'mobile_ios_download_url', ios_url)
+
+    append_audit_log(cursor, 'update', 'mobile_download_links', None, {
+        'android_url': android_url,
+        'ios_url': ios_url
+    })
+    conn.commit()
+    links = get_mobile_download_options(cursor)
+    conn.close()
+    return jsonify({'success': True, 'downloads': links})
+
+
+@app.route('/api/license/status')
+def license_status():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    active_serial = read_app_setting(cursor, 'active_serial_number', '')
+
+    if not active_serial:
+        cursor.execute('''
+            SELECT serial_number
+            FROM licenses
+            WHERE status = 'active'
+            ORDER BY updated_at DESC, activated_at DESC
+            LIMIT 1
+        ''')
+        row = cursor.fetchone()
+        if row:
+            active_serial = row[0]
+
+    if not active_serial:
+        conn.close()
+        return jsonify({'licensed': False, 'message': 'No active license'})
+
+    record = fetch_license_record(cursor, active_serial)
+    if not record:
+        conn.close()
+        return jsonify({'licensed': False, 'message': 'Active serial not found'})
+
+    cursor.execute('''
+        SELECT COUNT(*)
+        FROM license_devices
+        WHERE serial_number = ? AND is_active = 1
+    ''', (record['serial_number'],))
+    active_devices = int(cursor.fetchone()[0] or 0)
+    conn.close()
+
+    validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
+
+    return jsonify({
+        'licensed': validity['licensed'],
+        'serial_number': record['serial_number'],
+        'clinic_name': record['clinic_name'],
+        'plan_name': record['plan_name'],
+        'status': record['status'],
+        'max_devices': record['max_devices'],
+        'active_devices': active_devices,
+        'expires_at': record['expires_at'],
+        'grace_until': record['grace_until'],
+        'in_grace': validity['in_grace']
+    })
+
+
+@app.route('/api/system/readiness')
+def system_readiness():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM paired_devices WHERE is_active = 1')
+    paired_devices = int(cursor.fetchone()[0] or 0)
+    cursor.execute("SELECT COUNT(*) FROM licenses WHERE status = 'active'")
+    active_licenses = int(cursor.fetchone()[0] or 0)
+    cursor.execute('SELECT COUNT(*) FROM sync_snapshots')
+    snapshot_count = int(cursor.fetchone()[0] or 0)
+    conn.close()
+
+    return jsonify({
+        'ready': True,
+        'paired_devices': paired_devices,
+        'active_licenses': active_licenses,
+        'sync_snapshots': snapshot_count
+    })
+
+@app.route('/api/patients/<int:patient_id>', methods=['PUT'])
+def update_patient(patient_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    data = request.json or {}
+    fields = []
+    values = []
+    allowed = ['first_name', 'last_name', 'phone', 'date_of_birth', 'birth_date', 'gender', 'address', 'notes', 'medical_history', 'email']
+    for field in allowed:
+        if field in data:
+            col = 'date_of_birth' if field == 'birth_date' else field
+            val = data[field]
+            if col in ('date_of_birth',) and val:
+                val = parse_date_input(val) or val
+            fields.append(f'{col} = ?')
+            values.append(val)
+    if not fields:
+        conn.close()
+        return jsonify({'error': 'No fields to update'}), 400
+    values.append(patient_id)
+    cursor.execute(f'UPDATE patients SET {", ".join(fields)} WHERE id = ?', values)
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/treatment-catalog', methods=['GET', 'POST'])
+def treatment_catalog_collection():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        include_inactive = str(request.args.get('include_inactive', '0')).strip() in ('1', 'true')
+        if include_inactive:
+            cursor.execute('SELECT * FROM treatment_catalog ORDER BY name_ar')
+        else:
+            cursor.execute('SELECT * FROM treatment_catalog WHERE is_active = 1 ORDER BY name_ar')
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    data = request.json or {}
+    name_ar = str(data.get('name_ar') or '').strip()
+    if not name_ar:
+        conn.close()
+        return jsonify({'error': 'name_ar is required'}), 400
+    cursor.execute('INSERT INTO treatment_catalog (name_ar, name_en, default_price) VALUES (?, ?, ?)',
+                   (name_ar, str(data.get('name_en') or ''), float(data.get('default_price') or 0)))
+    new_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'id': new_id})
+
+
+@app.route('/api/treatment-catalog/<int:catalog_id>', methods=['PUT', 'DELETE'])
+def treatment_catalog_item(catalog_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    if request.method == 'DELETE':
+        cursor.execute('UPDATE treatment_catalog SET is_active = 0 WHERE id = ?', (catalog_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    data = request.json or {}
+    fields, values = [], []
+    for col in ('name_ar', 'name_en', 'default_price', 'is_active'):
+        if col in data:
+            fields.append(f'{col} = ?')
+            values.append(data[col])
+    if fields:
+        values.append(catalog_id)
+        conn.execute(f'UPDATE treatment_catalog SET {", ".join(fields)} WHERE id = ?', values)
+        conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/patients/<int:patient_id>/credit', methods=['GET'])
+def patient_credit(patient_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM patient_credit_transactions WHERE patient_id = ?', (patient_id,))
+    balance = float(cursor.fetchone()[0] or 0)
+    cursor.execute('SELECT * FROM patient_credit_transactions WHERE patient_id = ? ORDER BY id DESC', (patient_id,))
+    rows = [list(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify({'balance': balance, 'transactions': rows})
+
+
+@app.route('/api/patients/<int:patient_id>/credit-adjustment', methods=['POST'])
+def patient_credit_adjustment(patient_id):
+    data = request.json or {}
+    amount = float(data.get('amount', 0))
+    note = str(data.get('note') or 'Manual adjustment')
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO patient_credit_transactions (patient_id, amount, type, note) VALUES (?, ?, ?, ?)',
+                 (patient_id, abs(amount), 'credit' if amount >= 0 else 'debit', note))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
 def open_browser(port=5000):
     """Open browser after a short delay"""
     import time
@@ -4845,21 +7413,17 @@ if __name__ == '__main__':
     print("\n" + "="*60)
     print("🦷 DENTAL CLINIC MANAGEMENT SYSTEM")
     print("="*60)
-    
-    # Initialize database
-    print("\n📊 Initializing database...")
+
+    print('\n📊 Initializing database...')
     init_database()
-    
-    # Start browser in a separate thread
+
     threading.Thread(target=open_browser, kwargs={'port': port}, daemon=True).start()
-    
+
     print("\n✅ System ready!")
-    print(f"🌐 Opening browser at http://127.0.0.1:{port}")
+    print(f'🌐 Opening browser at http://127.0.0.1:{port}')
     if host != '127.0.0.1':
-        print(f"📶 LAN mode enabled on {host}:{port}")
+        print(f'📶 LAN mode enabled on {host}:{port}')
     print("\n📝 Press CTRL+C to stop the server\n")
     print("="*60 + "\n")
-    
-    # Run Flask app
-    app.run(host=host, port=port, debug=False)
 
+    app.run(host=host, port=port, debug=False)
