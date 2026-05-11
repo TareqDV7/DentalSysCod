@@ -3894,10 +3894,10 @@ HTML_TEMPLATE = '''
     </div>
 
     <!-- Edit Followup Modal -->
-    <div id="edit-followup-modal" class="modal" onclick="if(event.target===this)closeModal('edit-followup-modal')">
+    <div id="edit-followup-modal" class="modal" onclick="if(event.target===this)closeEditFollowup()">
         <div class="modal-content">
             <div class="modal-header">
-                <span class="close-modal" onclick="closeModal('edit-followup-modal')">&times;</span>
+                <span class="close-modal" onclick="closeEditFollowup()">&times;</span>
                 <h2 data-i18n="edit_entry">Edit Entry</h2>
             </div>
             <form id="edit-followup-form">
@@ -3940,7 +3940,7 @@ HTML_TEMPLATE = '''
                     <textarea id="ef-notes"></textarea>
                 </div>
                 <button type="submit" class="btn btn-primary" data-i18n="save">Save</button>
-                <button type="button" class="btn btn-warning" onclick="closeModal('edit-followup-modal')" data-i18n="cancel">Cancel</button>
+                <button type="button" class="btn btn-warning" onclick="closeEditFollowup()" data-i18n="cancel">Cancel</button>
             </form>
         </div>
     </div>
@@ -6693,7 +6693,14 @@ HTML_TEMPLATE = '''
                         <div class="form-panel-body">
                         <form id="patient-followup-form">
                             <div class="form-row">
-                                <div class="form-group"><label>${t('date','Date')}</label><div class="date-input-wrap"><input type="text" name="followup_date" placeholder="DD/MM/YYYY" data-date-field="1" title="Enter date in DD/MM/YYYY format" required><button type="button" class="date-picker-btn" title="Pick date" aria-label="Pick date">📅</button></div></div>
+                                <div class="form-group"><label>${t('date','Date')}</label>
+                                    <input type="hidden" name="followup_date" id="followup-date">
+                                    <div style="display:flex;gap:6px;">
+                                        <select id="followup-date-day" style="flex:1;" onchange="syncDobHidden('followup-date-day','followup-date-month','followup-date-year','followup-date')"><option value="">Day</option></select>
+                                        <select id="followup-date-month" style="flex:2;" onchange="syncDobHidden('followup-date-day','followup-date-month','followup-date-year','followup-date')"><option value="">Month</option></select>
+                                        <select id="followup-date-year" style="flex:1.5;" onchange="syncDobHidden('followup-date-day','followup-date-month','followup-date-year','followup-date')"><option value="">Year</option></select>
+                                    </div>
+                                </div>
                                 <div class="form-group">
                                     <label>${t('select_procedure','Select Procedure')}</label>
                                     <select name="procedure_id" id="followup-procedure-id">
@@ -6774,6 +6781,16 @@ HTML_TEMPLATE = '''
             const profileModal = document.getElementById('patient-profile-modal');
             attachDatePickerButtons(profileModal);
             wireCalcInputs(profileModal);
+            // Add-entry date picker: day / month / year dropdowns, defaulting to today
+            initDobDropdowns('followup-date-day', 'followup-date-month', 'followup-date-year');
+            (function () {
+                const now = new Date();
+                const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+                setVal('followup-date-day', String(now.getDate()).padStart(2, '0'));
+                setVal('followup-date-month', String(now.getMonth() + 1).padStart(2, '0'));
+                setVal('followup-date-year', String(now.getFullYear()));
+                syncDobHidden('followup-date-day', 'followup-date-month', 'followup-date-year', 'followup-date');
+            })();
             const followupProcedureSelect = document.getElementById('followup-procedure-id');
             if (followupProcedureSelect) {
                 followupProcedureSelect.addEventListener('change', updateFollowupProcedureUi);
@@ -6782,6 +6799,10 @@ HTML_TEMPLATE = '''
             document.getElementById('patient-followup-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const data = Object.fromEntries(new FormData(e.target));
+                if (!data.followup_date) {
+                    alert(t('date_required', 'Please pick a date (day, month, and year).'));
+                    return;
+                }
                 if (!data.procedure_id && !String(data.treatment_procedure || '').trim()) {
                     alert(t('procedure_required', 'Please select a procedure or enter a custom procedure name.'));
                     return;
@@ -6842,7 +6863,7 @@ HTML_TEMPLATE = '''
                     <td>₪${parseFloat(item.price || 0).toFixed(2)}</td>
                     <td>${parseFloat(item.discount || 0) > 0 ? '₪' + parseFloat(item.discount || 0).toFixed(2) : '—'}</td>
                     <td>₪${parseFloat(item.lab_expense || 0).toFixed(2)}</td>
-                    <td>₪${parseFloat(item.clinic_profit || 0).toFixed(2)}</td>
+                    <td>₪${(parseFloat(item.price || 0) - parseFloat(item.discount || 0) - parseFloat(item.lab_expense || 0)).toFixed(2)}</td>
                     <td>₪${parseFloat(item.payment || 0).toFixed(2)}</td>
                     <td>₪${parseFloat(item.remaining_amount || 0).toFixed(2)}</td>
                     <td>${item.notes || ''}</td>
@@ -6865,7 +6886,7 @@ HTML_TEMPLATE = '''
         }
 
         let currentEditFollowup = null;
-        async function editFollowup(item) {
+        function editFollowup(item) {
             currentEditFollowup = item;
             document.getElementById('ef-patient-id').value = item.patient_id || '';
             document.getElementById('ef-followup-id').value = item.id || '';
@@ -6877,6 +6898,8 @@ HTML_TEMPLATE = '''
             document.getElementById('ef-lab-expense').value = parseFloat(item.lab_expense || 0).toFixed(2);
             document.getElementById('ef-payment').value = parseFloat(item.payment || 0).toFixed(2);
             document.getElementById('ef-notes').value = item.notes || '';
+            // Close the patient profile window first, then open the edit window on its own.
+            closeModal('patient-profile-modal');
             const editModal = document.getElementById('edit-followup-modal');
             attachDatePickerButtons(editModal);
             wireCalcInputs(editModal);
@@ -6888,6 +6911,13 @@ HTML_TEMPLATE = '''
             const item = list.find(f => Number(f.id) === Number(followupId));
             if (!item) { alert(t('no_entry_found', 'Entry not found')); return; }
             editFollowup(item);
+        }
+
+        // Close the edit-entry window and return to the patient profile.
+        function closeEditFollowup() {
+            closeModal('edit-followup-modal');
+            const pid = parseInt(document.getElementById('ef-patient-id')?.value || '', 10);
+            if (pid) { viewPatientProfile(pid); }
         }
 
         function showEditPatientModal(patientId, patient) {
@@ -8257,7 +8287,9 @@ def patient_followups(patient_id):
     discount = as_float(data.get('discount'))
     payment = as_float(data.get('payment'))
     lab_expense = as_float(data.get('lab_expense'))
-    clinic_profit = price - lab_expense
+    # Clinic profit is the net the clinic actually earns: price minus the discount
+    # given to the patient, minus the lab cost. (Payment only moves the balance.)
+    clinic_profit = price - discount - lab_expense
     remaining_amount = max(previous_balance + price - discount - payment, 0)
 
     procedure_id = data.get('procedure_id')
@@ -8288,7 +8320,7 @@ def patient_followups(patient_id):
 
     if not requires_lab:
         lab_expense = 0
-        clinic_profit = price
+        clinic_profit = price - discount
 
     # Parse followup date to ensure YYYY-MM-DD format
     followup_date = data.get('followup_date')
@@ -8403,7 +8435,8 @@ def followup_detail(patient_id, followup_id):
     discount = as_float(data.get('discount'))
     payment = as_float(data.get('payment'))
     lab_expense = as_float(data.get('lab_expense'))
-    clinic_profit = as_float(data.get('clinic_profit', price - lab_expense))
+    # Recompute clinic profit server-side: price − discount − lab cost.
+    clinic_profit = price - discount - lab_expense
 
     cursor.execute('''
         SELECT COALESCE(SUM(price), 0), COALESCE(SUM(COALESCE(discount,0)), 0), COALESCE(SUM(payment), 0)
@@ -8754,7 +8787,7 @@ def reports_summary():
     lab_expenses = cursor.fetchone()[0]
 
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE 1=1{clause}', params)
+    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE 1=1{clause}', params)
     clinic_gross_profit = cursor.fetchone()[0]
 
     clause, params = build_date_clause('expense_date', start_date, end_date)
@@ -8834,7 +8867,7 @@ def reports_weekly():
     cursor.execute('SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     lab_expenses = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute('SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     clinic_gross_profit = cursor.fetchone()[0]
 
     cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))

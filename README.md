@@ -143,7 +143,7 @@ class AppBranding {
 - Add, edit, and delete patients with full profile (name, DOB, phone, email, address, medical history)
 - Date of birth picker with Day / Month / Year dropdowns
 - Duplicate detection — warns on matching name or phone number before saving, without blocking
-- Follow-up sheet per patient: treatment procedure, tooth number, price, **discount**, lab expense, payment, running balance
+- Follow-up sheet per patient: treatment procedure, tooth number, price, **discount**, lab expense, **clinic profit** (= price − discount − lab expense), payment, running balance. The *Add Entry* date uses Day / Month / Year dropdowns; editing an entry closes the patient window and opens the edit window on its own (Save / Cancel return to the patient profile)
 - Running balance correctly accounts for discounts in cumulative calculation
 - Patient credit balance tracking
 - Medical image uploads (X-rays, photos)
