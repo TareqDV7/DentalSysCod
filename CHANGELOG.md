@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-05-12
+
+- Patient statement / invoice now reflects the follow-up sheet exactly: one row per follow-up entry with date, procedure, price, **discount**, payment, and running balance; totals corrected to subtotal, discount, total to pay (= price − discount), paid, and left (the discount was previously ignored, so "Total to Pay" and "Left" were overstated). The printable EN/AR invoice carries the same breakdown.
+- Dashboard cards changed to **Today's Revenue** and **Today's Visits** — they now count today's follow-up payments and entries (the legacy `visits` table is unused; visits are recorded on the follow-up sheet, which is why the old "Total Visits" card always showed 0).
+- Reports (weekly / monthly / lab) now also show a current **Outstanding Balances** table and an *Unpaid by Patients* total — what each patient still owes — whenever a report is run.
+- Billing / payment record: **Payment Method** is now a Cash / Card / Transfer dropdown instead of a free-text field.
+- Reviewed the financial equations: clinic profit and the per-row balance subtract the discount; receivables and the invoice totals use `price − discount − payments`; the report `profit` stays `revenue (payments collected) − expenses (paid + postponed)`. Note: a follow-up's lab expense is both subtracted in its clinic profit *and* auto-recorded as a postponed expense, so those two figures shouldn't be summed.
+
 ## 2026-05-11
 
 - Cloud tier added on top of the local server + mobile app: `sync_tombstones` + incremental `/api/sync/export?since=` (deletions now propagate); `CLINIC_CLOUD_MODE` runs `dental_clinic.py` multi-tenant as the cloud node (`app.dentacare.tech`, Docker + Caddy); `cloud_sync_worker()` mirrors a clinic's local server to/from the cloud in the background, managed from **Settings → Cloud Sync** (`/api/cloud/{pair,status,sync-now,unpair}`) with a dashboard status badge. See `DEPLOY_CLOUD.md`.

@@ -3038,12 +3038,12 @@ HTML_TEMPLATE = '''
                             <div class="stat-card stat-card-green">
                                 <span class="stat-icon">🩺</span>
                                 <h3 id="total-visits">0</h3>
-                                <p data-i18n="total_visits">Total Visits</p>
+                                <p data-i18n="todays_visits">Today's Visits</p>
                             </div>
                             <div class="stat-card stat-card-amber">
                                 <span class="stat-icon">💰</span>
                                 <h3 id="total-revenue">₪ 0</h3>
-                                <p data-i18n="total_revenue">Total Revenue</p>
+                                <p data-i18n="todays_revenue">Today's Revenue</p>
                             </div>
                         </div>
                     </div>
@@ -3420,6 +3420,23 @@ HTML_TEMPLATE = '''
                     <div class="stat-card"><h3 id="report-lab-expenses">₪ 0</h3><p data-i18n="lab_expenses">Lab Expenses</p></div>
                     <div class="stat-card"><h3 id="report-clinic-gross-profit">₪ 0</h3><p data-i18n="clinic_gross_profit">Clinic Gross Profit</p></div>
                     <div class="stat-card"><h3 id="report-profit">₪ 0</h3><p data-i18n="profit">Profit</p></div>
+                    <div class="stat-card"><h3 id="report-receivables-total">₪ 0</h3><p data-i18n="unpaid_by_patients">Unpaid by Patients</p></div>
+                </div>
+                <h3 style="margin-top:20px;" data-i18n="outstanding_balances">Outstanding Balances (current)</h3>
+                <div class="table-container" style="margin-top:12px;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th data-i18n="patient_name">Patient Name</th>
+                                <th data-i18n="total_to_pay">Total to Pay</th>
+                                <th data-i18n="paid">Paid</th>
+                                <th data-i18n="left">Left</th>
+                                <th data-i18n="last_date">Last Date</th>
+                                <th data-i18n="overdue_days">Overdue Days</th>
+                            </tr>
+                        </thead>
+                        <tbody id="report-receivables-body"><tr><td colspan="6" data-i18n="no_data">No data</td></tr></tbody>
+                    </table>
                 </div>
             </div>
 
@@ -3574,7 +3591,11 @@ HTML_TEMPLATE = '''
                         </div>
                         <div class="form-group">
                             <label data-i18n="payment_method">Payment Method</label>
-                            <input type="text" name="payment_method" placeholder="Cash / Card / Transfer">
+                            <select name="payment_method">
+                                <option value="Cash" data-i18n="cash">Cash</option>
+                                <option value="Card" data-i18n="card">Card</option>
+                                <option value="Transfer" data-i18n="transfer">Transfer</option>
+                            </select>
                         </div>
                     </div>
                     <button class="btn btn-primary" type="submit" data-i18n="record_payment">Record Payment</button>
@@ -3633,6 +3654,7 @@ HTML_TEMPLATE = '''
                 </div>
                 <div class="stats-grid" style="margin-top:10px; margin-bottom:10px;">
                     <div class="stat-card"><h3 id="invoice-total-to-pay">₪ 0</h3><p data-i18n="total_to_pay">Total to Pay</p></div>
+                    <div class="stat-card"><h3 id="invoice-total-discount">₪ 0</h3><p data-i18n="discount">Discount</p></div>
                     <div class="stat-card"><h3 id="invoice-total-paid">₪ 0</h3><p data-i18n="paid">Paid</p></div>
                     <div class="stat-card"><h3 id="invoice-total-left">₪ 0</h3><p data-i18n="left">Left</p></div>
                 </div>
@@ -3643,11 +3665,12 @@ HTML_TEMPLATE = '''
                                 <th data-i18n="date">Date</th>
                                 <th data-i18n="treatment_procedure">Treatment Procedure</th>
                                 <th data-i18n="price">Price</th>
+                                <th data-i18n="discount">Discount</th>
                                 <th data-i18n="payment">Payment</th>
                                 <th data-i18n="balance">Balance</th>
                             </tr>
                         </thead>
-                        <tbody id="patient-invoice-body"><tr><td colspan="5" data-i18n="no_data">No data</td></tr></tbody>
+                        <tbody id="patient-invoice-body"><tr><td colspan="6" data-i18n="no_data">No data</td></tr></tbody>
                     </table>
                 </div>
                     </div>
@@ -4139,6 +4162,13 @@ HTML_TEMPLATE = '''
                 discount: 'Discount',
                 paid_amount: 'Paid Amount',
                 payment_method: 'Payment Method',
+                cash: 'Cash',
+                card: 'Card',
+                transfer: 'Transfer',
+                todays_revenue: "Today's Revenue",
+                todays_visits: "Today's Visits",
+                unpaid_by_patients: 'Unpaid by Patients',
+                outstanding_balances: 'Outstanding Balances (current)',
                 create_invoice: 'Create Invoice',
                 invoice_no: 'Invoice #',
                 balance_due: 'Balance Due',
@@ -4475,6 +4505,13 @@ HTML_TEMPLATE = '''
                 discount: 'الخصم',
                 paid_amount: 'المبلغ المدفوع',
                 payment_method: 'طريقة الدفع',
+                cash: 'نقداً',
+                card: 'بطاقة',
+                transfer: 'تحويل',
+                todays_revenue: 'إيرادات اليوم',
+                todays_visits: 'زيارات اليوم',
+                unpaid_by_patients: 'مستحق على المرضى',
+                outstanding_balances: 'الأرصدة المستحقة (حالياً)',
                 create_invoice: 'إنشاء فاتورة',
                 invoice_no: 'رقم الفاتورة',
                 balance_due: 'الرصيد المستحق',
@@ -5951,6 +5988,7 @@ HTML_TEMPLATE = '''
                 ? `${t('range', 'Range')}: ${formatDateDisplay(startDate)} - ${formatDateDisplay(endDate)}`
                 : `${t('range', 'Range')}: ${t('full_period', 'full period')}`;
             document.getElementById('weekly-report-range').textContent = rangeText;
+            await loadReportReceivables();
         }
 
         async function loadWeeklyReportFromPicker() {
@@ -5981,6 +6019,7 @@ HTML_TEMPLATE = '''
             document.getElementById('weekly-report-range').textContent = t('weekly_range_text', 'Weekly range: {start} to {end}')
                 .replace('{start}', weekly.week_start_display || weekly.week_start)
                 .replace('{end}', weekly.week_end_display || weekly.week_end);
+            await loadReportReceivables();
         }
 
         async function loadMonthlyReport() {
@@ -6084,6 +6123,36 @@ HTML_TEMPLATE = '''
             `).join('');
         }
 
+        // The Reports tab's "Outstanding Balances" block — what each patient still owes.
+        // This is a current snapshot (not scoped to the report's date range), shown
+        // whenever a weekly/monthly/lab report is run.
+        async function loadReportReceivables() {
+            const totalEl = document.getElementById('report-receivables-total');
+            const tbody = document.getElementById('report-receivables-body');
+            if (!totalEl && !tbody) return;
+            let payload;
+            try { payload = await fetch('/api/reports/receivables').then(r => r.json()); }
+            catch (_) { return; }
+            const total = parseCurrency(payload?.total_receivables || 0);
+            const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+            if (totalEl) totalEl.textContent = `₪ ${total.toFixed(2)}`;
+            if (!tbody) return;
+            if (!rows.length) {
+                tbody.innerHTML = `<tr><td colspan="6">${t('no_receivables', 'No outstanding balances — everyone is paid up.')}</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = rows.map(item => `
+                <tr>
+                    <td>${item.patient_name || ''}</td>
+                    <td>₪ ${parseCurrency(item.total_to_pay).toFixed(2)}</td>
+                    <td>₪ ${parseCurrency(item.total_paid).toFixed(2)}</td>
+                    <td>₪ ${parseCurrency(item.outstanding).toFixed(2)}</td>
+                    <td>${formatDateDisplay(item.last_followup_date) || ''}</td>
+                    <td>${parseInt(item.overdue_days || 0, 10)}</td>
+                </tr>
+            `).join('');
+        }
+
         async function loadBilling() {
             await loadPatientsSelect('billing-patient-select');
             await loadPatientsSelect('invoice-patient-select');
@@ -6137,7 +6206,7 @@ HTML_TEMPLATE = '''
             if (!tbody) return;
             if (!patientId) {
                 currentPatientInvoicePayload = null;
-                tbody.innerHTML = `<tr><td colspan="5">${t('select_patient', 'Select Patient')}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6">${t('select_patient', 'Select Patient')}</td></tr>`;
                 return;
             }
 
@@ -6150,19 +6219,22 @@ HTML_TEMPLATE = '''
             const totals = payload.totals || {};
 
             document.getElementById('invoice-total-to-pay').textContent = `₪ ${parseCurrency(totals.total_to_pay).toFixed(2)}`;
+            const discEl = document.getElementById('invoice-total-discount');
+            if (discEl) discEl.textContent = `₪ ${parseCurrency(totals.total_discount).toFixed(2)}`;
             document.getElementById('invoice-total-paid').textContent = `₪ ${parseCurrency(totals.total_paid).toFixed(2)}`;
             document.getElementById('invoice-total-left').textContent = `₪ ${parseCurrency(totals.total_left).toFixed(2)}`;
 
             if (!items.length) {
-                tbody.innerHTML = `<tr><td colspan="5">${t('no_data', 'No data')}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6">${t('no_data', 'No data')}</td></tr>`;
                 return;
             }
 
             tbody.innerHTML = items.map(item => `
                 <tr>
-                    <td>${item.followup_date || ''}</td>
-                    <td>${item.treatment_procedure || ''}</td>
+                    <td>${formatDateDisplay(item.followup_date) || ''}</td>
+                    <td>${item.treatment_procedure || ''}${item.tooth_no ? ` <small style="opacity:0.7;">#${item.tooth_no}</small>` : ''}</td>
                     <td>₪ ${parseCurrency(item.price).toFixed(2)}</td>
+                    <td>${parseCurrency(item.discount) > 0 ? '₪ ' + parseCurrency(item.discount).toFixed(2) : '—'}</td>
                     <td>₪ ${parseCurrency(item.payment).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.remaining_amount).toFixed(2)}</td>
                 </tr>
@@ -6188,6 +6260,8 @@ HTML_TEMPLATE = '''
         function invoiceDocumentTemplate({ title, subtitle, rows, totals, lang = 'en' }) {
             const printLang = lang === 'ar' ? 'ar' : 'en';
             const printDir = printLang === 'ar' ? 'rtl' : 'ltr';
+            const totalPrice = parseCurrency(totals?.total_price);
+            const totalDiscount = parseCurrency(totals?.total_discount);
             const totalToPay = parseCurrency(totals?.total_to_pay);
             const totalPaid = parseCurrency(totals?.total_paid);
             const totalLeft = parseCurrency(totals?.total_left);
@@ -6224,7 +6298,8 @@ HTML_TEMPLATE = '''
             <tr>
                 <th>${tForLang(printLang, 'date', 'Date')}</th>
                 <th>${tForLang(printLang, 'description', 'Description')}</th>
-                <th>${tForLang(printLang, 'amount', 'Amount')}</th>
+                <th>${tForLang(printLang, 'price', 'Price')}</th>
+                <th>${tForLang(printLang, 'discount', 'Discount')}</th>
                 <th>${tForLang(printLang, 'paid', 'Paid')}</th>
                 <th>${tForLang(printLang, 'balance', 'Balance')}</th>
             </tr>
@@ -6234,6 +6309,8 @@ HTML_TEMPLATE = '''
         </tbody>
     </table>
     <div class="totals">
+        <div class="total-card">${tForLang(printLang, 'subtotal', 'Subtotal')}: ₪ ${totalPrice.toFixed(2)}</div>
+        <div class="total-card">${tForLang(printLang, 'discount', 'Discount')}: ₪ ${totalDiscount.toFixed(2)}</div>
         <div class="total-card">${tForLang(printLang, 'total_to_pay', 'Total to Pay')}: ₪ ${totalToPay.toFixed(2)}</div>
         <div class="total-card">${tForLang(printLang, 'paid', 'Paid')}: ₪ ${totalPaid.toFixed(2)}</div>
         <div class="total-card">${tForLang(printLang, 'left', 'Left')}: ₪ ${totalLeft.toFixed(2)}</div>
@@ -6260,14 +6337,15 @@ HTML_TEMPLATE = '''
             const rows = payload.items.length
                 ? payload.items.map(item => `
                     <tr>
-                        <td>${escapeHtml(item.followup_date || '')}</td>
-                        <td>${escapeHtml(item.treatment_procedure || '')}</td>
+                        <td>${escapeHtml(formatDateDisplay(item.followup_date) || '')}</td>
+                        <td>${escapeHtml(item.treatment_procedure || '')}${item.tooth_no ? ' #' + escapeHtml(String(item.tooth_no)) : ''}</td>
                         <td>₪ ${parseCurrency(item.price).toFixed(2)}</td>
+                        <td>${parseCurrency(item.discount) > 0 ? '₪ ' + parseCurrency(item.discount).toFixed(2) : '—'}</td>
                         <td>₪ ${parseCurrency(item.payment).toFixed(2)}</td>
                         <td>₪ ${parseCurrency(item.remaining_amount).toFixed(2)}</td>
                     </tr>
                 `).join('')
-                : `<tr><td colspan="5">${escapeHtml(tForLang(printLang, 'no_data', 'No data'))}</td></tr>`;
+                : `<tr><td colspan="6">${escapeHtml(tForLang(printLang, 'no_data', 'No data'))}</td></tr>`;
 
             const patientName = escapeHtml(payload.patient?.name || '');
             const phone = escapeHtml(payload.patient?.phone || '');
@@ -8002,12 +8080,17 @@ def get_stats():
     cursor.execute('SELECT COUNT(*) FROM appointments WHERE DATE(appointment_date) = ?', (today,))
     today_appointments = cursor.fetchone()[0]
 
-    # Total visits
-    cursor.execute('SELECT COUNT(*) FROM visits')
+    # Today's visits = follow-up sheet entries dated today (the `visits` table is unused;
+    # the follow-up sheet is where visits are actually recorded).
+    cursor.execute(
+        'SELECT COUNT(*) FROM patient_followups WHERE date(followup_date) = ? AND COALESCE(is_deleted, 0) = 0',
+        (today,))
     total_visits = cursor.fetchone()[0]
-    
-    # Dashboard revenue source: patient follow-up payments (SUM(payment)).
-    cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups')
+
+    # Today's revenue = follow-up payments collected today.
+    cursor.execute(
+        'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE date(followup_date) = ? AND COALESCE(is_deleted, 0) = 0',
+        (today,))
     total_revenue = cursor.fetchone()[0]
     
     conn.close()
@@ -9004,26 +9087,40 @@ def patient_invoice_summary(patient_id):
     where_clause = ' AND '.join(conditions)
 
     cursor.execute(f'''
-        SELECT id, followup_date, treatment_procedure, price, payment, remaining_amount, notes
+        SELECT id, followup_date, treatment_procedure, tooth_no,
+               price, discount, lab_expense, clinic_profit, payment, remaining_amount, notes
         FROM patient_followups
         WHERE {where_clause}
         ORDER BY followup_date ASC, id ASC
     ''', params)
-    items = [dict(row) for row in cursor.fetchall()]
+    items = []
+    for row in cursor.fetchall():
+        it = dict(row)
+        it['price'] = float(it.get('price') or 0)
+        it['discount'] = float(it.get('discount') or 0)
+        it['lab_expense'] = float(it.get('lab_expense') or 0)
+        it['payment'] = float(it.get('payment') or 0)
+        it['remaining_amount'] = float(it.get('remaining_amount') or 0)
+        # Net amount the patient owes for this line (price minus the discount given).
+        it['net_due'] = round(it['price'] - it['discount'], 2)
+        items.append(it)
 
     cursor.execute(f'''
         SELECT
-            COALESCE(SUM(price), 0) AS total_to_pay,
-            COALESCE(SUM(payment), 0) AS total_paid,
-            COALESCE(SUM(remaining_amount), 0) AS running_balance_sum
+            COALESCE(SUM(price), 0) AS total_price,
+            COALESCE(SUM(COALESCE(discount, 0)), 0) AS total_discount,
+            COALESCE(SUM(payment), 0) AS total_paid
         FROM patient_followups
         WHERE {where_clause}
     ''', params)
     totals = cursor.fetchone()
 
-    total_to_pay = float((totals['total_to_pay'] if totals else 0) or 0)
+    total_price = float((totals['total_price'] if totals else 0) or 0)
+    total_discount = float((totals['total_discount'] if totals else 0) or 0)
     total_paid = float((totals['total_paid'] if totals else 0) or 0)
-    total_left = max(total_to_pay - total_paid, 0)
+    # What the patient actually owes = price − discount; what's left = that − payments.
+    total_to_pay = round(max(total_price - total_discount, 0.0), 2)
+    total_left = round(max(total_to_pay - total_paid, 0.0), 2)
 
     conn.close()
     return jsonify({
@@ -9034,8 +9131,10 @@ def patient_invoice_summary(patient_id):
         },
         'items': items,
         'totals': {
+            'total_price': round(total_price, 2),
+            'total_discount': round(total_discount, 2),
             'total_to_pay': total_to_pay,
-            'total_paid': total_paid,
+            'total_paid': round(total_paid, 2),
             'total_left': total_left
         },
         'range': {

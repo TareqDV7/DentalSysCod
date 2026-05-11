@@ -156,10 +156,12 @@ class AppBranding {
 
 ### Financial
 - **Expenses**: categorised clinic expenses with paid / postponed status; negative amounts rejected
-- **Summary report**: total revenue, expenses (paid + postponed), profit, clinic gross profit, lab expenses
-- **Weekly / range report**: revenue, expenses, profit, patient count for any date range; no duplicate response keys
+- **Summary / weekly / range reports**: revenue, expenses (paid + postponed), profit, clinic gross profit, lab expenses, patient count for any date range; no duplicate response keys. Every report also shows a **current "Outstanding Balances" table** — what each patient still owes (gross billed, paid, left, last visit, overdue days) — plus an *Unpaid by Patients* total
 - **Receivables report**: outstanding balances per patient, correctly subtracting discounts from what is owed
-- Billing records with discount, balance due, and payment status
+- **Patient statement / invoice**: built straight from the patient's follow-up sheet — one row per entry (date, procedure, price, **discount**, payment, running balance), with totals = subtotal, discount, total to pay (price − discount), paid, and what's left. The printable invoice (EN/AR) carries the same breakdown
+- Billing / payment records with discount and balance due; payment method is a **Cash / Card / Transfer dropdown**
+
+> The dashboard's "Today's Revenue" and "Today's Visits" cards count *today's* follow-up payments and entries (visits are recorded on the follow-up sheet, not the legacy `visits` table). `Clinic profit = price − discount − lab expense`; lab expense is also auto-recorded as a postponed expense, so don't add the two together.
 
 ### Header & UI
 - Modern glass-morphism header with gradient background, sheen overlay, and accent bottom line
