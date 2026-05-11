@@ -27,3 +27,41 @@ Troubleshooting:
 - Always keep the 'uploads' folder alongside the .exe file
 - Database file (dental_clinic.db) will be created on first run in the deployment folder
 - All data is local to this folder, making it completely portable
+
+Hybrid Operation (Local + Cloud-Ready):
+- Core operation remains fully local (works without internet).
+- If internet is available, use sync APIs to exchange snapshots with a cloud service or companion app.
+- Recommended sync workflow:
+  1) GET /api/sync/export on clinic server
+  2) Transfer snapshot to cloud/mobile channel
+  3) POST /api/sync/import on target side
+
+Pairing and Device Trust:
+- Start pairing from server with POST /api/pairing/start
+- Complete pairing from mobile/companion with POST /api/pairing/complete
+- Use returned device token in header: X-Device-Token
+
+License Activation:
+- Activate/refresh clinic serial using POST /api/license/activate
+- Check active license using GET /api/license/status
+- Serial login portal for client download page:
+  - Open: /mobile-download
+  - Validate serial via: POST /api/license/login
+
+Mobile Package Distribution:
+- Default download endpoints:
+  - /downloads/android
+  - /downloads/ios
+- Place package files in:
+  - deployment\mobile\android\clinic-mobile.apk
+  - deployment\mobile\ios\clinic-mobile.ipa
+- Optional custom external links (cloud/TestFlight/Play):
+  - POST /api/mobile/download-links with JSON:
+    {"android_url":"https://...","ios_url":"https://..."}
+
+Rollback Points for Release Management:
+- CP1: Schema migration complete
+- CP2: Pairing/sync APIs complete
+- CP3: License APIs complete
+- CP4: Deployment docs complete
+- CP5: Final validation complete

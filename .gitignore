@@ -33,3 +33,55 @@ Thumbs.db
 # Uploads
 uploads/*
 !uploads/.gitkeep
+
+# AI agent / session artefacts (not source code)
+.claude/
+antigravity/
+analysis_outputs/
+SESSION_SUMMARY.md
+_repo_android.xml
+
+# One-off scratch scripts / patches / dumps (not part of the codebase)
+apply_fixes.py
+verify_reports.py
+test_license_flow.py
+test_all.py
+patch_*.py
+temp_*.py
+fix_arabic.py
+fix_encoding.py
+scan_*.py
+verify_arabic.py
+verify_enc.py
+cleanup.ps1
+rebuild.bat
+*.diff
+*.rar
+
+# Backups
+backups/
+
+# Logs
+*.log
+
+# Flutter / Dart
+**/build/
+**/.dart_tool/
+**/.pub-cache/
+**/.pub/
+**/*.g.dart
+**/*.freezed.dart
+**/generated_plugin_registrant.dart
+**/dart_plugin_registrant.dart
+
+# Android
+**/android/.gradle/
+**/android/app/build/
+**/android/local.properties
+**/android/key.properties
+**/android/*.jks
+
+# iOS
+**/ios/build/
+**/ios/Pods/
+**/ios/.symlinks/

@@ -1,12 +1,43 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['dental_clinic.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=[
+        ('DentaCare.PNG', '.'),
+    ],
+    hiddenimports=[
+        'flask',
+        'flask_cors',
+        'waitress',
+        'waitress.server',
+        'werkzeug',
+        'werkzeug.serving',
+        'werkzeug.security',
+        'werkzeug.middleware.proxy_fix',
+        'werkzeug.routing',
+        'werkzeug.exceptions',
+        'markupsafe',
+        'jinja2',
+        'jinja2.ext',
+        'click',
+        'sqlite3',
+        'hmac',
+        'hashlib',
+        'secrets',
+        'uuid',
+        'email.mime.text',
+        'email.mime.multipart',
+        'threading',
+        'webbrowser',
+        'pathlib',
+        'json',
+        'datetime',
+        're',
+        'os',
+        'sys',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -14,6 +45,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -22,17 +54,18 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='DentalClinicApp',
+    name='DentaCare',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='DentaCare.ico',
 )

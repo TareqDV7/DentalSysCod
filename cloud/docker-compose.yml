@@ -1,0 +1,34 @@
+# DentaCare cloud node.
+# Deploy from this directory on the server:  docker compose up -d --build
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: cloud/Dockerfile
+    restart: unless-stopped
+    environment:
+      # The staff web portal is NOT served on the cloud node, but the master DB
+      # still seeds an admin account — set a strong password here regardless.
+      CLINIC_ADMIN_PASSWORD: "change-me-please"
+    volumes:
+      - dentacare-data:/data      # per-clinic SQLite files + cloud_master.db
+    expose:
+      - "5000"                    # internal only — Caddy is the public entrypoint
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data          # ACME account + issued certificates
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  dentacare-data:
+  caddy-data:
+  caddy-config:

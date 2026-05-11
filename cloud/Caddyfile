@@ -1,0 +1,17 @@
+# Caddy fronts the DentaCare cloud node: terminates TLS (auto Let's Encrypt) and
+# reverse-proxies to the app container. DNS for the hostname below must point at
+# this server (A record) before the first start, so the ACME HTTP-01 challenge works.
+{
+	# Optional but recommended — Let's Encrypt expiry notices go here.
+	email admin@dentacare.tech
+}
+
+app.dentacare.tech {
+	encode zstd gzip
+	reverse_proxy app:5000
+
+	log {
+		output stdout
+		format console
+	}
+}

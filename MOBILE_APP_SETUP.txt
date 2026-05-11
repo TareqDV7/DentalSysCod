@@ -1,0 +1,63 @@
+MOBILE APP BOOTSTRAP (ANDROID + IOS)
+====================================
+
+Current status
+--------------
+- Flutter SDK installed locally at: C:\src\flutter
+- Mobile project created at: clinic_mobile_app\
+- Base API bridge implemented for:
+  - Pairing: /api/pairing/start, /api/pairing/complete
+  - Sync: /api/sync/export, /api/sync/import
+  - Licensing: /api/license/activate, /api/license/status
+  - Readiness: /api/system/readiness
+
+Portal and downloads
+--------------------
+- Serial login portal page: /mobile-download
+- Login API: POST /api/license/login
+- Download options API: GET /api/mobile/download-links
+- Default package endpoints:
+  - /downloads/android
+  - /downloads/ios
+
+Run commands (Windows)
+----------------------
+1) cd c:\Users\MSI\Desktop\clinic\clinic_mobile_app
+2) C:\src\flutter\bin\flutter.bat pub get
+3) C:\src\flutter\bin\flutter.bat test
+4) C:\src\flutter\bin\flutter.bat analyze
+5) C:\src\flutter\bin\flutter.bat run
+
+Android requirements
+--------------------
+- Install Android Studio
+- Install Android SDK + cmdline-tools
+- Set ANDROID_HOME
+- Run: C:\src\flutter\bin\flutter.bat doctor --android-licenses
+
+iOS requirements (for build/release)
+------------------------------------
+- iOS build cannot be finalized on Windows.
+- Use a macOS machine with:
+  - Xcode
+  - CocoaPods
+  - Flutter SDK
+- Then run:
+  - flutter pub get
+  - flutter build ios
+
+Pairing + sync flow in app
+--------------------------
+1) Save clinic server URL (example: http://192.168.1.20:5000)
+2) Start Pairing (gets 6-digit code)
+3) Complete Pairing (stores secure device token)
+4) Activate License
+5) Check Readiness
+6) Export Snapshot
+
+Next engineering steps
+----------------------
+1) Add local SQLite cache and full offline sync queue in mobile app.
+2) Add automatic periodic sync + retry policy.
+3) Add Bluetooth transport adapter as fallback channel (data transfer only).
+4) Add cloud relay service for internet-available sync between clinic and remote mobile.
