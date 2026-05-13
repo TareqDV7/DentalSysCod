@@ -51,11 +51,11 @@ Back on the droplet:
 
 ```bash
 cd /opt/dentacare/cloud
-# Set a real admin password for the master DB:
-#   edit docker-compose.yml -> services.app.environment.CLINIC_ADMIN_PASSWORD
 docker compose up -d --build
 docker compose logs -f caddy        # watch for "certificate obtained" for app.dentacare.tech
 ```
+
+The cloud node does not seed a staff admin login — its only public surface is `/api/*` (token-authenticated), so there is no admin password to configure.
 
 Verify:
 
@@ -89,7 +89,8 @@ Set in `cloud/docker-compose.yml` (`services.app.environment`) or the `Dockerfil
 | `CLINIC_HOST` / `CLINIC_PORT` | `0.0.0.0` / `5000` | Internal bind; Caddy is the public entrypoint. |
 | `CLINIC_DATA_DIR` | `/data` | Where `cloud_master.db` and `clinic_<id>.db` live (the mounted volume). |
 | `CLINIC_BACKUP_INTERVAL_HOURS` | `0` | The built-in backup thread is disabled on the cloud node (it would only cover `cloud_master.db`). Per-clinic off-server snapshots to DO Spaces are a later phase. |
-| `CLINIC_ADMIN_PASSWORD` | `change-me-please` | Master-DB admin password — change it. |
+
+> The cloud node intentionally does **not** seed a staff admin user — the staff portal isn't served here, so `CLINIC_ADMIN_PASSWORD` is unused in `CLINIC_CLOUD_MODE=1`.
 
 The hostname for TLS lives in `cloud/Caddyfile` (`app.dentacare.tech`) — change it there if the domain changes, then `docker compose up -d caddy`.
 

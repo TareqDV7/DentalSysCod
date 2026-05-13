@@ -64,7 +64,19 @@ from markupsafe import escape
 
 
 app = Flask(__name__)
-CORS(app)
+# CORS is only needed where a browser on a different origin would call the
+# JSON API — that's only the local clinic server (mobile uses the HTTP API
+# without a browser, so CORS doesn't apply to it). The staff web portal is
+# same-origin (Flask serves both the HTML and the API), so CORS isn't needed
+# there either. On the cloud node there is no browser entry point at all, so
+# CORS is disabled — `/api/*` is reached only by other servers / the mobile,
+# never by a third-party page.
+#
+# On the local server: scope CORS to /api/* with no credentials (no cookies),
+# so a malicious site can't ride a session by accident. Without `supports_credentials`
+# the only thing reachable is a public token-authenticated API surface.
+if not os.environ.get('CLINIC_CLOUD_MODE', '0').strip().lower() in ('1', 'true', 'yes', 'on'):
+    CORS(app, resources={r'/api/*': {'origins': '*'}}, supports_credentials=False)
 
 # Helpful development defaults so UI changes are visible immediately when testing locally.
 # - Enable template auto-reload so Jinja templates refresh without restarting the server.
