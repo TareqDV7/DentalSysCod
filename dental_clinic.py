@@ -23,7 +23,7 @@ import uuid
 import urllib.request
 import urllib.error
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -293,8 +293,14 @@ def get_db_connection(with_row_factory=False):
     return conn
 
 
+def _naive_utc_now():
+    # datetime.utcnow() is deprecated as of Python 3.12. Keep the same naive-UTC
+    # semantics we've always had (no tzinfo) by stripping it after going aware.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def utc_now_iso():
-    return datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    return _naive_utc_now().replace(microsecond=0).isoformat() + 'Z'
 
 
 def generate_pair_code():
@@ -1292,7 +1298,13 @@ def _apply_sync_import(cursor, payload):
                         'DELETE FROM sync_tombstones WHERE table_name = ? AND row_id = ?',
                         (table_name, entity_id),
                     )
-            if upsert_row(cursor, table_name, row_data):
+            try:
+                ok = upsert_row(cursor, table_name, row_data)
+            except sqlite3.Error:
+                # A single malformed row (e.g. NOT NULL violation from an outdated
+                # client schema) must not kill the whole batch. Count it and keep going.
+                ok = False
+            if ok:
                 applied += 1
             else:
                 skipped += 1
@@ -1332,7 +1344,7 @@ def _safe_json(text):
 
 
 def evaluate_license_window(status, expires_at, grace_until):
-    today = datetime.utcnow().date()
+    today = _naive_utc_now().date()
     try:
         expires_date = datetime.strptime(str(expires_at), '%Y-%m-%d').date() if expires_at else today
     except ValueError:
@@ -9740,7 +9752,7 @@ def start_pairing():
     cursor = conn.cursor()
     cursor.execute('DELETE FROM pairing_requests WHERE consumed = 1 OR datetime(expires_at) < datetime("now")')
 
-    expires_at = (datetime.utcnow() + timedelta(minutes=PAIRING_CODE_TTL_MINUTES)).strftime('%Y-%m-%d %H:%M:%S')
+    expires_at = (_naive_utc_now() + timedelta(minutes=PAIRING_CODE_TTL_MINUTES)).strftime('%Y-%m-%d %H:%M:%S')
     pair_code = generate_pair_code()
     for _ in range(5):
         cursor.execute('SELECT pair_code FROM pairing_requests WHERE pair_code = ?', (pair_code,))
@@ -9784,7 +9796,7 @@ def complete_pairing():
         return jsonify({'error': 'Invalid pair code'}), 404
 
     expires_at = datetime.strptime(request_row[2], '%Y-%m-%d %H:%M:%S')
-    if int(request_row[3]) == 1 or datetime.utcnow() > expires_at:
+    if int(request_row[3]) == 1 or _naive_utc_now() > expires_at:
         conn.close()
         return jsonify({'error': 'Pair code expired'}), 410
 
@@ -10080,7 +10092,7 @@ def activate_license():
         return jsonify({'error': 'max_devices must be at least 1'}), 400
 
     plan_name = str(data.get('plan_name') or 'starter').strip() or 'starter'
-    now_dt = datetime.utcnow()
+    now_dt = _naive_utc_now()
     expires_at = (now_dt + timedelta(days=DEFAULT_LICENSE_DAYS)).strftime('%Y-%m-%d')
     grace_until = (datetime.strptime(expires_at, '%Y-%m-%d') + timedelta(days=DEFAULT_LICENSE_GRACE_DAYS)).strftime('%Y-%m-%d')
 

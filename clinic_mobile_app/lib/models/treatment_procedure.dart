@@ -19,17 +19,22 @@ class TreatmentProcedure {
     this.isSynced = false,
   });
 
-  factory TreatmentProcedure.fromJson(Map<String, dynamic> j) =>
-      TreatmentProcedure(
-        id: j['id'],
-        name: j['name'] ?? '',
-        defaultPrice: _d(j['default_price'] ?? j['price'] ?? 0),
-        labExpense: _d(j['lab_expense'] ?? 0),
-        requiresLab: j['requires_lab'] == true || j['requires_lab'] == 1,
-        isActive: j['is_active'] != false && j['is_active'] != 0,
-        updatedAt: j['updated_at'],
-        isSynced: true,
-      );
+  factory TreatmentProcedure.fromJson(Map<String, dynamic> j) {
+    // Accept both spellings — server uses default_lab_expense / active,
+    // older / local rows use lab_expense / is_active.
+    final lab = j['default_lab_expense'] ?? j['lab_expense'] ?? 0;
+    final activeRaw = j.containsKey('active') ? j['active'] : j['is_active'];
+    return TreatmentProcedure(
+      id: j['id'],
+      name: j['name'] ?? '',
+      defaultPrice: _d(j['default_price'] ?? j['price'] ?? 0),
+      labExpense: _d(lab),
+      requiresLab: j['requires_lab'] == true || j['requires_lab'] == 1,
+      isActive: activeRaw == null || (activeRaw != false && activeRaw != 0),
+      updatedAt: j['updated_at'],
+      isSynced: true,
+    );
+  }
 
   factory TreatmentProcedure.fromDb(Map<String, dynamic> row) =>
       TreatmentProcedure(

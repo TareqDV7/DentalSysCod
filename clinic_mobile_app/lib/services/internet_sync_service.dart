@@ -90,7 +90,8 @@ class InternetSyncService {
       final remoteTable = entry.value;
       final rows = await _db.getUnsyncedRows(localTable);
       if (rows.isEmpty) continue;
-      tables[remoteTable] = rows.map(_toServerRow).toList();
+      tables[remoteTable] =
+          rows.map((r) => _toServerRow(localTable, r)).toList();
       pushedRows[localTable] = [
         for (final r in rows)
           if (r['id'] is int) r['id'] as int,
@@ -115,7 +116,12 @@ class InternetSyncService {
   }
 
   /// Adapt a local row to the server's column names (the two schemas drifted a bit).
-  Map<String, dynamic> _toServerRow(Map<String, dynamic> row) {
+  ///
+  /// [localTable] is the local table name (e.g. "billing_records") so we can
+  /// apply table-specific shaping. The server otherwise drops unknown columns
+  /// silently, which silently loses data — every drift we know about is handled
+  /// explicitly here.
+  Map<String, dynamic> _toServerRow(String localTable, Map<String, dynamic> row) {
     final out = Map<String, dynamic>.from(row);
     out.remove('is_synced');
     out.remove('patient_name'); // server-side join column, not a real column
@@ -124,12 +130,32 @@ class InternetSyncService {
       if (out.containsKey(from)) out[to] = out.remove(from);
     }
 
-    rename('appointment_datetime', 'appointment_date');
-    rename('duration_minutes', 'duration');
-    rename('procedure_name', 'treatment_procedure');
-    if (out.containsKey('status') && out.containsKey('amount')) {
-      // expenses: local "status" maps to the server's "payment_status"
-      rename('status', 'payment_status');
+    switch (localTable) {
+      case 'appointments':
+        rename('appointment_datetime', 'appointment_date');
+        rename('duration_minutes', 'duration');
+        break;
+      case 'visits':
+        rename('procedure_name', 'treatment_procedure');
+        break;
+      case 'billing_records':
+        // server billing.amount is NOT NULL — fill it from subtotal − discount
+        // when the local row only carries subtotal/discount.
+        if (out['amount'] == null) {
+          final sub = (out['subtotal'] is num) ? (out['subtotal'] as num).toDouble() : 0.0;
+          final disc = (out['discount'] is num) ? (out['discount'] as num).toDouble() : 0.0;
+          out['amount'] = sub - disc;
+        }
+        break;
+      case 'expenses':
+        // local "status" → server "payment_status"
+        rename('status', 'payment_status');
+        break;
+      case 'treatment_procedures':
+        // local lab_expense/is_active → server default_lab_expense/active
+        rename('lab_expense', 'default_lab_expense');
+        rename('is_active', 'active');
+        break;
     }
     return out;
   }
