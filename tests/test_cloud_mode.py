@@ -50,6 +50,17 @@ def _h(token):
     return {'X-Clinic-Token': token}
 
 
+def test_cloud_master_has_no_admin_user(cloud, monkeypatch):
+    # On a cloud node the staff portal is never reachable, so init_database()
+    # must not seed an admin login row — otherwise the master ends up holding a
+    # stale credential (the docker-compose used to set "change-me-please" here).
+    import sqlite3
+    conn = sqlite3.connect(dental_clinic.MASTER_DB_PATH)
+    row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
+    conn.close()
+    assert row[0] == 0, 'cloud master DB should have no seeded admin'
+
+
 def test_register_creates_clinic_and_db(cloud):
     body = _register(cloud, 'SERIAL-AAAA-0001', 'Bright Smiles')
     assert body['already_registered'] is False

@@ -6,10 +6,9 @@ services:
       context: ..
       dockerfile: cloud/Dockerfile
     restart: unless-stopped
-    environment:
-      # The staff web portal is NOT served on the cloud node, but the master DB
-      # still seeds an admin account — set a strong password here regardless.
-      CLINIC_ADMIN_PASSWORD: "change-me-please"
+    # The staff web portal is not served on the cloud node — init_database()
+    # skips seeding an admin login row when CLINIC_CLOUD_MODE=1 — so no staff
+    # password is configured here.
     volumes:
       - dentacare-data:/data      # per-clinic SQLite files + cloud_master.db
     expose:

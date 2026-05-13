@@ -886,13 +886,17 @@ def init_database():
     # Seed a default admin account on first run (no users yet). The password can be
     # overridden with the CLINIC_ADMIN_PASSWORD env var; otherwise it defaults to
     # 'admin' and the console prints a reminder to change it from Settings.
-    cursor.execute('SELECT COUNT(*) FROM users')
-    if cursor.fetchone()[0] == 0:
-        default_pw = os.environ.get('CLINIC_ADMIN_PASSWORD') or 'admin'
-        cursor.execute(
-            'INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)',
-            ('admin', generate_password_hash(default_pw), 'Administrator')
-        )
+    # In CLOUD_MODE the staff portal isn't reachable (every non-/api/* path is
+    # redirected to "use your local server"), so seeding a login row would just
+    # be a stale credential sitting in the registry — skip it.
+    if not CLOUD_MODE:
+        cursor.execute('SELECT COUNT(*) FROM users')
+        if cursor.fetchone()[0] == 0:
+            default_pw = os.environ.get('CLINIC_ADMIN_PASSWORD') or 'admin'
+            cursor.execute(
+                'INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)',
+                ('admin', generate_password_hash(default_pw), 'Administrator')
+            )
 
     conn.commit()
     conn.close()
