@@ -94,19 +94,6 @@ class _WeeklyTabState extends State<_WeeklyTab> {
     if (mounted) setState(() { _report = r; _loading = false; });
   }
 
-  void _prev() {
-    setState(() => _weekStart = _weekStart.subtract(const Duration(days: 7)));
-    _load();
-  }
-
-  void _next() {
-    final next = _weekStart.add(const Duration(days: 7));
-    if (next.isBefore(DateTime.now().add(const Duration(days: 7)))) {
-      setState(() => _weekStart = next);
-      _load();
-    }
-  }
-
   Future<void> _pickWeek() async {
     final picked = await showDatePicker(
       context: context,

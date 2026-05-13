@@ -579,7 +579,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               const SizedBox(height: 12),
                               DropdownButtonFormField<
                                   TreatmentProcedure>(
-                                value: _selectedTreatment,
+                                initialValue: _selectedTreatment,
                                 decoration: InputDecoration(
                                   labelText: 'Treatment Type *',
                                   hintText: _treatments.isEmpty
@@ -661,7 +661,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                           fontWeight: FontWeight.w700)),
                               const SizedBox(height: 12),
                               DropdownButtonFormField<String>(
-                                value: _selectedStatus,
+                                initialValue: _selectedStatus,
                                 decoration: InputDecoration(
                                   border: OutlineInputBorder(
                                       borderRadius:
