@@ -198,6 +198,50 @@ _CLOUD_OPEN_PREFIXES = ('/static/',)
 # local server only.
 _CLOUD_BLOCKED_PREFIXES = ('/api/medical-images', '/api/cloud/')
 
+# Tiny in-memory per-IP rate limiter for the cloud's only unauthenticated POST
+# (/api/clinics/register). Default 10 attempts per hour per IP; tunable via
+# CLINIC_REGISTER_RATE_LIMIT (count) and CLINIC_REGISTER_RATE_WINDOW (seconds).
+# Resets on every process restart — good enough to deter spam without pulling
+# in Redis. Behind Caddy we read X-Forwarded-For; otherwise request.remote_addr.
+try:
+    _REGISTER_RATE_LIMIT = int(os.environ.get('CLINIC_REGISTER_RATE_LIMIT', '10'))
+except (TypeError, ValueError):
+    _REGISTER_RATE_LIMIT = 10
+try:
+    _REGISTER_RATE_WINDOW = int(os.environ.get('CLINIC_REGISTER_RATE_WINDOW', '3600'))
+except (TypeError, ValueError):
+    _REGISTER_RATE_WINDOW = 3600
+_register_attempts = {}  # ip -> list[timestamps]; sliding window
+_register_attempts_lock = threading.Lock()
+
+
+def _client_ip():
+    fwd = request.headers.get('X-Forwarded-For', '')
+    if fwd:
+        return fwd.split(',')[0].strip()
+    return request.remote_addr or 'unknown'
+
+
+def _check_register_rate_limit():
+    """Return None if allowed, else a (response, status) tuple to send back.
+    Sliding window — drops timestamps older than the window before counting."""
+    if _REGISTER_RATE_LIMIT <= 0:
+        return None
+    ip = _client_ip()
+    now = time.monotonic()
+    cutoff = now - _REGISTER_RATE_WINDOW
+    with _register_attempts_lock:
+        bucket = [t for t in _register_attempts.get(ip, []) if t > cutoff]
+        if len(bucket) >= _REGISTER_RATE_LIMIT:
+            _register_attempts[ip] = bucket
+            return jsonify({
+                'error': f'Too many registration attempts — try again later '
+                         f'(limit {_REGISTER_RATE_LIMIT} per {_REGISTER_RATE_WINDOW}s).'
+            }), 429
+        bucket.append(now)
+        _register_attempts[ip] = bucket
+    return None
+
 
 def _resolve_clinic_token():
     return (request.headers.get('X-Clinic-Token') or request.args.get('clinic_token') or '').strip()
@@ -9936,6 +9980,10 @@ def register_clinic():
     """
     if not CLOUD_MODE:
         return jsonify({'error': 'Clinic registration is only available on the cloud node'}), 404
+
+    limited = _check_register_rate_limit()
+    if limited is not None:
+        return limited
 
     data = request.json or {}
     serial_number = str(data.get('serial_number') or '').strip().upper()

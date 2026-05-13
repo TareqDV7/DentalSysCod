@@ -89,6 +89,8 @@ Set in `cloud/docker-compose.yml` (`services.app.environment`) or the `Dockerfil
 | `CLINIC_HOST` / `CLINIC_PORT` | `0.0.0.0` / `5000` | Internal bind; Caddy is the public entrypoint. |
 | `CLINIC_DATA_DIR` | `/data` | Where `cloud_master.db` and `clinic_<id>.db` live (the mounted volume). |
 | `CLINIC_BACKUP_INTERVAL_HOURS` | `0` | The built-in backup thread is disabled on the cloud node (it would only cover `cloud_master.db`). Per-clinic off-server snapshots to DO Spaces are a later phase. |
+| `CLINIC_REGISTER_RATE_LIMIT` | `10` | Max successful + failed `/api/clinics/register` attempts per source IP within the rate window. Set `0` to disable. |
+| `CLINIC_REGISTER_RATE_WINDOW` | `3600` | Rate-limit window for the above, in seconds. |
 
 > The cloud node intentionally does **not** seed a staff admin user — the staff portal isn't served here, so `CLINIC_ADMIN_PASSWORD` is unused in `CLINIC_CLOUD_MODE=1`.
 
@@ -106,7 +108,7 @@ The hostname for TLS lives in `cloud/Caddyfile` (`app.dentacare.tech`) — chang
 
 - Serial validation is currently just **uniqueness** (one clinic per serial, ≥ 8 chars). HMAC-signed-serial gating (via `serial_generator.py`'s signing key) is a follow-up.
 - No per-clinic cloud backups yet (see `CLINIC_BACKUP_INTERVAL_HOURS` above).
-- No rate limiting on the public endpoints yet; the firewall + Caddy are the only front-line protection. (`/api/clinics/register` is the main thing to watch.)
+- `/api/clinics/register` is rate-limited per source IP (default 10/hour, see env vars above) — beyond that the registry is unauthenticated and HMAC-signed-serial gating is still a follow-up. Other public endpoints are not rate-limited yet.
 - The cloud node currently shares one Flask session secret across all tenants (stored in `cloud_master.db`); the portal isn't reachable here so this is low-impact, but worth knowing.
 
 ## Teardown

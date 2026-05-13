@@ -25,10 +25,12 @@ def cloud(tmp_path, monkeypatch):
     monkeypatch.setattr(dental_clinic, 'UPLOAD_FOLDER', data_dir / 'uploads')
     (data_dir / 'uploads').mkdir(exist_ok=True)
     dental_clinic._set_request_db_path(None)
+    dental_clinic._register_attempts.clear()  # rate-limit state must not leak between tests
     dental_clinic.init_database()  # builds the master DB
     with dental_clinic.app.test_client() as c:
         yield c
     dental_clinic._set_request_db_path(None)
+    dental_clinic._register_attempts.clear()
 
 
 @pytest.fixture()
@@ -127,3 +129,32 @@ def test_medical_images_blocked_on_cloud(cloud):
 def test_register_disabled_when_not_cloud_mode(plain):
     r = plain.post('/api/clinics/register', json={'serial_number': 'SERIAL-AAAA-0006', 'clinic_name': 'X'})
     assert r.status_code == 404
+
+
+def test_register_rate_limit(cloud, monkeypatch):
+    # Tight limit so the test runs quickly. Up to N from the same IP succeed,
+    # then the next ones are 429 until the window expires.
+    monkeypatch.setattr(dental_clinic, '_REGISTER_RATE_LIMIT', 3)
+    monkeypatch.setattr(dental_clinic, '_REGISTER_RATE_WINDOW', 60)
+    dental_clinic._register_attempts.clear()
+
+    # 3 distinct serials succeed:
+    for i in range(3):
+        r = cloud.post('/api/clinics/register',
+                       json={'serial_number': f'RL-SERIAL-{i:04d}', 'clinic_name': 'X'})
+        assert r.status_code == 200, (i, r.get_data(as_text=True))
+
+    # 4th attempt from the same client is rate-limited regardless of serial:
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': 'RL-SERIAL-9999', 'clinic_name': 'X'})
+    assert r.status_code == 429
+    body = r.get_json()
+    assert 'Too many' in body['error']
+
+    # Idempotent hits on an existing serial also count toward the limit
+    # (only the response not being 429 matters here — we already past the cap).
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': 'RL-SERIAL-0001', 'clinic_name': 'X'})
+    assert r.status_code == 429
+
+    dental_clinic._register_attempts.clear()
