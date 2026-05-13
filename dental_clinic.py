@@ -17,6 +17,7 @@ import threading
 import time
 import webbrowser
 import json
+import re
 import secrets
 import uuid
 import urllib.request
@@ -744,18 +745,6 @@ def init_database():
 
     # New tables for features
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS treatment_catalog (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name_ar TEXT NOT NULL,
-            name_en TEXT DEFAULT '',
-            default_price REAL DEFAULT 0,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    cursor.execute('''
         CREATE TABLE IF NOT EXISTS patient_credit_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             patient_id INTEGER NOT NULL,
@@ -767,20 +756,6 @@ def init_database():
         )
     ''')
 
-    # Seed treatment_catalog only if empty
-    cursor.execute('SELECT COUNT(*) FROM treatment_catalog')
-    if cursor.fetchone()[0] == 0:
-        default_catalog = [
-            ('استشارة', 'Consultation', 50),
-            ('تنظيف', 'Cleaning', 100),
-            ('حشوة', 'Filling', 150),
-            ('خلع', 'Extraction', 100),
-            ('سحب عصب', 'Root Canal', 400),
-            ('تركيبة', 'Crown/Prosthesis', 500),
-            ('مراجعة', 'Follow-up', 0),
-        ]
-        cursor.executemany('INSERT INTO treatment_catalog (name_ar, name_en, default_price) VALUES (?, ?, ?)', default_catalog)
-
     # Add missing columns to existing tables
     ensure_table_column(cursor, 'patient_followups', 'is_deleted', 'INTEGER DEFAULT 0')
     ensure_table_column(cursor, 'patient_followups', 'entry_type', "TEXT DEFAULT 'new'")
@@ -791,7 +766,11 @@ def init_database():
     ensure_table_column(cursor, 'billing', 'credit_used', 'REAL DEFAULT 0')
     ensure_table_column(cursor, 'billing', 'discount_amount', 'REAL DEFAULT 0')
     ensure_table_column(cursor, 'billing', 'remaining_amount', 'REAL DEFAULT 0')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_treatment_catalog_active ON treatment_catalog(is_active)')
+    # Optional raw expression text shown verbatim on the sheet / invoice (e.g. "20+20").
+    for _col in ('price_expr', 'discount_expr', 'lab_expense_expr', 'payment_expr'):
+        ensure_table_column(cursor, 'patient_followups', _col, 'TEXT')
+    for _col in ('subtotal_expr', 'discount_expr', 'paid_amount_expr'):
+        ensure_table_column(cursor, 'billing', _col, 'TEXT')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_credit_patient_id ON patient_credit_transactions(patient_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_followups_is_deleted ON patient_followups(is_deleted)')
 
@@ -837,6 +816,26 @@ def init_database():
         INSERT OR IGNORE INTO treatment_procedures (name, requires_lab, default_price, default_lab_expense)
         VALUES (?, ?, ?, ?)
     ''', default_procedures)
+
+    # One-time migration: the legacy "treatment_catalog" was merged into the procedure catalog.
+    # If an old database still has that table, copy any custom rows into treatment_procedures
+    # (matched by name; duplicates are ignored), then mark the migration done.
+    cursor.execute("SELECT value FROM app_settings WHERE key = 'treatment_catalog_migrated'")
+    already_migrated = cursor.fetchone()
+    if not already_migrated:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='treatment_catalog'")
+        if cursor.fetchone():
+            cursor.execute('SELECT name_ar, name_en, default_price, is_active FROM treatment_catalog')
+            for name_ar, name_en, default_price, is_active in cursor.fetchall():
+                name = (name_en or name_ar or '').strip()
+                if not name:
+                    continue
+                cursor.execute('''
+                    INSERT OR IGNORE INTO treatment_procedures (name, requires_lab, default_price, default_lab_expense, active)
+                    VALUES (?, 0, ?, 0, ?)
+                ''', (name, default_price or 0, 1 if is_active else 0))
+            cursor.execute('DROP TABLE treatment_catalog')
+        cursor.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('treatment_catalog_migrated', '1')")
 
     cursor.execute('''
         INSERT OR IGNORE INTO app_settings (key, value)
@@ -1097,9 +1096,44 @@ def calculate_age(birth_date_str):
 
 
 def get_patient_credit_balance(cursor, patient_id):
-    """Return credit balance (positive means clinic owes patient)."""
+    """Return the patient's credit balance — money the clinic is currently holding
+    *for* the patient (positive means the clinic owes the patient).
+
+    It's overpayment on the follow-up ledger — ``Σ payment − Σ (price − discount)``
+    when that is positive — plus any manual credit adjustments recorded in
+    ``patient_credit_transactions`` (signed: positive = added credit, negative = used)."""
+    cursor.execute('''
+        SELECT COALESCE(SUM(price), 0), COALESCE(SUM(COALESCE(discount, 0)), 0), COALESCE(SUM(payment), 0)
+        FROM patient_followups
+        WHERE patient_id = ? AND COALESCE(is_deleted, 0) = 0
+    ''', (patient_id,))
+    total_price, total_discount, total_paid = cursor.fetchone() or (0, 0, 0)
+    overpaid = float(total_paid) - (float(total_price) - float(total_discount))
     cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM patient_credit_transactions WHERE patient_id = ?', (patient_id,))
-    return float(cursor.fetchone()[0] or 0)
+    manual = float(cursor.fetchone()[0] or 0)
+    return round(max(0.0, overpaid + manual), 2)
+
+
+_AMOUNT_EXPR_RE = re.compile(r'^[0-9.+\-*/() ]+$')
+
+
+def sanitize_amount_expr(raw, numeric_value):
+    """If the user typed a real arithmetic expression for an amount (e.g. ``"20+20"``)
+    we keep it verbatim so it can be shown on the sheet / invoice. Returns the cleaned
+    string only when it (a) is just digits / operators / parens, (b) actually contains
+    an operator, and (c) evaluates to the numeric value we stored. Otherwise ``None``."""
+    s = str(raw or '').strip()
+    if not s or len(s) > 40 or not _AMOUNT_EXPR_RE.match(s):
+        return None
+    if not re.search(r'[+*/]', s) and not re.search(r'\d\s*-\s*\d', s):
+        return None  # a bare number (or just a leading minus) — nothing to preserve
+    try:
+        val = eval(s, {'__builtins__': {}}, {})  # safe: only digits/operators, no names
+    except Exception:
+        return None
+    if not isinstance(val, (int, float)) or abs(float(val) - float(numeric_value or 0)) > 0.01:
+        return None
+    return s
 
 
 def get_authenticated_device(cursor):
@@ -3229,14 +3263,14 @@ HTML_TEMPLATE = '''
                 </div>
             </div><!-- /appointments -->
 
-            <!-- Catalog Tab (Procedure Catalog + Treatment Catalog) -->
+            <!-- Catalog Tab (Procedure Catalog) -->
             <div id="treatments" class="tab-content">
                 <div class="screen-shell">
                     <div class="section-card">
                         <div class="section-card-header">
                             <div>
                                 <h2 data-i18n="catalog">Catalog</h2>
-                                <p data-i18n="catalog_summary">Manage procedure and treatment catalogs from one place.</p>
+                                <p data-i18n="catalog_summary">Manage the clinic's procedure catalog from one place.</p>
                             </div>
                         </div>
                         <div class="admin-overview-cards">
@@ -3245,25 +3279,10 @@ HTML_TEMPLATE = '''
                                 <h3 id="treatments-procedure-count">0</h3>
                                 <p data-i18n="procedure_catalog_items">Procedure Catalog Items</p>
                             </div>
-                            <div class="stat-card stat-card-blue">
-                                <span class="stat-icon">💊</span>
-                                <h3 id="treatments-catalog-count">0</h3>
-                                <p data-i18n="treatment_catalog_items">Treatment Catalog Items</p>
-                            </div>
                         </div>
                     </div>
 
-                    <!-- Catalog sub-tabs -->
                     <div class="section-card">
-                        <nav class="admin-sub-tabs" id="catalog-sub-tabs">
-                            <button class="admin-sub-tab active" id="catalog-tab-btn-procedure" onclick="switchCatalogSubTab('procedure', this)">
-                                🗂️ <span data-i18n="procedure_catalog">Procedure Catalog</span>
-                            </button>
-                            <button class="admin-sub-tab" id="catalog-tab-btn-treatment" onclick="switchCatalogSubTab('treatment', this)">
-                                💊 <span data-i18n="treatment_catalog">Treatment Catalog</span>
-                            </button>
-                        </nav>
-
                         <!-- ── Procedure Catalog ── -->
                         <div id="catalog-subtab-procedure" class="admin-sub-tab-content active">
                             <details id="catalog-procedure-panel" class="form-panel" open ontoggle="if(this.open&&typeof handleProcedureCatalogToggle==='function')handleProcedureCatalogToggle(this)">
@@ -3318,43 +3337,6 @@ HTML_TEMPLATE = '''
                                 </table>
                             </div>
                         </div><!-- /catalog-subtab-procedure -->
-
-                        <!-- ── Treatment Catalog ── -->
-                        <div id="catalog-subtab-treatment" class="admin-sub-tab-content">
-                            <p class="table-meta-text" style="margin-bottom:14px;" data-i18n="treatment_catalog_admin_summary">Manage treatment names and pricing from one place.</p>
-                            <details id="catalog-treatment-panel" class="form-panel" open ontoggle="if(this.open&&typeof loadTreatmentCatalogUI==='function')loadTreatmentCatalogUI()">
-                                <summary>➕ <span data-i18n="save_treatment">Add / Edit Treatment</span></summary>
-                                <div class="form-panel-body">
-                                    <form id="treatment-catalog-form">
-                                        <input type="hidden" id="tc-id" value="">
-                                        <div class="form-row-3">
-                                            <div class="form-group">
-                                                <label data-i18n="arabic_name_required">Arabic Name *</label>
-                                                <input type="text" id="tc-name-ar" required>
-                                            </div>
-                                            <div class="form-group">
-                                                <label data-i18n="english_name">English Name</label>
-                                                <input type="text" id="tc-name-en">
-                                            </div>
-                                            <div class="form-group">
-                                                <label data-i18n="default_price">Default Price <small style="font-weight:400;color:var(--muted);">(or expression)</small></label>
-                                                <input type="text" inputmode="decimal" id="tc-price" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
-                                            </div>
-                                        </div>
-                                        <div class="toolbar-row" style="margin-top:0; margin-bottom:10px;">
-                                            <button class="btn btn-primary" type="submit" data-i18n="save_treatment">Save Treatment</button>
-                                            <button class="btn btn-warning" type="button" onclick="resetTreatmentCatalogForm()" data-i18n="cancel">Cancel</button>
-                                        </div>
-                                    </form>
-                                </div>
-                            </details>
-                            <div class="table-container" style="margin-top:12px;">
-                                <table>
-                                    <thead><tr><th data-i18n="arabic_name">Arabic Name</th><th data-i18n="english_name">English Name</th><th class="numeric-cell" data-i18n="price">Price</th><th class="center-cell" data-i18n="status">Status</th><th class="actions-cell" data-i18n="actions">Actions</th></tr></thead>
-                                    <tbody id="treatment-catalog-body"><tr><td colspan="5" data-i18n="loading">Loading...</td></tr></tbody>
-                                </table>
-                            </div>
-                        </div><!-- /catalog-subtab-treatment -->
                     </div><!-- /section-card -->
                 </div>
             </div><!-- /treatments -->
@@ -3580,7 +3562,7 @@ HTML_TEMPLATE = '''
                             <input type="text" inputmode="decimal" name="discount" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
                         </div>
                         <div class="form-group">
-                            <label>Credit Used</label>
+                            <label>Credit Used <small id="billing-credit-available" style="font-weight:400;color:var(--muted);"></small></label>
                             <input type="text" inputmode="decimal" name="credit_used" value="0" id="billing-credit-used" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
                         </div>
                     </div>
@@ -3985,7 +3967,6 @@ HTML_TEMPLATE = '''
         let holidaysCache = [];
         let treatmentProceduresCache = [];
         let billingCache = [];
-        window.treatmentCatalogCache = [];
         let currentPatientInvoicePayload = null;
         let currentProfilePatient = null;
         let currentFollowupBalance = 0;
@@ -4065,6 +4046,10 @@ HTML_TEMPLATE = '''
                 schedule_appointment: 'Schedule Appointment',
                 schedule: 'Schedule',
                 select_patient: 'Select Patient',
+                search_patient: '🔍 Search patients by name or phone…',
+                no_patient_matches: 'No patient matches your search',
+                available: 'available',
+                no_credit: 'no credit',
                 appointment_date_required: 'Appointment Date *',
                 appointment_time_required: 'Appointment Time *',
                 previous_month: 'Previous Month',
@@ -4098,7 +4083,7 @@ HTML_TEMPLATE = '''
                 list_tab: '📋 List',
                 calendar_tab: '📆 Calendar',
                 catalog: 'Catalog',
-                catalog_summary: 'Manage procedure and treatment catalogs from one place.',
+                catalog_summary: "Manage the clinic's procedure catalog from one place.",
                 appointments_summary: 'Track upcoming, confirmed, and completed visits.',
                 month: 'Month',
                 run_monthly_report: 'Run Monthly Report',
@@ -4154,7 +4139,7 @@ HTML_TEMPLATE = '''
                 treatments_overview_note: 'Use Administration to edit the procedure catalog and treatment catalog. This tab provides a shorter path to those tools.',
                 receivables_tracking: 'Receivables Tracking',
                 total_receivables: 'Total Receivables',
-                patients_with_balance: 'Patients with Balance',
+                patients_with_balance: 'Patients Owing Money',
                 last_date: 'Last Date',
                 overdue_days: 'Overdue Days',
                 billing_management: 'Billing Management',
@@ -4168,10 +4153,10 @@ HTML_TEMPLATE = '''
                 todays_revenue: "Today's Revenue",
                 todays_visits: "Today's Visits",
                 unpaid_by_patients: 'Unpaid by Patients',
-                outstanding_balances: 'Outstanding Balances (current)',
+                outstanding_balances: 'Amounts Still Owed (current)',
                 create_invoice: 'Create Invoice',
                 invoice_no: 'Invoice #',
-                balance_due: 'Balance Due',
+                balance_due: 'Amount to Pay',
                 patient_total_invoice: 'Patient Total Invoice',
                 generate_total_invoice: 'Generate Total Invoice',
                 audit_log: 'Audit Log',
@@ -4240,9 +4225,9 @@ HTML_TEMPLATE = '''
                 book: 'Book',
                 min: 'min',
                 followups: 'Follow-ups',
-                current_balance: 'Current balance',
+                current_balance: 'Amount to Pay',
                 total_to_pay: 'Total to pay',
-                left: 'Left',
+                left: 'Still to Pay',
                 book_for_patient: 'Book Appointment for This Patient',
                 open_calendar: 'Open Calendar',
                 patient_name: 'Patient Name',
@@ -4257,7 +4242,7 @@ HTML_TEMPLATE = '''
                 lab_expense: 'Lab Expense',
                 clinic_profit: 'Clinic Profit',
                 payment: 'Payment',
-                balance: 'Balance',
+                balance: 'Amount to Pay',
                 add_entry: 'Add Entry',
                 procedure_required: 'Please select a procedure or enter a custom procedure name.',
                 medical_images: 'Medical Images',
@@ -4408,6 +4393,10 @@ HTML_TEMPLATE = '''
                 schedule_appointment: 'جدولة موعد',
                 schedule: 'حفظ الموعد',
                 select_patient: 'اختر المريض',
+                search_patient: '🔍 ابحث عن مريض بالاسم أو الهاتف…',
+                no_patient_matches: 'لا يوجد مريض مطابق لبحثك',
+                available: 'متاح',
+                no_credit: 'لا يوجد رصيد',
                 appointment_date_required: 'تاريخ الموعد *',
                 appointment_time_required: 'وقت الموعد *',
                 previous_month: 'الشهر السابق',
@@ -4441,7 +4430,7 @@ HTML_TEMPLATE = '''
                 list_tab: '📋 القائمة',
                 calendar_tab: '📆 التقويم',
                 catalog: 'الفهرس',
-                catalog_summary: 'إدارة فهارس الإجراءات والعلاجات من مكان واحد.',
+                catalog_summary: 'إدارة كتالوج إجراءات العيادة من مكان واحد.',
                 appointments_summary: 'تتبع المواعيد القادمة والمؤكدة والمكتملة.',
                 month: 'الشهر',
                 run_monthly_report: 'تشغيل التقرير الشهري',
@@ -4497,7 +4486,7 @@ HTML_TEMPLATE = '''
                 treatments_overview_note: 'استخدم الإدارة لتعديل كتالوج الإجراءات وكتالوج العلاجات. توفر هذه الصفحة طريقًا أقصر إلى تلك الأدوات.',
                 receivables_tracking: 'متابعة الذمم',
                 total_receivables: 'إجمالي الذمم',
-                patients_with_balance: 'المرضى الذين عليهم رصيد',
+                patients_with_balance: 'مرضى عليهم مبلغ',
                 last_date: 'آخر تاريخ',
                 overdue_days: 'أيام التأخير',
                 billing_management: 'إدارة الفواتير',
@@ -4511,10 +4500,10 @@ HTML_TEMPLATE = '''
                 todays_revenue: 'إيرادات اليوم',
                 todays_visits: 'زيارات اليوم',
                 unpaid_by_patients: 'مستحق على المرضى',
-                outstanding_balances: 'الأرصدة المستحقة (حالياً)',
+                outstanding_balances: 'مبالغ ما زالت مستحقة (حالياً)',
                 create_invoice: 'إنشاء فاتورة',
                 invoice_no: 'رقم الفاتورة',
-                balance_due: 'الرصيد المستحق',
+                balance_due: 'المبلغ المطلوب',
                 patient_total_invoice: 'فاتورة كلية للمريض',
                 generate_total_invoice: 'توليد الفاتورة الكلية',
                 audit_log: 'سجل التعديلات',
@@ -4583,9 +4572,9 @@ HTML_TEMPLATE = '''
                 book: 'حجز',
                 min: 'دقيقة',
                 followups: 'المتابعات',
-                current_balance: 'الرصيد الحالي',
+                current_balance: 'المبلغ المطلوب',
                 total_to_pay: 'الإجمالي المطلوب',
-                left: 'المتبقي',
+                left: 'ما زال مطلوباً',
                 book_for_patient: 'حجز موعد لهذا المريض',
                 open_calendar: 'فتح التقويم',
                 patient_name: 'اسم المريض',
@@ -4600,7 +4589,7 @@ HTML_TEMPLATE = '''
                 lab_expense: 'مصروف المعمل',
                 clinic_profit: 'ربح العيادة',
                 payment: 'الدفعة',
-                balance: 'الرصيد',
+                balance: 'المبلغ المطلوب',
                 add_entry: 'إضافة سجل',
                 procedure_required: 'يرجى اختيار إجراء أو إدخال اسم إجراء مخصص.',
                 medical_images: 'الصور الطبية',
@@ -5032,19 +5021,11 @@ HTML_TEMPLATE = '''
 
         function updateTreatmentOverviewCounts() {
             const procedureCountEl = document.getElementById('treatments-procedure-count');
-            const treatmentCountEl = document.getElementById('treatments-catalog-count');
             if (procedureCountEl) procedureCountEl.textContent = String(treatmentProceduresCache.length || 0);
-            if (treatmentCountEl) treatmentCountEl.textContent = String(window.treatmentCatalogCache?.length || 0);
         }
 
-        async function loadTreatmentsSection(preferredSubTab = currentCatalogSubTab) {
-            const requestedSubTab = preferredSubTab === 'treatment' ? 'treatment' : 'procedure';
-            // Switch the sub-tab immediately (synchronous) so a user click during data loading
-            // is never overridden by a stale requestedSubTab value from the end of this function.
-            switchCatalogSubTab(requestedSubTab, document.getElementById(`catalog-tab-btn-${requestedSubTab}`), false);
-
+        async function loadTreatmentsSection() {
             await loadProcedureCatalog();
-            await loadTreatmentCatalogUI();
             updateTreatmentOverviewCounts();
             // Wire date picker buttons inside the catalog section
             attachDatePickerButtons(document.getElementById('treatments'));
@@ -5058,11 +5039,7 @@ HTML_TEMPLATE = '''
 
         function openAdministrationCatalog(targetPanel, clickedBtn = null) {
             const catalogBtn = document.querySelector('.nav-tab[data-tab="treatments"]');
-            currentCatalogSubTab = targetPanel === 'treatment' ? 'treatment' : 'procedure';
-            localStorage.setItem('catalog-subtab', currentCatalogSubTab);
             switchTab('treatments', catalogBtn);
-            // Activate the correct catalog sub-tab after a tick
-            setTimeout(() => switchCatalogSubTab(currentCatalogSubTab, document.getElementById(`catalog-tab-btn-${currentCatalogSubTab}`)), 50);
         }
 
         // ── Main tab switching ────────────────────────────────────────────────────
@@ -5158,90 +5135,10 @@ HTML_TEMPLATE = '''
             }
         }
 
-        async function loadTreatmentCatalogUI() {
-            const rows = await fetch('/api/treatment-catalog?include_inactive=1').then(r => r.json()).catch(() => []);
-            window.treatmentCatalogCache = Array.isArray(rows) ? rows : [];
-            const tbody = document.getElementById('treatment-catalog-body');
-            if (!tbody) {
-                updateTreatmentOverviewCounts();
-                return;
-            }
-            if (!window.treatmentCatalogCache?.length) {
-                tbody.innerHTML = renderStateRow(t('no_data', 'No data'), {
-                    icon: '🦷',
-                    title: t('no_treatment_catalog_yet', 'No treatment catalog items yet'),
-                    text: t('treatment_catalog_empty_hint', 'Add a treatment item to make the admin catalog ready for booking and billing flows.'),
-                    colSpan: 5,
-                    buttonHtml: `<button class="btn btn-primary" type="button" onclick="document.getElementById('tc-name-ar')?.focus()">${t('save_treatment', 'Save Treatment')}</button>`
-                });
-                updateTreatmentOverviewCounts();
-                return;
-            }
-            tbody.innerHTML = window.treatmentCatalogCache.map(item => `
-                <tr>
-                    <td>${item.name_ar || ''}</td>
-                    <td>${item.name_en || ''}</td>
-                    <td class="numeric-cell">₪${parseFloat(item.default_price||0).toFixed(2)}</td>
-                    <td class="center-cell"><span class="badge ${item.is_active ? 'badge-active' : 'badge-blocked'}">${item.is_active ? t('active', 'Active') : t('inactive', 'Inactive')}</span></td>
-                    <td>
-                        <button class="btn btn-primary btn-sm" onclick="editTreatmentCatalog(${item.id})">${t('edit', 'Edit')}</button>
-                        <button class="btn btn-warning btn-sm" onclick="toggleTreatmentCatalog(${item.id},${item.is_active})">${item.is_active ? t('disable', 'Disable') : t('enable', 'Enable')}</button>
-                    </td>
-                </tr>
-            `).join('');
-            updateTreatmentOverviewCounts();
-        }
-
         async function loadAdministrationSection() {
             // Administration tab is removed — redirect to Catalog tab
             switchTab('treatments', document.querySelector('.nav-tab[data-tab="treatments"]'));
         }
-        function resetTreatmentCatalogForm() {
-            document.getElementById('tc-id').value = '';
-            document.getElementById('tc-name-ar').value = '';
-            document.getElementById('tc-name-en').value = '';
-            document.getElementById('tc-price').value = '0';
-        }
-        function editTreatmentCatalog(id) {
-            const item = window.treatmentCatalogCache?.find(x => Number(x.id) === Number(id));
-            if (!item) return;
-            document.getElementById('tc-id').value = item.id;
-            document.getElementById('tc-name-ar').value = item.name_ar || '';
-            document.getElementById('tc-name-en').value = item.name_en || '';
-            document.getElementById('tc-price').value = parseFloat(item.default_price||0).toFixed(2);
-        }
-        async function toggleTreatmentCatalog(id, currentActive) {
-            await fetch(`/api/treatment-catalog/${id}`, {
-                method: 'PUT',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({is_active: currentActive ? 0 : 1})
-            });
-            loadTreatmentCatalogUI();
-        }
-        document.addEventListener('DOMContentLoaded', function() {
-            const tcForm = document.getElementById('treatment-catalog-form');
-            if (tcForm) {
-                tcForm.addEventListener('submit', async function(e) {
-                    e.preventDefault();
-                    const idVal = document.getElementById('tc-id').value.trim();
-                    const payload = {
-                        name_ar: document.getElementById('tc-name-ar').value.trim(),
-                        name_en: document.getElementById('tc-name-en').value.trim(),
-                        default_price: parseFloat(document.getElementById('tc-price').value || 0)
-                    };
-                    if (!payload.name_ar) { alert(t('arabic_name_is_required', 'Arabic name is required.')); return; }
-                    const url = idVal ? `/api/treatment-catalog/${idVal}` : '/api/treatment-catalog';
-                    const method = idVal ? 'PUT' : 'POST';
-                    const resp = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-                    if (resp.ok) {
-                        resetTreatmentCatalogForm();
-                        loadTreatmentCatalogUI();
-                    } else {
-                        alert(t('unable_save_treatment', 'Unable to save treatment.'));
-                    }
-                });
-            }
-        });
 
         // ── Sidebar / Mobile Nav ──────────────────────────────────────────────
         function toggleMobileNav() {
@@ -5473,32 +5370,14 @@ HTML_TEMPLATE = '''
                     treatmentProceduresCache = Array.isArray(data) ? data : [];
                 }
             }
-            if (!Array.isArray(window.treatmentCatalogCache) || !window.treatmentCatalogCache.length) {
-                const r = await fetch('/api/treatment-catalog').catch(() => null);
-                if (r && r.ok) {
-                    const data = await r.json().catch(() => []);
-                    window.treatmentCatalogCache = Array.isArray(data) ? data : [];
-                }
-            }
 
             const opts = [`<option value="">${t('select_treatment', '-- Select Treatment --')}</option>`];
 
             if (Array.isArray(treatmentProceduresCache) && treatmentProceduresCache.length) {
-                opts.push(`<optgroup label="${t('procedures', 'Procedures')}">`);
                 treatmentProceduresCache.forEach(p => {
                     const n = String(p.name || '').trim();
                     if (n) opts.push(`<option value="${n}">${n}</option>`);
                 });
-                opts.push('</optgroup>');
-            }
-
-            if (Array.isArray(window.treatmentCatalogCache) && window.treatmentCatalogCache.length) {
-                opts.push(`<optgroup label="${t('treatments', 'Treatments')}">`);
-                window.treatmentCatalogCache.forEach(item => {
-                    const n = String(item.name_en || item.name_ar || '').trim();
-                    if (n) opts.push(`<option value="${n}">${n}</option>`);
-                });
-                opts.push('</optgroup>');
             }
 
             if (opts.length === 1) {
@@ -5523,10 +5402,45 @@ HTML_TEMPLATE = '''
             const response = await fetch('/api/patients');
             const patients = await response.json();
             const select = document.getElementById(selectId);
-            select.innerHTML = `<option value="">${t('select_patient', 'Select Patient')}</option>`;
-            patients.forEach(patient => {
-                select.innerHTML += `<option value="${patient.id}">${patient.first_name} ${patient.last_name}</option>`;
+            if (!select) return;
+            const optsHtml = [`<option value="">${t('select_patient', 'Select Patient')}</option>`];
+            (Array.isArray(patients) ? patients : []).forEach(patient => {
+                const name = `${patient.first_name || ''} ${patient.last_name || ''}`.trim();
+                const phone = String(patient.phone || '').trim();
+                optsHtml.push(`<option value="${patient.id}" data-phone="${phone.replace(/"/g, '')}">${name}${phone ? ' — ' + phone : ''}</option>`);
             });
+            select.innerHTML = optsHtml.join('');
+            attachPatientSearch(select);
+            const box = select.parentNode && select.parentNode.querySelector('.patient-search-box');
+            if (box && box.value.trim()) filterPatientSelect(select, box.value);
+        }
+
+        // Insert a search box above a patient <select> so large patient lists stay usable.
+        function attachPatientSearch(select) {
+            if (!select || select.dataset.searchAttached || !select.parentNode) return;
+            select.dataset.searchAttached = '1';
+            const box = document.createElement('input');
+            box.type = 'text';
+            box.className = 'patient-search-box';
+            box.placeholder = t('search_patient', 'Search patients…');
+            box.setAttribute('autocomplete', 'off');
+            box.style.marginBottom = '6px';
+            box.addEventListener('input', () => filterPatientSelect(select, box.value));
+            select.parentNode.insertBefore(box, select);
+        }
+
+        // Hide <option>s in a patient <select> that don't match the query (name or phone).
+        function filterPatientSelect(select, query) {
+            if (typeof select === 'string') select = document.getElementById(select);
+            if (!select) return;
+            const q = String(query || '').trim().toLowerCase();
+            Array.from(select.options).forEach(opt => {
+                if (!opt.value) { opt.hidden = false; return; }
+                const hay = (opt.textContent + ' ' + (opt.dataset.phone || '')).toLowerCase();
+                opt.hidden = q ? !hay.includes(q) : false;
+            });
+            // If the current selection was filtered out, clear it.
+            if (select.selectedOptions[0] && select.selectedOptions[0].hidden) select.value = '';
         }
 
         function getStatusBadgeClass(status) {
@@ -6062,11 +5976,6 @@ HTML_TEMPLATE = '''
             } else {
                 await loadLabReport();
             }
-
-            const procedurePanel = document.getElementById('procedure-catalog-panel');
-            if (procedurePanel?.open) {
-                await loadProcedureCatalog();
-            }
         }
 
         async function loadFinancialSection() {
@@ -6114,7 +6023,7 @@ HTML_TEMPLATE = '''
             tbody.innerHTML = rows.map(item => `
                 <tr>
                     <td>${item.patient_name || ''}</td>
-                    <td>₪ ${parseCurrency(item.total_to_pay).toFixed(2)}</td>
+                    <td>₪ ${(parseCurrency(item.total_to_pay) - parseCurrency(item.total_discount)).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.total_paid).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.outstanding).toFixed(2)}</td>
                     <td>${formatDateDisplay(item.last_followup_date) || ''}</td>
@@ -6144,7 +6053,7 @@ HTML_TEMPLATE = '''
             tbody.innerHTML = rows.map(item => `
                 <tr>
                     <td>${item.patient_name || ''}</td>
-                    <td>₪ ${parseCurrency(item.total_to_pay).toFixed(2)}</td>
+                    <td>₪ ${(parseCurrency(item.total_to_pay) - parseCurrency(item.total_discount)).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.total_paid).toFixed(2)}</td>
                     <td>₪ ${parseCurrency(item.outstanding).toFixed(2)}</td>
                     <td>${formatDateDisplay(item.last_followup_date) || ''}</td>
@@ -6153,9 +6062,28 @@ HTML_TEMPLATE = '''
             `).join('');
         }
 
+        async function refreshBillingCreditHint() {
+            const sel = document.getElementById('billing-patient-select');
+            const hint = document.getElementById('billing-credit-available');
+            if (!sel || !hint) return;
+            const pid = sel.value;
+            if (!pid) { hint.textContent = ''; return; }
+            try {
+                const data = await fetch(`/api/patients/${pid}/credit`).then(r => r.json());
+                const bal = parseCurrency(data && data.balance || 0);
+                hint.textContent = bal > 0 ? `(${t('available', 'available')}: ₪${bal.toFixed(2)})` : `(${t('no_credit', 'no credit')})`;
+            } catch (_) { hint.textContent = ''; }
+        }
+
         async function loadBilling() {
             await loadPatientsSelect('billing-patient-select');
             await loadPatientsSelect('invoice-patient-select');
+            const billSel = document.getElementById('billing-patient-select');
+            if (billSel && !billSel.dataset.creditHintWired) {
+                billSel.dataset.creditHintWired = '1';
+                billSel.addEventListener('change', refreshBillingCreditHint);
+            }
+            refreshBillingCreditHint();
 
             const items = await fetch('/api/billing').then(r => r.json());
             billingCache = Array.isArray(items) ? items : [];
@@ -6178,7 +6106,7 @@ HTML_TEMPLATE = '''
                     <td>${item.invoice_number || ''}</td>
                     <td>${item.patient_name || ''}</td>
                     <td>₪ ${parseCurrency(item.amount).toFixed(2)}</td>
-                    <td>₪ ${parseCurrency(item.paid_amount).toFixed(2)}</td>
+                    <td>${fmtAmount(item.paid_amount, item.paid_amount_expr)}${parseCurrency(item.credit_used) > 0 ? ` <small style="opacity:0.7;">(+₪${parseCurrency(item.credit_used).toFixed(2)} ${t('credit', 'credit')})</small>` : ''}</td>
                     <td>₪ ${parseCurrency(item.balance_due).toFixed(2)}</td>
                     <td class="center-cell">${renderStatusBadge(item.payment_status, item.payment_status)}</td>
                     <td>${formatDateDisplay(item.payment_date) || ''}</td>
@@ -6233,9 +6161,9 @@ HTML_TEMPLATE = '''
                 <tr>
                     <td>${formatDateDisplay(item.followup_date) || ''}</td>
                     <td>${item.treatment_procedure || ''}${item.tooth_no ? ` <small style="opacity:0.7;">#${item.tooth_no}</small>` : ''}</td>
-                    <td>₪ ${parseCurrency(item.price).toFixed(2)}</td>
-                    <td>${parseCurrency(item.discount) > 0 ? '₪ ' + parseCurrency(item.discount).toFixed(2) : '—'}</td>
-                    <td>₪ ${parseCurrency(item.payment).toFixed(2)}</td>
+                    <td>${fmtAmount(item.price, item.price_expr)}</td>
+                    <td>${(parseCurrency(item.discount) > 0 || item.discount_expr) ? fmtAmount(item.discount, item.discount_expr) : '—'}</td>
+                    <td>${fmtAmount(item.payment, item.payment_expr)}</td>
                     <td>₪ ${parseCurrency(item.remaining_amount).toFixed(2)}</td>
                 </tr>
             `).join('');
@@ -6334,14 +6262,19 @@ HTML_TEMPLATE = '''
 
             const printLang = getInvoicePrintLanguage();
 
+            const amtCellHtml = (num, expr) => {
+                const n = parseCurrency(num).toFixed(2);
+                const e = String(expr || '').trim();
+                return e ? `${escapeHtml(e)} = ₪ ${n}` : `₪ ${n}`;
+            };
             const rows = payload.items.length
                 ? payload.items.map(item => `
                     <tr>
                         <td>${escapeHtml(formatDateDisplay(item.followup_date) || '')}</td>
                         <td>${escapeHtml(item.treatment_procedure || '')}${item.tooth_no ? ' #' + escapeHtml(String(item.tooth_no)) : ''}</td>
-                        <td>₪ ${parseCurrency(item.price).toFixed(2)}</td>
-                        <td>${parseCurrency(item.discount) > 0 ? '₪ ' + parseCurrency(item.discount).toFixed(2) : '—'}</td>
-                        <td>₪ ${parseCurrency(item.payment).toFixed(2)}</td>
+                        <td>${amtCellHtml(item.price, item.price_expr)}</td>
+                        <td>${(parseCurrency(item.discount) > 0 || item.discount_expr) ? amtCellHtml(item.discount, item.discount_expr) : '—'}</td>
+                        <td>${amtCellHtml(item.payment, item.payment_expr)}</td>
                         <td>₪ ${parseCurrency(item.remaining_amount).toFixed(2)}</td>
                     </tr>
                 `).join('')
@@ -6877,6 +6810,10 @@ HTML_TEMPLATE = '''
             document.getElementById('patient-followup-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const data = Object.fromEntries(new FormData(e.target));
+                data.price_expr = calcExprOf(document.getElementById('followup-price'));
+                data.discount_expr = calcExprOf(document.getElementById('followup-discount'));
+                data.lab_expense_expr = calcExprOf(document.getElementById('followup-lab-expense'));
+                data.payment_expr = calcExprOf(document.getElementById('followup-payment'));
                 if (!data.followup_date) {
                     alert(t('date_required', 'Please pick a date (day, month, and year).'));
                     return;
@@ -6930,6 +6867,13 @@ HTML_TEMPLATE = '''
             } catch(_) { return dateStr; }
         }
 
+        // Show a verbatim expression ("20+20") when one was entered, otherwise the formatted amount.
+        function fmtAmount(num, expr) {
+            const n = parseFloat(num || 0) || 0;
+            const e = String(expr || '').trim();
+            return e ? `<span title="₪${n.toFixed(2)}">${e}</span>` : `₪${n.toFixed(2)}`;
+        }
+
         function renderFollowupsRows(followups) {
             if (!followups || !followups.length) {
                 return `<tr><td colspan="10">${t('no_entries_yet', 'No entries yet')}</td></tr>`;
@@ -6938,11 +6882,11 @@ HTML_TEMPLATE = '''
                 <tr>
                     <td>${formatDateDisplay(item.followup_date) || ''}</td>
                     <td>${item.treatment_procedure || t('no_data', 'No data')}${item.tooth_no ? ` <small style="opacity:0.7;">#${item.tooth_no}</small>` : ''}</td>
-                    <td>₪${parseFloat(item.price || 0).toFixed(2)}</td>
-                    <td>${parseFloat(item.discount || 0) > 0 ? '₪' + parseFloat(item.discount || 0).toFixed(2) : '—'}</td>
-                    <td>₪${parseFloat(item.lab_expense || 0).toFixed(2)}</td>
+                    <td>${fmtAmount(item.price, item.price_expr)}</td>
+                    <td>${(parseFloat(item.discount || 0) > 0 || item.discount_expr) ? fmtAmount(item.discount, item.discount_expr) : '—'}</td>
+                    <td>${fmtAmount(item.lab_expense, item.lab_expense_expr)}</td>
                     <td>₪${(parseFloat(item.price || 0) - parseFloat(item.discount || 0) - parseFloat(item.lab_expense || 0)).toFixed(2)}</td>
-                    <td>₪${parseFloat(item.payment || 0).toFixed(2)}</td>
+                    <td>${fmtAmount(item.payment, item.payment_expr)}</td>
                     <td>₪${parseFloat(item.remaining_amount || 0).toFixed(2)}</td>
                     <td>${item.notes || ''}</td>
                     <td>
@@ -6971,10 +6915,16 @@ HTML_TEMPLATE = '''
             document.getElementById('ef-date').value = formatDateDisplay(item.followup_date) || '';
             document.getElementById('ef-procedure').value = item.treatment_procedure || '';
             document.getElementById('ef-tooth-no').value = item.tooth_no || '';
-            document.getElementById('ef-price').value = parseFloat(item.price || 0).toFixed(2);
-            document.getElementById('ef-discount').value = parseFloat(item.discount || 0).toFixed(2);
-            document.getElementById('ef-lab-expense').value = parseFloat(item.lab_expense || 0).toFixed(2);
-            document.getElementById('ef-payment').value = parseFloat(item.payment || 0).toFixed(2);
+            const setAmt = (id, num, expr) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (expr) { el.value = String(expr); el.dataset.expr = String(expr); }
+                else { el.value = parseFloat(num || 0).toFixed(2); delete el.dataset.expr; }
+            };
+            setAmt('ef-price', item.price, item.price_expr);
+            setAmt('ef-discount', item.discount, item.discount_expr);
+            setAmt('ef-lab-expense', item.lab_expense, item.lab_expense_expr);
+            setAmt('ef-payment', item.payment, item.payment_expr);
             document.getElementById('ef-notes').value = item.notes || '';
             // Close the patient profile window first, then open the edit window on its own.
             closeModal('patient-profile-modal');
@@ -7069,6 +7019,10 @@ HTML_TEMPLATE = '''
                         discount: parseCurrency(document.getElementById('ef-discount').value || 0),
                         lab_expense: parseCurrency(document.getElementById('ef-lab-expense').value || 0),
                         payment: parseCurrency(document.getElementById('ef-payment').value || 0),
+                        price_expr: calcExprOf(document.getElementById('ef-price')),
+                        discount_expr: calcExprOf(document.getElementById('ef-discount')),
+                        lab_expense_expr: calcExprOf(document.getElementById('ef-lab-expense')),
+                        payment_expr: calcExprOf(document.getElementById('ef-payment')),
                         notes: document.getElementById('ef-notes').value
                     };
                     const resp = await fetch(`/api/patients/${patientId}/followups/${followupId}`, {
@@ -7270,6 +7224,10 @@ HTML_TEMPLATE = '''
             billingForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const data = Object.fromEntries(new FormData(e.target));
+                // Capture verbatim expressions (e.g. "20+20") before they're resolved to numbers.
+                data.subtotal_expr = calcExprOf(e.target.querySelector('[name="subtotal"]'));
+                data.discount_expr = calcExprOf(e.target.querySelector('[name="discount"]'));
+                data.paid_amount_expr = calcExprOf(e.target.querySelector('[name="paid_amount"]'));
                 // Resolve any arithmetic expressions in numeric fields
                 ['subtotal', 'discount', 'credit_used', 'paid_amount'].forEach(field => {
                     if (data[field] !== undefined) data[field] = parseCurrency(data[field]);
@@ -7419,11 +7377,12 @@ HTML_TEMPLATE = '''
 
         function evalCalcField(el) {
             const raw = el.value.trim();
-            if (!raw) return;
+            if (!raw) { delete el.dataset.expr; return; }
             if (/^[\\d]*\\.?[\\d]*$/.test(raw)) {
                 const n = parseFloat(raw);
                 if (!isNaN(n)) {
                     el.value = n.toFixed(2);
+                    delete el.dataset.expr;   // a plain number — nothing to preserve
                     el.classList.remove('calc-error');
                     el.classList.add('calc-ok');
                     setTimeout(() => el.classList.remove('calc-ok'), 1200);
@@ -7432,6 +7391,8 @@ HTML_TEMPLATE = '''
             }
             const result = evalArithmeticExpr(raw);
             if (result !== null) {
+                // Keep the verbatim expression so it can be shown on the invoice / sheet.
+                el.dataset.expr = raw;
                 el.value = result.toFixed(2);
                 el.classList.remove('calc-error');
                 el.classList.add('calc-ok');
@@ -7440,6 +7401,15 @@ HTML_TEMPLATE = '''
                 el.classList.add('calc-error');
                 el.classList.remove('calc-ok');
             }
+        }
+
+        // Read the verbatim expression a calc field captured (set by evalCalcField on blur/Enter),
+        // re-deriving it from the live value if needed (covers Enter-then-submit timing).
+        function calcExprOf(el) {
+            if (!el) return '';
+            const raw = String(el.value || '').trim();
+            if (raw && !/^-?[\\d]*\\.?[\\d]*$/.test(raw)) return raw;   // user left an un-evaluated expression
+            return el.dataset.expr || '';
         }
 
         function wireCalcInputs(root) {
@@ -7517,30 +7487,9 @@ HTML_TEMPLATE = '''
             });
         }, true);
 
-        // ── Catalog tab sub-tab switcher (Procedure Catalog / Treatment Catalog) ──
+        // ── Catalog tab (Procedure Catalog) ──
         function switchCatalogSubTab(tabName, clickedBtn, loadData = true) {
-            const container = document.getElementById('treatments');
-            if (!container) return;
-
-            currentCatalogSubTab = tabName === 'treatment' ? 'treatment' : 'procedure';
-            localStorage.setItem('catalog-subtab', currentCatalogSubTab);
-
-            container.querySelectorAll('#catalog-sub-tabs .admin-sub-tab').forEach(btn => btn.classList.remove('active'));
-            if (clickedBtn && clickedBtn.id === `catalog-tab-btn-${currentCatalogSubTab}`) {
-                clickedBtn.classList.add('active');
-            } else {
-                const fallback = container.querySelector(`#catalog-tab-btn-${currentCatalogSubTab}`);
-                if (fallback) fallback.classList.add('active');
-            }
-
-            container.querySelectorAll('.admin-sub-tab-content').forEach(panel => panel.classList.remove('active'));
-            const activePanel = document.getElementById(`catalog-subtab-${currentCatalogSubTab}`);
-            if (activePanel) activePanel.classList.add('active');
-
-            if (loadData) {
-                if (currentCatalogSubTab === 'procedure') { loadProcedureCatalog(); }
-                else if (currentCatalogSubTab === 'treatment') { loadTreatmentCatalogUI(); }
-            }
+            if (loadData) loadProcedureCatalog();
         }
 
         function switchAdminSubTab(tabName, clickedBtn) {
@@ -8322,6 +8271,28 @@ def treatment_procedure_update(procedure_id):
     conn.close()
     return jsonify({'success': True})
 
+def _recompute_followup_balances(cursor, patient_id):
+    """Rewrite every follow-up row's ``remaining_amount`` as the true running ledger
+    balance — the cumulative ``Σ (price − discount − payment)`` walked in chronological
+    order. This keeps the "amount to pay" column correct after entries are edited,
+    deleted, or added out of date order (the value can't be a per-row snapshot)."""
+    cursor.execute('''
+        SELECT id, COALESCE(price, 0), COALESCE(discount, 0), COALESCE(payment, 0), COALESCE(remaining_amount, 0)
+        FROM patient_followups
+        WHERE patient_id = ? AND COALESCE(is_deleted, 0) = 0
+        ORDER BY date(followup_date) ASC, id ASC
+    ''', (patient_id,))
+    running = 0.0
+    stale = []
+    for fid, price, discount, payment, stored in cursor.fetchall():
+        running += float(price) - float(discount) - float(payment)
+        new_amount = round(running, 2)
+        if abs(new_amount - float(stored)) > 0.005:
+            stale.append((new_amount, fid))
+    for amount, fid in stale:
+        cursor.execute('UPDATE patient_followups SET remaining_amount = ? WHERE id = ?', (amount, fid))
+
+
 @app.route('/api/patients/<int:patient_id>/followups', methods=['GET', 'POST'])
 def patient_followups(patient_id):
     conn = sqlite3.connect(DB_NAME)
@@ -8337,6 +8308,9 @@ def patient_followups(patient_id):
     patient_full_name = f"{patient_row['first_name']} {patient_row['last_name']}".strip()
 
     if request.method == 'GET':
+        # Self-heal stored running balances, then return rows in chronological order.
+        _recompute_followup_balances(cursor, patient_id)
+        conn.commit()
         cursor.execute('''
             SELECT pf.*, tp.requires_lab as procedure_requires_lab
             FROM patient_followups pf
@@ -8401,6 +8375,11 @@ def patient_followups(patient_id):
         conn.close()
         return jsonify({'error': 'Treatment procedure is required'}), 400
 
+    price_expr = sanitize_amount_expr(data.get('price_expr'), price)
+    discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount)
+    payment_expr = sanitize_amount_expr(data.get('payment_expr'), payment)
+    lab_expense_expr = sanitize_amount_expr(data.get('lab_expense_expr'), lab_expense) if requires_lab else None
+
     if not requires_lab:
         lab_expense = 0
         clinic_profit = price - discount
@@ -8410,7 +8389,7 @@ def patient_followups(patient_id):
     if not followup_date:
         conn.close()
         return jsonify({'error': 'Followup date is required'}), 400
-    
+
     parsed_followup_date = parse_date_input(followup_date)
     if not parsed_followup_date:
         conn.close()
@@ -8419,8 +8398,9 @@ def patient_followups(patient_id):
     cursor.execute('''
         INSERT INTO patient_followups (
             patient_id, followup_date, tooth_no, diagnosis, treatment_procedure, procedure_id,
-            price, discount, lab_expense, clinic_profit, payment, remaining_amount, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            price, discount, lab_expense, clinic_profit, payment, remaining_amount, notes,
+            price_expr, discount_expr, lab_expense_expr, payment_expr
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         patient_id,
         parsed_followup_date,
@@ -8434,7 +8414,11 @@ def patient_followups(patient_id):
         clinic_profit,
         payment,
         remaining_amount,
-        data.get('notes')
+        data.get('notes'),
+        price_expr,
+        discount_expr,
+        lab_expense_expr,
+        payment_expr
     ))
 
     followup_id = cursor.lastrowid
@@ -8474,6 +8458,7 @@ def patient_followups(patient_id):
             'amount': lab_expense
         })
 
+    _recompute_followup_balances(cursor, patient_id)
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -8489,7 +8474,19 @@ def followup_detail(patient_id, followup_id):
             'UPDATE patient_followups SET is_deleted = 1 WHERE id = ? AND patient_id = ?',
             (followup_id, patient_id)
         )
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Follow-up not found'}), 404
+        # Auto-created lab expense (if any) for this entry should go too.
+        cursor.execute(
+            "SELECT id FROM expenses WHERE source_type = 'followup' AND reference_id = ?",
+            (followup_id,)
+        )
+        for (exp_id,) in cursor.fetchall():
+            cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
+            record_tombstone(cursor, 'expenses', exp_id)
         append_audit_log(cursor, 'delete', 'patient_followup', followup_id, {'patient_id': patient_id})
+        _recompute_followup_balances(cursor, patient_id)
         conn.commit()
         conn.close()
         return jsonify({'success': True})
@@ -8521,31 +8518,56 @@ def followup_detail(patient_id, followup_id):
     # Recompute clinic profit server-side: price − discount − lab cost.
     clinic_profit = price - discount - lab_expense
 
-    cursor.execute('''
-        SELECT COALESCE(SUM(price), 0), COALESCE(SUM(COALESCE(discount,0)), 0), COALESCE(SUM(payment), 0)
-        FROM patient_followups
-        WHERE patient_id = ? AND (is_deleted IS NULL OR is_deleted != 1) AND id != ?
-    ''', (patient_id, followup_id))
-    prev = cursor.fetchone() or (0, 0, 0)
-    previous_balance = max(float(prev[0]) - float(prev[1]) - float(prev[2]), 0)
-    remaining_amount = max(previous_balance + price - discount - payment, 0)
+    price_expr = sanitize_amount_expr(data.get('price_expr'), price)
+    discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount)
+    payment_expr = sanitize_amount_expr(data.get('payment_expr'), payment)
+    lab_expense_expr = sanitize_amount_expr(data.get('lab_expense_expr'), lab_expense)
 
+    treatment_procedure = data.get('treatment_procedure')
+    # remaining_amount is rewritten by _recompute_followup_balances below; store a placeholder.
     cursor.execute('''
         UPDATE patient_followups
         SET followup_date = ?, treatment_procedure = ?, price = ?, discount = ?, lab_expense = ?,
-            clinic_profit = ?, payment = ?, remaining_amount = ?, notes = ?
+            clinic_profit = ?, payment = ?, notes = ?,
+            price_expr = ?, discount_expr = ?, lab_expense_expr = ?, payment_expr = ?
         WHERE id = ? AND patient_id = ?
     ''', (
-        parsed_date, data.get('treatment_procedure'), price, discount, lab_expense,
-        clinic_profit, payment, remaining_amount, data.get('notes'),
+        parsed_date, treatment_procedure, price, discount, lab_expense,
+        clinic_profit, payment, data.get('notes'),
+        price_expr, discount_expr, lab_expense_expr, payment_expr,
         followup_id, patient_id
     ))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Follow-up not found'}), 404
+
+    # Keep the auto-created lab expense in sync with the edited entry.
+    cursor.execute("SELECT id FROM expenses WHERE source_type = 'followup' AND reference_id = ?", (followup_id,))
+    for (exp_id,) in cursor.fetchall():
+        cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
+        record_tombstone(cursor, 'expenses', exp_id)
+    if lab_expense > 0:
+        cursor.execute('SELECT first_name, last_name FROM patients WHERE id = ?', (patient_id,))
+        prow = cursor.fetchone()
+        pname = f"{prow['first_name']} {prow['last_name']}".strip() if prow else ''
+        cursor.execute('''
+            INSERT INTO expenses (
+                category, amount, expense_date, vendor, notes,
+                payment_status, patient_id, source_type, reference_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            treatment_procedure or 'Lab', lab_expense, parsed_date, pname,
+            f"Auto from follow-up: {pname} - {treatment_procedure or ''}",
+            'postponed', patient_id, 'followup', followup_id
+        ))
+
     append_audit_log(cursor, 'update', 'patient_followup', followup_id, {
         'patient_id': patient_id,
-        'treatment_procedure': data.get('treatment_procedure'),
+        'treatment_procedure': treatment_procedure,
         'price': price,
         'payment': payment,
     })
+    _recompute_followup_balances(cursor, patient_id)
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -8669,7 +8691,7 @@ def update_appointment_status(appointment_id):
     cursor = conn.cursor()
     data = request.get_json(silent=True) or {}
     status = str(data.get('status') or '').strip().lower()
-    if status not in {'scheduled', 'completed', 'cancelled', 'no_show'}:
+    if status not in {'scheduled', 'confirmed', 'completed', 'cancelled'}:
         conn.close()
         return jsonify({'error': 'Invalid appointment status'}), 400
     cursor.execute('UPDATE appointments SET status = ? WHERE id = ?', (status, appointment_id))
@@ -8862,15 +8884,15 @@ def reports_summary():
 
     # Reports revenue source matches dashboard: patient follow-up payments only.
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE 1=1{clause}', params)
+    cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
     revenue = cursor.fetchone()[0]
 
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE 1=1{clause}', params)
+    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
     lab_expenses = cursor.fetchone()[0]
 
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE 1=1{clause}', params)
+    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
     clinic_gross_profit = cursor.fetchone()[0]
 
     clause, params = build_date_clause('expense_date', start_date, end_date)
@@ -8944,13 +8966,13 @@ def reports_weekly():
     ''', (start_str, end_str))
     follow_ups_count = cursor.fetchone()[0] or 0
 
-    cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     revenue = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute('SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     lab_expenses = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute('SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     clinic_gross_profit = cursor.fetchone()[0]
 
     cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
@@ -9076,7 +9098,11 @@ def patient_invoice_summary(patient_id):
         conn.close()
         return jsonify({'error': 'Patient not found'}), 404
 
-    conditions = ['patient_id = ?']
+    # Make sure stored running balances are current before the statement is built.
+    _recompute_followup_balances(cursor, patient_id)
+    conn.commit()
+
+    conditions = ['patient_id = ?', 'COALESCE(is_deleted, 0) = 0']
     params = [patient_id]
     if start_date:
         conditions.append('date(followup_date) >= ?')
@@ -9088,7 +9114,8 @@ def patient_invoice_summary(patient_id):
 
     cursor.execute(f'''
         SELECT id, followup_date, treatment_procedure, tooth_no,
-               price, discount, lab_expense, clinic_profit, payment, remaining_amount, notes
+               price, discount, lab_expense, clinic_profit, payment, remaining_amount, notes,
+               price_expr, discount_expr, lab_expense_expr, payment_expr
         FROM patient_followups
         WHERE {where_clause}
         ORDER BY followup_date ASC, id ASC
@@ -9461,8 +9488,12 @@ def billing():
                 'invoice_number': row_data.get('invoice_number'),
                 'amount': row_data.get('amount'),
                 'subtotal': row_data.get('subtotal'),
+                'subtotal_expr': row_data.get('subtotal_expr'),
                 'discount': row_data.get('discount'),
+                'discount_expr': row_data.get('discount_expr'),
                 'paid_amount': row_data.get('paid_amount'),
+                'paid_amount_expr': row_data.get('paid_amount_expr'),
+                'credit_used': row_data.get('credit_used') or 0,
                 'balance_due': row_data.get('balance_due'),
                 'payment_method': row_data.get('payment_method'),
                 'payment_status': row_data.get('payment_status'),
@@ -9482,6 +9513,7 @@ def billing():
             subtotal = float(data.get('subtotal', data.get('amount', 0)))
             discount = float(data.get('discount', 0))
             paid_amount = float(data.get('paid_amount', 0))
+            credit_used = float(data.get('credit_used', 0) or 0)
         except (TypeError, ValueError):
             conn.close()
             return jsonify({'error': 'Invalid billing equation values'}), 400
@@ -9495,19 +9527,33 @@ def billing():
         if paid_amount < 0:
             conn.close()
             return jsonify({'error': 'Paid amount cannot be negative'}), 400
+        if credit_used < 0:
+            conn.close()
+            return jsonify({'error': 'Credit used cannot be negative'}), 400
+
+        # Don't let a payment draw more credit than the patient actually has.
+        if credit_used > 0:
+            available_credit = get_patient_credit_balance(cursor, int(data['patient_id']))
+            if credit_used > available_credit + 0.005:
+                conn.close()
+                return jsonify({'error': f'Patient only has ₪{available_credit:.2f} of credit available'}), 400
 
         total_amount = round(max(0.0, subtotal - discount), 2)
-        balance_due = round(max(0.0, total_amount - paid_amount), 2)
+        settled = paid_amount + credit_used   # cash + credit applied to this invoice
+        balance_due = round(max(0.0, total_amount - settled), 2)
 
-        if total_amount > 0 and paid_amount >= total_amount:
+        if total_amount > 0 and settled >= total_amount:
             payment_status = 'paid'
-        elif paid_amount > 0:
+        elif settled > 0:
             payment_status = 'partial'
         else:
             payment_status = 'pending'
 
         invoice_number = data.get('invoice_number') or generate_invoice_number()
-        
+        subtotal_expr = sanitize_amount_expr(data.get('subtotal_expr'), subtotal)
+        discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount)
+        paid_amount_expr = sanitize_amount_expr(data.get('paid_amount_expr'), paid_amount)
+
         # Parse payment date to ensure YYYY-MM-DD format
         payment_date = data.get('payment_date')
         if payment_date:
@@ -9516,14 +9562,15 @@ def billing():
                 conn.close()
                 return jsonify({'error': 'Invalid payment date format. Use DD/MM/YYYY.'}), 400
             payment_date = parsed_date
-        
+
         cursor.execute('''
             INSERT INTO billing (
                 patient_id, treatment_id, invoice_number, amount,
-                subtotal, discount, paid_amount, balance_due,
-                payment_method, payment_status, payment_date
+                subtotal, discount, paid_amount, credit_used, balance_due,
+                payment_method, payment_status, payment_date,
+                subtotal_expr, discount_expr, paid_amount_expr
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['patient_id'],
             data.get('treatment_id'),
@@ -9532,17 +9579,28 @@ def billing():
             subtotal,
             discount,
             paid_amount,
+            round(credit_used, 2),
             balance_due,
             data.get('payment_method'),
             payment_status,
-            payment_date
+            payment_date,
+            subtotal_expr,
+            discount_expr,
+            paid_amount_expr
         ))
-        append_audit_log(cursor, 'create', 'billing', cursor.lastrowid, {
+        billing_id = cursor.lastrowid
+        if credit_used > 0:
+            cursor.execute(
+                'INSERT INTO patient_credit_transactions (patient_id, amount, type, note, invoice_id) VALUES (?, ?, ?, ?, ?)',
+                (int(data['patient_id']), -round(credit_used, 2), 'debit', f'Applied to invoice {invoice_number}', billing_id)
+            )
+        append_audit_log(cursor, 'create', 'billing', billing_id, {
             'patient_id': data.get('patient_id'),
             'invoice_number': invoice_number,
             'subtotal': subtotal,
             'discount': discount,
             'paid_amount': paid_amount,
+            'credit_used': round(credit_used, 2),
             'amount': total_amount,
             'balance_due': balance_due,
             'payment_status': payment_status
@@ -9555,6 +9613,8 @@ def billing():
 def delete_billing(billing_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Reverse any credit that this invoice consumed before removing it.
+    cursor.execute('DELETE FROM patient_credit_transactions WHERE invoice_id = ?', (billing_id,))
     cursor.execute('DELETE FROM billing WHERE id = ?', (billing_id,))
     record_tombstone(cursor, 'billing', billing_id)
     append_audit_log(cursor, 'delete', 'billing', billing_id, {'id': billing_id})
@@ -9591,13 +9651,13 @@ def billing_invoice(billing_id):
         'en': {
             'title': 'Invoice', 'patient': 'Patient', 'invoice_no': 'Invoice #',
             'date': 'Date', 'subtotal': 'Subtotal', 'discount': 'Discount',
-            'total': 'Total', 'paid': 'Paid', 'balance': 'Balance Due',
+            'total': 'Total', 'paid': 'Paid', 'balance': 'Amount to Pay',
             'method': 'Payment Method', 'status': 'Status', 'clinic': 'Dr. Wasfy Barzaq Dental Clinic'
         },
         'ar': {
             'title': 'فاتورة', 'patient': 'المريض', 'invoice_no': 'رقم الفاتورة',
             'date': 'التاريخ', 'subtotal': 'الإجمالي قبل الخصم', 'discount': 'الخصم',
-            'total': 'الإجمالي', 'paid': 'المدفوع', 'balance': 'الرصيد المستحق',
+            'total': 'الإجمالي', 'paid': 'المدفوع', 'balance': 'المبلغ المطلوب',
             'method': 'طريقة الدفع', 'status': 'الحالة', 'clinic': 'عيادة د. وصفي برزق للأسنان'
         }
     }
@@ -9616,6 +9676,13 @@ def billing_invoice(billing_id):
     inv_date = escape(b.get("payment_date") or b.get("created_at") or "—")
     pay_method = escape(b.get("payment_method") or "—")
     pay_status = escape(b.get("payment_status") or "—")
+
+    def amt_cell(value, expr=None):
+        # Show the verbatim expression the user typed (e.g. "20+20") when there is one.
+        expr = sanitize_amount_expr(expr, value)
+        if expr:
+            return f'{escape(expr)} = {currency} {float(value or 0):.2f}'
+        return f'{currency} {float(value or 0):.2f}'
 
     html = f'''<!DOCTYPE html>
 <html lang="{lang}" dir="{direction}">
@@ -9650,10 +9717,10 @@ def billing_invoice(billing_id):
   <tr><th>{lbl["date"]}</th><td>{inv_date}</td></tr>
   <tr><th>{lbl["method"]}</th><td>{pay_method}</td></tr>
   <tr><th>{lbl["status"]}</th><td>{pay_status}</td></tr>
-  <tr><th>{lbl["subtotal"]}</th><td>{currency} {float(b.get("subtotal") or 0):.2f}</td></tr>
-  <tr><th>{lbl["discount"]}</th><td>{currency} {float(b.get("discount") or 0):.2f}</td></tr>
+  <tr><th>{lbl["subtotal"]}</th><td>{amt_cell(b.get("subtotal"), b.get("subtotal_expr"))}</td></tr>
+  <tr><th>{lbl["discount"]}</th><td>{amt_cell(b.get("discount"), b.get("discount_expr"))}</td></tr>
   <tr class="total-row"><th>{lbl["total"]}</th><td>{currency} {float(b.get("amount") or 0):.2f}</td></tr>
-  <tr><th>{lbl["paid"]}</th><td>{currency} {float(b.get("paid_amount") or 0):.2f}</td></tr>
+  <tr><th>{lbl["paid"]}</th><td>{amt_cell(b.get("paid_amount"), b.get("paid_amount_expr"))}</td></tr>
   <tr class="total-row"><th>{lbl["balance"]}</th><td>{currency} {float(b.get("balance_due") or 0):.2f}</td></tr>
 </table>
 <script>window.onload = function() {{ window.print(); }}</script>
@@ -10350,62 +10417,11 @@ def update_patient(patient_id):
     return jsonify({'success': True})
 
 
-@app.route('/api/treatment-catalog', methods=['GET', 'POST'])
-def treatment_catalog_collection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    if request.method == 'GET':
-        include_inactive = str(request.args.get('include_inactive', '0')).strip() in ('1', 'true')
-        if include_inactive:
-            cursor.execute('SELECT * FROM treatment_catalog ORDER BY name_ar')
-        else:
-            cursor.execute('SELECT * FROM treatment_catalog WHERE is_active = 1 ORDER BY name_ar')
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
-        return jsonify(rows)
-    data = request.json or {}
-    name_ar = str(data.get('name_ar') or '').strip()
-    if not name_ar:
-        conn.close()
-        return jsonify({'error': 'name_ar is required'}), 400
-    cursor.execute('INSERT INTO treatment_catalog (name_ar, name_en, default_price) VALUES (?, ?, ?)',
-                   (name_ar, str(data.get('name_en') or ''), float(data.get('default_price') or 0)))
-    new_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'id': new_id})
-
-
-@app.route('/api/treatment-catalog/<int:catalog_id>', methods=['PUT', 'DELETE'])
-def treatment_catalog_item(catalog_id):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    if request.method == 'DELETE':
-        cursor.execute('UPDATE treatment_catalog SET is_active = 0 WHERE id = ?', (catalog_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True})
-    data = request.json or {}
-    fields, values = [], []
-    for col in ('name_ar', 'name_en', 'default_price', 'is_active'):
-        if col in data:
-            fields.append(f'{col} = ?')
-            values.append(data[col])
-    if fields:
-        values.append(catalog_id)
-        conn.execute(f'UPDATE treatment_catalog SET {", ".join(fields)} WHERE id = ?', values)
-        conn.commit()
-    conn.close()
-    return jsonify({'success': True})
-
-
 @app.route('/api/patients/<int:patient_id>/credit', methods=['GET'])
 def patient_credit(patient_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM patient_credit_transactions WHERE patient_id = ?', (patient_id,))
-    balance = float(cursor.fetchone()[0] or 0)
+    balance = get_patient_credit_balance(cursor, patient_id)
     cursor.execute('SELECT * FROM patient_credit_transactions WHERE patient_id = ? ORDER BY id DESC', (patient_id,))
     rows = [list(r) for r in cursor.fetchall()]
     conn.close()
@@ -10419,8 +10435,9 @@ def patient_credit_adjustment(patient_id):
     note = str(data.get('note') or 'Manual adjustment')
     conn = get_db_connection()
     cursor = conn.cursor()
+    # Store the signed amount so SUM(amount) is the running balance directly.
     cursor.execute('INSERT INTO patient_credit_transactions (patient_id, amount, type, note) VALUES (?, ?, ?, ?)',
-                 (patient_id, abs(amount), 'credit' if amount >= 0 else 'debit', note))
+                 (patient_id, amount, 'credit' if amount >= 0 else 'debit', note))
     conn.commit()
     conn.close()
     return jsonify({'success': True})

@@ -1,30 +1,55 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'clinic_api.dart';
+import 'cloud_sync_service.dart';
 import 'internet_sync_service.dart';
 import 'bluetooth_sync_service.dart';
+import 'local_storage_service.dart';
 
 enum SyncStatus { idle, syncing, synced, offline, error }
 
+/// Orchestrates sync against the best available link in this order:
+///   1. LAN / local server  (`X-Device-Token` auth, if a local URL is configured)
+///   2. Cloud node          (`X-Clinic-Token` auth, if a cloud account is paired)
+///   3. Bluetooth fallback  (peer-to-peer, when offline)
+///
+/// Before each internet sync we re-point [ClinicApi] at whichever target is
+/// reachable, so the same [InternetSyncService] code works for both.
 class ConnectivitySyncService {
+  ConnectivitySyncService({
+    required InternetSyncService internet,
+    required BluetoothSyncService bluetooth,
+    required LocalStorageService storage,
+    required ClinicApi api,
+    CloudSyncService? cloud,
+  })  : _internet = internet,
+        _bluetooth = bluetooth,
+        _storage = storage,
+        _api = api,
+        _cloud = cloud ?? CloudSyncService() {
+    _connectivitySub =
+        Connectivity().onConnectivityChanged.listen(_onConnectivityChanged);
+  }
+
   final InternetSyncService _internet;
   final BluetoothSyncService _bluetooth;
+  final LocalStorageService _storage;
+  final ClinicApi _api;
+  final CloudSyncService _cloud;
 
   SyncStatus _status = SyncStatus.idle;
   String? _statusMessage;
+  SyncLink _activeLink = SyncLink.none;
   bool _hasSyncedOnce = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   final _statusController = StreamController<SyncStatus>.broadcast();
 
-  ConnectivitySyncService(this._internet, this._bluetooth) {
-    _connectivitySub = Connectivity()
-        .onConnectivityChanged
-        .listen(_onConnectivityChanged);
-  }
-
   Stream<SyncStatus> get statusStream => _statusController.stream;
   SyncStatus get status => _status;
   String? get statusMessage => _statusMessage;
+  SyncLink get activeLink => _activeLink;
+  bool get hasSyncedOnce => _hasSyncedOnce;
 
   void _emit(SyncStatus s, [String? msg]) {
     _status = s;
@@ -35,10 +60,10 @@ class ConnectivitySyncService {
   Future<void> _onConnectivityChanged(List<ConnectivityResult> results) async {
     final hasNet = results.any((r) =>
         r == ConnectivityResult.wifi || r == ConnectivityResult.mobile);
-
     if (hasNet) {
       await syncNow();
     } else {
+      _activeLink = SyncLink.none;
       _emit(SyncStatus.offline, 'Offline — use Bluetooth to sync');
     }
   }
@@ -47,11 +72,70 @@ class ConnectivitySyncService {
     if (_status == SyncStatus.syncing) return;
     _emit(SyncStatus.syncing, 'Syncing…');
     try {
+      final link = await _configureBestTarget();
+      if (link == null) {
+        _activeLink = SyncLink.none;
+        _emit(SyncStatus.offline,
+            'No clinic server is reachable — use Bluetooth to sync');
+        return;
+      }
+      _activeLink = link;
       await _internet.syncAll();
       _hasSyncedOnce = true;
-      _emit(SyncStatus.synced, 'Synced');
-    } catch (e) {
+      _emit(SyncStatus.synced, 'Synced · ${_linkLabel(link)}');
+    } catch (_) {
       _emit(SyncStatus.error, 'Sync failed');
+    }
+  }
+
+  /// Picks the best internet target and points [ClinicApi] at it.
+  /// Returns the link that was configured, or `null` if nothing is reachable.
+  Future<SyncLink?> _configureBestTarget() async {
+    // 1) LAN / local server — paired devices use a device token here.
+    final localUrl = await _storage.getLocalUrl();
+    final deviceToken = await _storage.getDeviceToken();
+    if (localUrl != null &&
+        localUrl.isNotEmpty &&
+        deviceToken != null &&
+        deviceToken.isNotEmpty &&
+        await _cloud.isReachable(localUrl)) {
+      _api.configure(
+        baseUrl: localUrl,
+        deviceToken: deviceToken,
+        clinicToken: null,
+        link: SyncLink.localWifi,
+      );
+      return SyncLink.localWifi;
+    }
+    // 2) Cloud node — the clinic token both authenticates and selects the tenant.
+    final cloudUrl = await _storage.getCloudUrl();
+    final clinicToken = await _storage.getCloudClinicToken();
+    if (cloudUrl != null &&
+        cloudUrl.isNotEmpty &&
+        clinicToken != null &&
+        clinicToken.isNotEmpty &&
+        await _cloud.isReachable(cloudUrl, clinicToken: clinicToken)) {
+      _api.configure(
+        baseUrl: cloudUrl,
+        deviceToken: null,
+        clinicToken: clinicToken,
+        link: SyncLink.cloud,
+      );
+      return SyncLink.cloud;
+    }
+    return null;
+  }
+
+  String _linkLabel(SyncLink link) {
+    switch (link) {
+      case SyncLink.localWifi:
+        return 'Local Wi-Fi';
+      case SyncLink.cloud:
+        return 'Cloud';
+      case SyncLink.bluetooth:
+        return 'Bluetooth';
+      case SyncLink.none:
+        return '—';
     }
   }
 
@@ -59,8 +143,10 @@ class ConnectivitySyncService {
     _emit(SyncStatus.syncing, 'Bluetooth sync…');
     final ok = await _bluetooth.scanAndSync();
     if (ok) {
-      _emit(SyncStatus.synced, 'Synced via Bluetooth');
+      _activeLink = SyncLink.bluetooth;
+      _emit(SyncStatus.synced, 'Synced · Bluetooth');
     } else {
+      _activeLink = SyncLink.none;
       _emit(SyncStatus.error,
           _bluetooth.lastError ?? 'Bluetooth sync failed');
     }
@@ -68,8 +154,6 @@ class ConnectivitySyncService {
   }
 
   Future<String?> getLastSyncTime() => _internet.getLastSyncTime();
-
-  bool get hasSyncedOnce => _hasSyncedOnce;
 
   void dispose() {
     _connectivitySub?.cancel();

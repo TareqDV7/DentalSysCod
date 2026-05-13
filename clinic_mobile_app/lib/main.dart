@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'theme/clinic_brand.dart';
 import 'state/app_state.dart';
 import 'screens/home_screen.dart';
+import 'screens/settings_screen.dart';
 import 'services/local_storage_service.dart';
 
 void main() {
@@ -45,6 +46,9 @@ class _ClinicMobileAppState extends State<ClinicMobileApp> {
           darkTheme: ClinicBrand.buildTheme(dark: true),
           themeMode: state.themeMode,
           home: const AppEntry(),
+          routes: {
+            '/settings': (_) => const SettingsScreen(),
+          },
         ),
       ),
     );

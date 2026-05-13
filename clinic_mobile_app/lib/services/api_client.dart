@@ -31,13 +31,14 @@ class ApiClient {
     required String baseUrl,
     required String path,
     String? deviceToken,
+    String? clinicToken,
     Map<String, dynamic>? queryParameters,
   }) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         '${AppConfig.normalizeBaseUrl(baseUrl)}$path',
         queryParameters: queryParameters,
-        options: _options(deviceToken),
+        options: _options(deviceToken, clinicToken),
       );
       return response.data ?? <String, dynamic>{};
     } on DioException catch (error) {
@@ -49,6 +50,7 @@ class ApiClient {
     required String baseUrl,
     required String path,
     String? deviceToken,
+    String? clinicToken,
     Map<String, dynamic>? body,
     Map<String, dynamic>? queryParameters,
   }) async {
@@ -57,7 +59,7 @@ class ApiClient {
         '${AppConfig.normalizeBaseUrl(baseUrl)}$path',
         data: body,
         queryParameters: queryParameters,
-        options: _options(deviceToken),
+        options: _options(deviceToken, clinicToken),
       );
       return response.data ?? <String, dynamic>{};
     } on DioException catch (error) {
@@ -69,6 +71,7 @@ class ApiClient {
     required String baseUrl,
     required String path,
     String? deviceToken,
+    String? clinicToken,
     Map<String, dynamic>? body,
     Map<String, dynamic>? queryParameters,
   }) async {
@@ -77,7 +80,7 @@ class ApiClient {
         '${AppConfig.normalizeBaseUrl(baseUrl)}$path',
         data: body,
         queryParameters: queryParameters,
-        options: _options(deviceToken),
+        options: _options(deviceToken, clinicToken),
       );
       return response.data ?? <String, dynamic>{};
     } on DioException catch (error) {
@@ -89,22 +92,26 @@ class ApiClient {
     required String baseUrl,
     required String path,
     String? deviceToken,
+    String? clinicToken,
     Map<String, dynamic>? queryParameters,
   }) async {
     try {
       await _dio.delete<Map<String, dynamic>>(
         '${AppConfig.normalizeBaseUrl(baseUrl)}$path',
         queryParameters: queryParameters,
-        options: _options(deviceToken),
+        options: _options(deviceToken, clinicToken),
       );
     } on DioException catch (error) {
       throw _toApiException(error);
     }
   }
 
-  Options _options(String? deviceToken) {
+  Options _options(String? deviceToken, [String? clinicToken]) {
     final headers = <String, String>{'Content-Type': 'application/json'};
-    if (deviceToken != null && deviceToken.isNotEmpty) {
+    if (clinicToken != null && clinicToken.isNotEmpty) {
+      // Cloud node: the clinic token both authenticates and selects the tenant DB.
+      headers['X-Clinic-Token'] = clinicToken;
+    } else if (deviceToken != null && deviceToken.isNotEmpty) {
       headers['X-Device-Token'] = deviceToken;
     }
     return Options(headers: headers);

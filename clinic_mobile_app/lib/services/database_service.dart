@@ -18,7 +18,38 @@ class DatabaseService {
 
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
-    return openDatabase(path, version: 1, onCreate: _onCreate);
+    return openDatabase(path,
+        version: 2, onCreate: _onCreate, onUpgrade: _onUpgrade);
+  }
+
+  /// Maps a local table name to the server-side ("remote") table name it syncs to.
+  static const Map<String, String> localToRemoteTable = {
+    'patients': 'patients',
+    'appointments': 'appointments',
+    'visits': 'visits',
+    'billing_records': 'billing',
+    'expenses': 'expenses',
+    'treatment_procedures': 'treatment_procedures',
+  };
+  static final Map<String, String> remoteToLocalTable = {
+    for (final e in localToRemoteTable.entries) e.value: e.key,
+  };
+
+  static const String _createTombstones = '''
+    CREATE TABLE IF NOT EXISTS sync_tombstones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      table_name TEXT NOT NULL,
+      row_id INTEGER NOT NULL,
+      deleted_at TEXT NOT NULL,
+      is_synced INTEGER DEFAULT 0,
+      UNIQUE(table_name, row_id)
+    )
+  ''';
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(_createTombstones);
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -117,6 +148,8 @@ class DatabaseService {
         value TEXT
       )
     ''');
+
+    await db.execute(_createTombstones);
   }
 
   // ── Patients ──────────────────────────────────────────────────────────────
@@ -163,6 +196,7 @@ class DatabaseService {
   Future<void> deletePatient(int id) async {
     final db = await database;
     await db.delete('patients', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('patients', id);
   }
 
   // ── Appointments ──────────────────────────────────────────────────────────
@@ -235,6 +269,7 @@ class DatabaseService {
   Future<void> deleteAppointment(int id) async {
     final db = await database;
     await db.delete('appointments', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('appointments', id);
   }
 
   // ── Visits ────────────────────────────────────────────────────────────────
@@ -266,6 +301,7 @@ class DatabaseService {
   Future<void> deleteVisit(int id) async {
     final db = await database;
     await db.delete('visits', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('visits', id);
   }
 
   // ── Billing ───────────────────────────────────────────────────────────────
@@ -359,6 +395,7 @@ class DatabaseService {
   Future<void> deleteExpense(int id) async {
     final db = await database;
     await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('expenses', id);
   }
 
   // ── Treatment Procedures ──────────────────────────────────────────────────
@@ -436,5 +473,49 @@ class DatabaseService {
     final db = await database;
     await db.insert('sync_meta', {'key': key, 'value': value},
         conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  // ── Tombstones (deletion propagation) ─────────────────────────────────────
+
+  /// Record that a row was deleted locally so the deletion can be synced.
+  /// [localTable] is a local table name; it's stored under the server-side name.
+  Future<void> recordTombstone(String localTable, int rowId) async {
+    final remote = localToRemoteTable[localTable] ?? localTable;
+    final db = await database;
+    await db.insert(
+      'sync_tombstones',
+      {
+        'table_name': remote,
+        'row_id': rowId,
+        'deleted_at': DateTime.now().toUtc().toIso8601String(),
+        'is_synced': 0,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Tombstones not yet pushed, shaped for `/api/sync/import` (`{table_name,row_id,deleted_at}`).
+  Future<List<Map<String, dynamic>>> getUnsyncedTombstones() async {
+    final db = await database;
+    final rows = await db.query('sync_tombstones',
+        columns: ['table_name', 'row_id', 'deleted_at'], where: 'is_synced = 0');
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  Future<void> markAllTombstonesSynced() async {
+    final db = await database;
+    await db.update('sync_tombstones', {'is_synced': 1}, where: 'is_synced = 0');
+  }
+
+  /// Apply a tombstone received from the server: delete the matching local row
+  /// (and forget any local tombstone for it). [remoteTable] is a server-side name.
+  Future<void> applyTombstone(String remoteTable, int rowId) async {
+    final localTable = remoteToLocalTable[remoteTable];
+    final db = await database;
+    if (localTable != null) {
+      await db.delete(localTable, where: 'id = ?', whereArgs: [rowId]);
+    }
+    await db.delete('sync_tombstones',
+        where: 'table_name = ? AND row_id = ?', whereArgs: [remoteTable, rowId]);
   }
 }

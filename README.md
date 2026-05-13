@@ -27,7 +27,7 @@ A self-contained dental clinic management platform with a Flask web portal and a
 
 **Backend** — `dental_clinic.py`: single Python file, auto-installs its own dependencies, initialises a SQLite database, and serves both a full web portal and a REST API on `http://0.0.0.0:5000`. The clinic's staff always use their **local** server (works offline); set `CLINIC_CLOUD_MODE=1` (Docker deployment) to run the same file as the shared **cloud node** instead — see [`DEPLOY_CLOUD.md`](DEPLOY_CLOUD.md).
 
-**Mobile** — `clinic_mobile_app/`: Flutter app that keeps its own local SQLite database, writes locally first, then pushes/pulls from the server. Works fully offline; syncs when connectivity returns.
+**Mobile** — `clinic_mobile_app/`: Flutter app that keeps its own local SQLite database, writes locally first, then pushes/pulls from the server. Works fully offline; syncs when connectivity returns. Each sync picks the best available link in order: **LAN local server → cloud node → Bluetooth**. The app reaches the cloud node directly via a clinic token (paired from Settings → Cloud Account), so a phone stays in sync with the clinic's data even when it's off the clinic Wi-Fi.
 
 ---
 
@@ -143,9 +143,10 @@ class AppBranding {
 - Add, edit, and delete patients with full profile (name, DOB, phone, email, address, medical history)
 - Date of birth picker with Day / Month / Year dropdowns
 - Duplicate detection — warns on matching name or phone number before saving, without blocking
-- Follow-up sheet per patient: treatment procedure, tooth number, price, **discount**, lab expense, **clinic profit** (= price − discount − lab expense), payment, running balance. The *Add Entry* date uses Day / Month / Year dropdowns; editing an entry closes the patient window and opens the edit window on its own (Save / Cancel return to the patient profile)
-- Running balance correctly accounts for discounts in cumulative calculation
-- Patient credit balance tracking
+- Follow-up sheet per patient: treatment procedure, tooth number, price, **discount**, lab expense, **clinic profit** (= price − discount − lab expense), payment, **Amount to Pay** (the running ledger balance). The *Add Entry* date uses Day / Month / Year dropdowns; editing an entry closes the patient window and opens the edit window on its own (Save / Cancel return to the patient profile)
+- The "Amount to Pay" column is the true running balance — `Σ (price − discount − payment)` walked in date order — recomputed on the server every time the sheet is read and rewritten after any add / edit / delete, so editing or removing an earlier entry (or adding one out of date order) keeps every later row correct. Deleting a follow-up also removes its auto-created lab expense.
+- **Patient credit balance** — money the clinic is holding *for* the patient. It's the overpayment on the follow-up ledger (`Σ payment − Σ (price − discount)`, when positive) plus any manual credit adjustments. Shown on the patient profile, and a payment record's *Credit Used* field draws it down (the form shows how much is available, and the amount can't exceed it).
+- **Amount fields keep your expression** — any money field (price / discount / lab / payment on the follow-up sheet, subtotal / discount / paid on a payment record) accepts an arithmetic expression like `20+20`; the number is used for all maths but the expression is stored and shown verbatim on the sheet and on the printed invoice (e.g. `20+20 = ₪ 40.00`).
 - Medical image uploads (X-rays, photos)
 
 ### Appointments
@@ -156,10 +157,10 @@ class AppBranding {
 
 ### Financial
 - **Expenses**: categorised clinic expenses with paid / postponed status; negative amounts rejected
-- **Summary / weekly / range reports**: revenue, expenses (paid + postponed), profit, clinic gross profit, lab expenses, patient count for any date range; no duplicate response keys. Every report also shows a **current "Outstanding Balances" table** — what each patient still owes (gross billed, paid, left, last visit, overdue days) — plus an *Unpaid by Patients* total
-- **Receivables report**: outstanding balances per patient, correctly subtracting discounts from what is owed
+- **Summary / weekly / range reports**: revenue (= follow-up payments collected), expenses (paid + postponed), profit (= revenue − expenses), clinic gross profit (= Σ price − discount − lab), lab expenses, patient count for any date range — all scoped to non-deleted follow-ups. Every report also shows a **current "Amounts Still Owed" table** — what each patient still owes (net billed = price − discount, paid, left, last visit, overdue days) — plus an *Unpaid by Patients* total
+- **Receivables report**: amount still owed per patient, with discounts subtracted from what is owed
 - **Patient statement / invoice**: built straight from the patient's follow-up sheet — one row per entry (date, procedure, price, **discount**, payment, running balance), with totals = subtotal, discount, total to pay (price − discount), paid, and what's left. The printable invoice (EN/AR) carries the same breakdown
-- Billing / payment records with discount and balance due; payment method is a **Cash / Card / Transfer dropdown**
+- Billing / payment records with discount and balance due; payment method is a **Cash / Card / Transfer dropdown**. Every patient picker (payments, statement, appointments) has a **search box** above it that filters the list by name or phone, so it stays usable with a large patient roster
 
 > The dashboard's "Today's Revenue" and "Today's Visits" cards count *today's* follow-up payments and entries (visits are recorded on the follow-up sheet, not the legacy `visits` table). `Clinic profit = price − discount − lab expense`; lab expense is also auto-recorded as a postponed expense, so don't add the two together.
 
@@ -311,9 +312,8 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 | POST | `/api/visits/from-appointment/<id>` | Convert appointment to visit |
 | GET / POST | `/api/treatments` | Treatments on a visit |
 | DELETE | `/api/treatments/<id>` | Remove treatment |
-| GET / POST | `/api/treatment-procedures` | Procedure catalog |
+| GET / POST | `/api/treatment-procedures` | Procedure catalog (list / create) |
 | PUT | `/api/treatment-procedures/<id>` | Update procedure |
-| GET / POST | `/api/treatment-catalog` | Treatment catalog (alias) |
 | GET / POST | `/api/treatment-plans` | Treatment plans |
 | PUT / DELETE | `/api/treatment-plans/<id>` | Manage plan |
 

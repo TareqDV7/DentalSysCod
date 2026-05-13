@@ -11,6 +11,9 @@ class LocalStorageService {
   static const _lastSuccessfulUrlKey = 'last_successful_url';
   static const _serialNumberKey = 'serial_number';
   static const _clinicNameKey = 'clinic_name';
+  static const _cloudUrlKey = 'cloud_url';
+  static const _cloudClinicTokenKey = 'cloud_clinic_token';
+  static const _cloudClinicIdKey = 'cloud_clinic_id';
 
   Future<String> getOrCreateDeviceId() async {
     final existing = await _storage.read(key: _deviceIdKey);
@@ -75,4 +78,34 @@ class LocalStorageService {
       _storage.write(key: _clinicNameKey, value: value);
 
   Future<String?> getClinicName() => _storage.read(key: _clinicNameKey);
+
+  // ── Cloud account (links this device to a clinic on the shared cloud node) ──
+
+  Future<void> setCloudAccount({
+    required String cloudUrl,
+    required String clinicToken,
+    int? clinicId,
+  }) async {
+    await _storage.write(key: _cloudUrlKey, value: cloudUrl);
+    await _storage.write(key: _cloudClinicTokenKey, value: clinicToken);
+    if (clinicId != null) {
+      await _storage.write(key: _cloudClinicIdKey, value: clinicId.toString());
+    }
+  }
+
+  Future<void> clearCloudAccount() async {
+    await _storage.delete(key: _cloudUrlKey);
+    await _storage.delete(key: _cloudClinicTokenKey);
+    await _storage.delete(key: _cloudClinicIdKey);
+  }
+
+  Future<String?> getCloudUrl() => _storage.read(key: _cloudUrlKey);
+
+  Future<String?> getCloudClinicToken() =>
+      _storage.read(key: _cloudClinicTokenKey);
+
+  Future<int?> getCloudClinicId() async {
+    final v = await _storage.read(key: _cloudClinicIdKey);
+    return v == null ? null : int.tryParse(v);
+  }
 }

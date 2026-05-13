@@ -54,7 +54,7 @@ class _MainScreenState extends State<MainScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('License: \${_serial.isNotEmpty ? _serial : 'Not activated'}'),
+            Text('License: ${_serial.isNotEmpty ? _serial : "Not activated"}'),
             const SizedBox(height: 12),
             const Text('Welcome to the Clinic App - main functionality goes here.'),
             const SizedBox(height: 20),

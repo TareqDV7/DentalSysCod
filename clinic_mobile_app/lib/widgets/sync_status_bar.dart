@@ -15,7 +15,7 @@ class SyncStatusBar extends StatelessWidget {
       initialData: sync.status,
       builder: (context, snapshot) {
         final status = snapshot.data ?? SyncStatus.idle;
-        if (status == SyncStatus.idle || status == SyncStatus.synced) {
+        if (status == SyncStatus.idle) {
           return const SizedBox.shrink();
         }
         final (bg, icon, msg) = _resolve(status, sync.statusMessage);
@@ -64,6 +64,12 @@ class SyncStatusBar extends StatelessWidget {
           const Color(0xFFD9434E),
           const Icon(Icons.sync_problem, color: Colors.white, size: 16),
           msg ?? 'Sync failed',
+        );
+      case SyncStatus.synced:
+        return (
+          const Color(0xFF1F9A5F),
+          const Icon(Icons.cloud_done_outlined, color: Colors.white, size: 16),
+          msg ?? 'Synced',
         );
       default:
         return (Colors.grey, const SizedBox.shrink(), '');

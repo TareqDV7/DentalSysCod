@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../state/app_state.dart';
+import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
+import '../services/cloud_sync_service.dart';
 import '../services/bluetooth_sync_service.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/clinic_card.dart';
@@ -17,22 +19,34 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _urlCtrl;
+  late TextEditingController _cloudUrlCtrl;
+  late TextEditingController _cloudSerialCtrl;
+  late TextEditingController _cloudClinicNameCtrl;
   bool _syncing = false;
   bool _btScanning = false;
+  bool _pairingCloud = false;
   String? _lastSync;
   String? _btStatus;
+  String? _cloudStatus;
 
   @override
   void initState() {
     super.initState();
     final state = context.read<AppState>();
     _urlCtrl = TextEditingController(text: state.api.baseUrl);
+    _cloudUrlCtrl = TextEditingController(
+        text: state.cloudUrl ?? CloudSyncService.defaultCloudUrl);
+    _cloudSerialCtrl = TextEditingController();
+    _cloudClinicNameCtrl = TextEditingController(text: state.clinicName);
     _loadLastSync();
   }
 
   @override
   void dispose() {
     _urlCtrl.dispose();
+    _cloudUrlCtrl.dispose();
+    _cloudSerialCtrl.dispose();
+    _cloudClinicNameCtrl.dispose();
     super.dispose();
   }
 
@@ -69,6 +83,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Server URL saved')));
     }
+  }
+
+  Future<void> _pairCloud() async {
+    final url = _cloudUrlCtrl.text.trim();
+    final serial = _cloudSerialCtrl.text.trim();
+    final name = _cloudClinicNameCtrl.text.trim();
+    if (url.isEmpty || serial.isEmpty || name.isEmpty) {
+      setState(() => _cloudStatus =
+          'Cloud URL, serial, and clinic name are all required.');
+      return;
+    }
+    setState(() {
+      _pairingCloud = true;
+      _cloudStatus = 'Pairing with cloud…';
+    });
+    try {
+      final info = await context
+          .read<AppState>()
+          .pairCloud(cloudUrl: url, serialNumber: serial, clinicName: name);
+      if (!mounted) return;
+      setState(() => _cloudStatus = info.alreadyRegistered
+          ? 'Re-linked to existing cloud account.'
+          : 'Cloud account created · clinic #${info.clinicId ?? '?'}.');
+      _cloudSerialCtrl.clear();
+      await _loadLastSync();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cloudStatus = 'Pairing failed: $e');
+    } finally {
+      if (mounted) setState(() => _pairingCloud = false);
+    }
+  }
+
+  Future<void> _unpairCloud() async {
+    await context.read<AppState>().unpairCloud();
+    if (!mounted) return;
+    setState(() => _cloudStatus = 'Unpaired from cloud.');
   }
 
   @override
@@ -142,6 +193,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 20),
 
+          // ── Cloud Account ──────────────────────────────────────────────
+          SectionHeader(title: 'Cloud Account'),
+          ClinicCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  state.hasCloudAccount
+                      ? 'Paired with ${state.cloudUrl ?? '—'}'
+                      : 'Add a cloud account to sync this device when off the clinic Wi-Fi.',
+                  style: TextStyle(
+                      color: scheme.onSurfaceVariant, fontSize: 13, height: 1.4),
+                ),
+                if (!state.hasCloudAccount) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _cloudUrlCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Cloud server URL',
+                      prefixIcon: Icon(Icons.cloud_outlined),
+                      hintText: 'https://app.dentacare.tech',
+                    ),
+                    keyboardType: TextInputType.url,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _cloudSerialCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Serial number',
+                      prefixIcon: Icon(Icons.confirmation_number_outlined),
+                      hintText: 'XXXX-XXXX-XXXX-XXXX',
+                    ),
+                    autocorrect: false,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _cloudClinicNameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Clinic name',
+                      prefixIcon: Icon(Icons.local_hospital_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  GradientButton(
+                    label: _pairingCloud ? 'Pairing…' : 'Pair with cloud',
+                    icon: Icons.cloud_sync_outlined,
+                    loading: _pairingCloud,
+                    onPressed: _pairingCloud ? null : _pairCloud,
+                    width: double.infinity,
+                  ),
+                ] else ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _unpairCloud,
+                    icon: const Icon(Icons.link_off),
+                    label: const Text('Unpair from cloud'),
+                  ),
+                ],
+                if (_cloudStatus != null) ...[
+                  const SizedBox(height: 8),
+                  Text(_cloudStatus!,
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                ],
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
           // ── Sync ──────────────────────────────────────────────────────��
           SectionHeader(title: 'Data Sync'),
           ClinicCard(
@@ -155,11 +276,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   builder: (context, snap) {
                     final status = snap.data ?? SyncStatus.idle;
                     final (icon, color, label) = _statusInfo(status);
+                    final linkLabel =
+                        _linkLabel(state.sync.activeLink);
+                    final fullLabel = (status == SyncStatus.synced &&
+                            linkLabel != null)
+                        ? '$label · $linkLabel'
+                        : label;
                     return Row(
                       children: [
                         Icon(icon, color: color, size: 18),
                         const SizedBox(width: 8),
-                        Text(label,
+                        Text(fullLabel,
                             style:
                                 TextStyle(color: color, fontWeight: FontWeight.w600)),
                       ],
@@ -349,6 +476,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       default:
         return (
             Icons.sync_outlined, const Color(0xFF627386), 'Ready to sync');
+    }
+  }
+
+  String? _linkLabel(SyncLink link) {
+    switch (link) {
+      case SyncLink.localWifi:
+        return 'Local Wi-Fi';
+      case SyncLink.cloud:
+        return 'Cloud';
+      case SyncLink.bluetooth:
+        return 'Bluetooth';
+      case SyncLink.none:
+        return null;
     }
   }
 }
