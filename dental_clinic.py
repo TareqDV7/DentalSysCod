@@ -10619,35 +10619,75 @@ except (TypeError, ValueError):
     BACKUP_INTERVAL_HOURS = 6.0
 
 
+def _list_databases_to_back_up():
+    """Return [(label, src_path, dest_subdir)] for the backup loop.
+
+    Single-tenant: one entry; snapshots land directly in BACKUP_DIR with the
+    historic ``dental_clinic_<stamp>.db`` name (no subfolder — preserves the
+    existing on-disk layout for installed clinics).
+    Cloud node (``CLINIC_CLOUD_MODE=1``): the master registry + one entry per
+    discovered ``clinic_<id>.db``, each in its own ``BACKUP_DIR/<label>/``
+    subfolder so retention is tracked per tenant."""
+    if CLOUD_MODE:
+        entries = [('master', MASTER_DB_PATH, BACKUP_DIR / 'master')]
+        for path in sorted(_DATA_DIR.glob('clinic_*.db')):
+            label = path.stem  # e.g. 'clinic_1'
+            entries.append((label, str(path), BACKUP_DIR / label))
+        return entries
+    return [('dental_clinic', str(DB_NAME), BACKUP_DIR)]
+
+
 def run_database_backup():
-    """Write a timestamped copy of the SQLite DB into the backups/ folder using
-    SQLite's online backup API (consistent and safe while the server is running,
-    including in WAL mode), then prune to the most recent BACKUP_RETENTION files.
-    Returns the backup path on success, or None on failure."""
+    """Snapshot every active database with SQLite's online backup API (consistent
+    and safe while the server is running, including in WAL mode), then prune each
+    target folder to the most recent BACKUP_RETENTION files. Returns the list of
+    snapshot paths written (empty on full failure). One failing DB doesn't abort
+    the others."""
+    written = []
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        dest_path = BACKUP_DIR / f'dental_clinic_{stamp}.db'
-        src = sqlite3.connect(DB_NAME)
+    except OSError as exc:
+        print(f'⚠️  Could not create backup dir {BACKUP_DIR}: {exc}')
+        return written
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    for label, src_path, subdir in _list_databases_to_back_up():
+        if not os.path.exists(src_path):
+            continue
         try:
-            dst = sqlite3.connect(str(dest_path))
+            subdir.mkdir(parents=True, exist_ok=True)
+            dest_path = subdir / f'{label}_{stamp}.db'
+        except OSError as exc:
+            print(f'⚠️  Database backup failed for {label}: {exc}')
+            continue
+        try:
+            src = sqlite3.connect(src_path)
             try:
-                with dst:
-                    src.backup(dst)
+                dst = sqlite3.connect(str(dest_path))
+                try:
+                    with dst:
+                        src.backup(dst)
+                finally:
+                    dst.close()
             finally:
-                dst.close()
-        finally:
-            src.close()
-        backups = sorted(BACKUP_DIR.glob('dental_clinic_*.db'))
-        for old in backups[:-BACKUP_RETENTION]:
+                src.close()
+        except Exception as exc:  # noqa: BLE001 — one tenant's failure mustn't kill the rest
+            print(f'⚠️  Database backup failed for {label}: {exc}')
+            # sqlite3.connect(dst) creates the file before the backup runs, so a
+            # failed src.backup() leaves a stub behind — clean it up so retention
+            # pruning doesn't keep it around as a "valid" snapshot.
+            try:
+                dest_path.unlink()
+            except OSError:
+                pass
+            continue
+        written.append(str(dest_path))
+        existing = sorted(subdir.glob(f'{label}_*.db'))
+        for old in existing[:-BACKUP_RETENTION]:
             try:
                 old.unlink()
             except OSError:
                 pass
-        return str(dest_path)
-    except Exception as exc:
-        print(f'⚠️  Database backup failed: {exc}')
-        return None
+    return written
 
 
 def _backup_loop():
@@ -10656,8 +10696,8 @@ def _backup_loop():
     import time
     time.sleep(8)
     while True:
-        path = run_database_backup()
-        if path:
+        paths = run_database_backup()
+        for path in paths:
             print(f'💾 Database backup written: {path}')
         time.sleep(max(0.1, BACKUP_INTERVAL_HOURS) * 3600)
 

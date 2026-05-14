@@ -18,8 +18,11 @@ ENV CLINIC_CLOUD_MODE=1 \
     CLINIC_DEBUG=0 \
     CLINIC_HOST=0.0.0.0 \
     CLINIC_PORT=5000 \
-    CLINIC_DATA_DIR=/data \
-    CLINIC_BACKUP_INTERVAL_HOURS=0
+    CLINIC_DATA_DIR=/data
+# Backups: rely on the default cadence (CLINIC_BACKUP_INTERVAL_HOURS=6,
+# CLINIC_BACKUP_RETENTION=20). The backup worker snapshots cloud_master.db plus
+# every discovered clinic_<id>.db into /data/backups/<label>/. Override either env
+# var here or in docker-compose to tune.
 
 EXPOSE 5000
 CMD ["python", "dental_clinic.py"]

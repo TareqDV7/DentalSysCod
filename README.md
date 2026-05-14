@@ -74,8 +74,10 @@ The SQLite database runs in **WAL mode** (set once in `init_database()`), so rea
 
 ### Backups
 
-- **Automatic** — in production runs, a background thread writes a timestamped copy of the database (via SQLite's online backup API, so it's a consistent snapshot taken without stopping the server) to a `backups/` folder next to the executable, shortly after startup and then every 6 hours. The most recent 20 copies are kept; older ones are pruned. Files are named `dental_clinic_YYYYMMDD_HHMMSS.db`. Restore by stopping the server, copying a backup over `dental_clinic.db`, and restarting.
-- **Manual** — the dashboard's **Download Backup** button (`GET /api/backup`, login required) downloads the current database on demand.
+- **Automatic** — in production runs, a background thread writes a timestamped copy of every active SQLite database (via SQLite's online backup API, so it's a consistent snapshot taken without stopping the server) to a `backups/` folder, shortly after startup and then every 6 hours. The most recent 20 copies are kept; older ones are pruned.
+  - **Local server** (single-tenant): one file per snapshot, written directly to `backups/dental_clinic_YYYYMMDD_HHMMSS.db`. Restore by stopping the server, copying a backup over `dental_clinic.db`, and restarting.
+  - **Cloud node** (`CLINIC_CLOUD_MODE=1`): one snapshot per tenant per cycle, written to `backups/<label>/<label>_YYYYMMDD_HHMMSS.db` — `backups/master/` for `cloud_master.db` and `backups/clinic_<id>/` for each clinic DB. Retention is tracked per subfolder, so a 20-cap and 6h cadence give ~5 days of recovery per clinic. Restore by copying a backup over the matching `clinic_<id>.db` (or `cloud_master.db`) inside the `dentacare-data` volume and restarting the stack. One tenant's failure (e.g. a corrupt clinic file) is logged and skipped without aborting the others.
+- **Manual** — the dashboard's **Download Backup** button (`GET /api/backup`, login required) downloads the current database on demand. (Local server only — the cloud node has no portal.)
 - Tune with env vars: `CLINIC_BACKUP_INTERVAL_HOURS` (default `6`; set `0` to disable the automatic loop), `CLINIC_BACKUP_RETENTION` (default `20`).
 
 Other env vars: `CLINIC_HOST` (default `127.0.0.1`; set to `0.0.0.0` for LAN access), `CLINIC_PORT` (default `5000`), `CLINIC_ADMIN_PASSWORD` (first-run admin password), `CLINIC_DATA_DIR` (override where the DB / `uploads/` / `backups/` live — used by the Docker/cloud deployment), `CLINIC_CLOUD_MODE` (run as the cloud node — see below), `CLINIC_CLOUD_URL` + `CLINIC_CLOUD_TOKEN` (point a local server at the cloud node for background sync — usually set via the UI's pairing flow instead), `CLINIC_CLOUD_SYNC_INTERVAL_MINUTES` (default `15`).
@@ -203,11 +205,12 @@ clinic/
 │   ├── Dockerfile            #   the app image (CLINIC_CLOUD_MODE=1)
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   └── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
-├── tests/                    # 111 tests across 13 suites
+├── tests/                    # 116 tests across 14 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
 │   ├── test_appointment_status.py   # Status-update accepts the full dropdown set
+│   ├── test_backup.py               # Per-tenant cloud backups + flat single-tenant layout
 │   ├── test_catalog_migration.py    # Legacy treatment_catalog → treatment_procedures
 │   ├── test_cloud_mode.py           # Cloud-mode routing, isolation, rate limit, HMAC gate
 │   ├── test_cloud_sync_worker.py    # Local ⇄ cloud background sync round-trip
@@ -428,7 +431,7 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**111 tests across 13 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**116 tests across 14 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
 Financial logic can also be exercised end-to-end against a running server with the ad-hoc runner under `tools/`:
 
