@@ -61,6 +61,13 @@ rebuild.bat
 # Backups
 backups/
 
+# Generated license artefacts — never commit (these are credentials)
+batch_serials.csv
+serials_*.csv
+serials_*.json
+backend_key.json
+*.key
+
 # Logs
 *.log
 
