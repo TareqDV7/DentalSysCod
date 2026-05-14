@@ -13,6 +13,12 @@ services:
       - dentacare-data:/data      # per-clinic SQLite files + cloud_master.db
     expose:
       - "5000"                    # internal only — Caddy is the public entrypoint
+    environment:
+      # HMAC-signed-serial gating for /api/clinics/register. Both vars default
+      # to empty / off — set them in `cloud/.env` (gitignored) on the host to
+      # turn on soft-launch (key set, REQUIRE=0) or enforcement (REQUIRE=1).
+      - CLINIC_SERIAL_SIGNING_KEY=${CLINIC_SERIAL_SIGNING_KEY:-}
+      - CLINIC_REQUIRE_SIGNED_SERIAL=${CLINIC_REQUIRE_SIGNED_SERIAL:-0}
 
   caddy:
     image: caddy:2

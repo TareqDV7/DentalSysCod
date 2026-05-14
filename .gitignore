@@ -68,6 +68,9 @@ serials_*.json
 backend_key.json
 *.key
 
+# Cloud deploy secrets (host-only, never committed)
+cloud/.env
+
 # Logs
 *.log
 
