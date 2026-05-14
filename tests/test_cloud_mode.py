@@ -131,6 +131,92 @@ def test_register_disabled_when_not_cloud_mode(plain):
     assert r.status_code == 404
 
 
+def _sign_serial(serial, key, *, clinic_name='Signed Clinic', expiry_days=365):
+    """Build an offline_token in the same format serial_generator.py emits."""
+    import base64, hashlib, hmac, json
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    payload = {
+        'serial': serial, 'clinic_name': clinic_name,
+        'issued_at': now.isoformat() + 'Z',
+        'expires_at': (now + timedelta(days=expiry_days)).isoformat() + 'Z',
+        'grace_until': (now + timedelta(days=expiry_days + 30)).isoformat() + 'Z',
+    }
+    payload_json = json.dumps(payload, separators=(',', ':')).encode()
+    sig = hmac.new(key, payload_json, hashlib.sha256).digest()
+    return f'{base64.b64encode(payload_json).decode()}.{base64.b64encode(sig).decode()}'
+
+
+def test_register_accepts_valid_signed_token(cloud, monkeypatch):
+    import base64, os
+    key = os.urandom(32)
+    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
+                        base64.b64encode(key).decode())
+    monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
+
+    serial = 'SIGNED-AAAA-0001'
+    token = _sign_serial(serial, key)
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': serial, 'clinic_name': 'OK', 'offline_token': token})
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def test_register_rejects_unsigned_when_required(cloud, monkeypatch):
+    import base64, os
+    key = os.urandom(32)
+    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
+                        base64.b64encode(key).decode())
+    monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
+
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': 'NO-TOKEN-AAA', 'clinic_name': 'X'})
+    assert r.status_code == 403, r.get_data(as_text=True)
+    assert 'required' in r.get_json()['error']
+
+
+def test_register_rejects_tampered_token(cloud, monkeypatch):
+    import base64, os
+    key = os.urandom(32)
+    other_key = os.urandom(32)
+    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
+                        base64.b64encode(key).decode())
+    monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
+
+    serial = 'TAMPER-AAAA-001'
+    # Token signed with the WRONG key
+    bad_token = _sign_serial(serial, other_key)
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': serial, 'clinic_name': 'X', 'offline_token': bad_token})
+    assert r.status_code == 403
+    assert 'signature' in r.get_json()['error']
+
+
+def test_register_rejects_serial_mismatch(cloud, monkeypatch):
+    import base64, os
+    key = os.urandom(32)
+    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
+                        base64.b64encode(key).decode())
+    monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
+
+    # Token signed for serial A — but registration uses serial B
+    token = _sign_serial('REAL-SERIAL-001', key)
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': 'OTHER-SERIAL-001', 'clinic_name': 'X',
+                         'offline_token': token})
+    assert r.status_code == 403
+    assert 'match' in r.get_json()['error']
+
+
+def test_register_unsigned_still_works_when_not_required(cloud, monkeypatch):
+    # Default behaviour: signing isn't required, no key configured → legacy demo
+    # serials still register. (This guards the rollout path.)
+    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64', '')
+    monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', False)
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': 'LEGACY-DEMO-001', 'clinic_name': 'X'})
+    assert r.status_code == 200
+
+
 def test_register_rate_limit(cloud, monkeypatch):
     # Tight limit so the test runs quickly. Up to N from the same IP succeed,
     # then the next ones are 429 until the window expires.

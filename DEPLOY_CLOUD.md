@@ -91,6 +91,8 @@ Set in `cloud/docker-compose.yml` (`services.app.environment`) or the `Dockerfil
 | `CLINIC_BACKUP_INTERVAL_HOURS` | `0` | The built-in backup thread is disabled on the cloud node (it would only cover `cloud_master.db`). Per-clinic off-server snapshots to DO Spaces are a later phase. |
 | `CLINIC_REGISTER_RATE_LIMIT` | `10` | Max successful + failed `/api/clinics/register` attempts per source IP within the rate window. Set `0` to disable. |
 | `CLINIC_REGISTER_RATE_WINDOW` | `3600` | Rate-limit window for the above, in seconds. |
+| `CLINIC_SERIAL_SIGNING_KEY` | _(unset)_ | Base64-encoded HMAC key matching the one used by `serial_generator.py`. When set, registration verifies an `offline_token` if the client sends one. |
+| `CLINIC_REQUIRE_SIGNED_SERIAL` | `0` | If `1`, **rejects** registration unless a valid `offline_token` (signed by the key above) is provided. Default off so existing demo serials keep registering during rollout. |
 
 > The cloud node intentionally does **not** seed a staff admin user — the staff portal isn't served here, so `CLINIC_ADMIN_PASSWORD` is unused in `CLINIC_CLOUD_MODE=1`.
 
@@ -98,7 +100,7 @@ The hostname for TLS lives in `cloud/Caddyfile` (`app.dentacare.tech`) — chang
 
 ## API surface on the cloud node
 
-- `POST /api/clinics/register` — `{serial_number, clinic_name}` → `{clinic_id, clinic_token, already_registered}`. Idempotent per serial. **No token required.**
+- `POST /api/clinics/register` — `{serial_number, clinic_name, offline_token?}` → `{clinic_id, clinic_token, already_registered}`. Idempotent per serial. **No clinic token required.** `offline_token` is the HMAC-signed token from `serial_generator.py`; required when `CLINIC_REQUIRE_SIGNED_SERIAL=1`, otherwise optional but verified when present.
 - `GET /api/system/readiness` — health check. No token required.
 - Everything else under `/api/*` — requires a valid `X-Clinic-Token` (or `?clinic_token=`), routed to that clinic's DB. This includes `/api/sync/export`, `/api/sync/import`, `/api/patients`, etc.
 - Non-`/api/` paths — return a short "use your local server" notice.
@@ -108,7 +110,7 @@ The hostname for TLS lives in `cloud/Caddyfile` (`app.dentacare.tech`) — chang
 
 - Serial validation is currently just **uniqueness** (one clinic per serial, ≥ 8 chars). HMAC-signed-serial gating (via `serial_generator.py`'s signing key) is a follow-up.
 - No per-clinic cloud backups yet (see `CLINIC_BACKUP_INTERVAL_HOURS` above).
-- `/api/clinics/register` is rate-limited per source IP (default 10/hour, see env vars above) — beyond that the registry is unauthenticated and HMAC-signed-serial gating is still a follow-up. Other public endpoints are not rate-limited yet.
+- `/api/clinics/register` is rate-limited per source IP (default 10/hour) and can be gated on HMAC-signed `offline_token`s via the two `CLINIC_SERIAL_SIGNING_KEY` / `CLINIC_REQUIRE_SIGNED_SERIAL` envs above (issued by `serial_generator.py --key-file …`). Other public endpoints are not rate-limited yet.
 - The cloud node currently shares one Flask session secret across all tenants (stored in `cloud_master.db`); the portal isn't reachable here so this is low-impact, but worth knowing.
 
 ## Teardown
