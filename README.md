@@ -84,7 +84,7 @@ Other env vars: `CLINIC_HOST` (default `127.0.0.1`; set to `0.0.0.0` for LAN acc
 
 The same `dental_clinic.py`, run with `CLINIC_CLOUD_MODE=1`, becomes a shared **cloud node**: a master registry DB (`cloud_master.db`) tracks clinics, and each clinic gets its own SQLite file (`clinic_<id>.db`). Every `/api/*` request must carry a clinic token (`X-Clinic-Token` header or `?clinic_token=`); a `before_request` hook resolves it and points the per-request DB path at that clinic's file, so the existing handlers run unchanged but see only that tenant's data. The staff web portal isn't served here — clinics keep using their own local server, which mirrors to the cloud in the background when there's internet (see *Cloud sync* below).
 
-- `POST /api/clinics/register` (`{serial_number, clinic_name}` → `{clinic_id, clinic_token, already_registered}`) provisions a clinic — idempotent per serial, no token required.
+- `POST /api/clinics/register` (`{serial_number, clinic_name, offline_token?}` → `{clinic_id, clinic_token, already_registered}`) provisions a clinic — idempotent per serial, no clinic token required. The endpoint is **rate-limited per source IP** (default 10/hour, env-tunable). When `CLINIC_SERIAL_SIGNING_KEY` is configured, the optional `offline_token` (HMAC-signed by `serial_generator.py`) is verified when present; set `CLINIC_REQUIRE_SIGNED_SERIAL=1` to make it mandatory.
 - Deployment (Docker + Caddy for auto-HTTPS, on a DigitalOcean droplet at `app.dentacare.tech`): see [`DEPLOY_CLOUD.md`](DEPLOY_CLOUD.md) and the [`cloud/`](cloud/) directory.
 
 ### Cloud sync (local ⇄ cloud)
@@ -195,24 +195,31 @@ clinic/
 ├── dental_clinic.py          # Entire backend: Flask app + HTML/CSS/JS template + SQLite schema
 ├── requirements.txt          # Flask, Flask-CORS, waitress
 ├── serial_generator.py       # CLI tool to generate and batch-export license serials
-├── batch_serials.csv         # Example generated serials
-├── qa_financial_test.py      # Financial QA test suite (10 blocks, runs against live server)
 ├── pytest.ini                # pytest config
 ├── DentalClinicApp.spec      # PyInstaller build spec
 ├── DEPLOY_CLOUD.md           # Cloud-node deployment runbook
+├── LICENSE                   # Proprietary — all rights reserved
 ├── cloud/                    # Cloud-node deploy stack
 │   ├── Dockerfile            #   the app image (CLINIC_CLOUD_MODE=1)
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   └── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
-├── tests/
+├── tests/                    # 111 tests across 13 suites
+│   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
+│   ├── test_appointment_status.py   # Status-update accepts the full dropdown set
+│   ├── test_catalog_migration.py    # Legacy treatment_catalog → treatment_procedures
+│   ├── test_cloud_mode.py           # Cloud-mode routing, isolation, rate limit, HMAC gate
+│   ├── test_cloud_sync_worker.py    # Local ⇄ cloud background sync round-trip
+│   ├── test_credit_balance.py       # Patient credit derivation + Credit Used
 │   ├── test_date_utils.py
-│   ├── test_sync_tombstones.py   # Sync delta / tombstone propagation
-│   ├── test_cloud_mode.py        # Multi-tenant cloud-mode routing & isolation
-│   └── test_cloud_sync_worker.py # Local ⇄ cloud background sync round-trip
+│   ├── test_expression_preservation.py  # "20+20" verbatim on sheet/invoice
+│   ├── test_followup_balance.py     # Recomputed Amount to Pay running balance
+│   ├── test_sync_resilience.py      # Bad row doesn't kill batch; mobile fixes verified
+│   └── test_sync_tombstones.py      # Sync delta / tombstone propagation
 ├── tools/
-│   └── db_check.py           # Quick SQLite inspection helper
+│   ├── db_check.py           # Quick SQLite inspection helper
+│   └── qa_financial_test.py  # Ad-hoc financial-logic runner against a live server
 ├── backups/                  # Auto-generated DB backups (git-ignored, created at runtime)
 ├── deployment/
 │   ├── DentaCare.exe         # PyInstaller-packaged Windows executable
@@ -399,11 +406,18 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 Serials are generated with `serial_generator.py`:
 
 ```bash
-python3 serial_generator.py          # interactive
-python3 serial_generator.py --batch 50 --output batch_serials.csv
+python3 serial_generator.py --clinic "Smile Dental" --code "SMD" --device "LAPTOP-ABC123"
+python3 serial_generator.py --clinic "Smile Dental" --code "SMD" \
+  --devices-file devices.txt --output serials.csv --key-file backend_key.json
 ```
 
-Offline tokens are HMAC-SHA256 signed. The mobile app can verify a token without reaching the server, so it works entirely air-gapped once activated.
+Offline tokens are HMAC-SHA256 signed. The mobile app and the cloud node can both verify a token without reaching any other party, so the mobile works entirely air-gapped once activated and the cloud can gate registration without a database lookup.
+
+> Generated `*.csv` / `*.json` outputs from this tool are gitignored — they contain real signed tokens and must not be committed.
+
+## License
+
+This project is licensed under a **proprietary "All Rights Reserved" license** — see [`LICENSE`](LICENSE) for the full notice. The source is on GitHub for backup and portfolio purposes; reuse, redistribution, or modification requires written permission from the copyright holder.
 
 ---
 
@@ -414,15 +428,15 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-39 tests across six suites: appointment API, appointment flow, date utilities, sync tombstones (delta export + deletion propagation), cloud mode (multi-tenant routing, registration, tenant isolation), and the local ⇄ cloud background sync round-trip.
+**111 tests across 13 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
-Financial logic can be verified with the dedicated QA script (requires the server to be running):
+Financial logic can also be exercised end-to-end against a running server with the ad-hoc runner under `tools/`:
 
 ```bash
-python qa_financial_test.py
+python tools/qa_financial_test.py
 ```
 
-Covers 10 test blocks: summary math, weekly range math, Saturday edge case, receivables discount correctness, follow-up running balance, billing records, expenses, edge cases, monthly range, and cross-report consistency.
+Covers 10 blocks: summary math, weekly range math, Saturday edge case, receivables discount correctness, follow-up running balance, billing records, expenses, edge cases, monthly range, and cross-report consistency.
 
 ### Continuous integration
 
