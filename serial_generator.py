@@ -117,6 +117,25 @@ def generate_license_token(
     }
 
 
+def load_signing_key(signing_key_file):
+    """Return decoded HMAC key bytes from a backend_key.json file, or None.
+    Prints a warning on failure; missing file is treated as None."""
+    if not signing_key_file:
+        return None
+    if not os.path.exists(signing_key_file):
+        print(f"⚠️  Warning: Signing key file not found: {signing_key_file}")
+        print("    Using default signing key instead\n")
+        return None
+    try:
+        with open(signing_key_file, 'r') as f:
+            key_data = json.load(f)
+        return base64.b64decode(key_data.get('key', ''))
+    except Exception as e:
+        print(f"⚠️  Warning: Could not load signing key from {signing_key_file}: {e}")
+        print("    Using default signing key instead\n")
+        return None
+
+
 def create_serial_batch(
     clinic_name: str,
     clinic_code: str,
@@ -128,7 +147,7 @@ def create_serial_batch(
 ) -> list:
     """
     Create a batch of serials for multiple devices
-    
+
     Args:
         clinic_name: Clinic name
         clinic_code: Clinic code for serial
@@ -137,21 +156,11 @@ def create_serial_batch(
         expiry_days: Expiry duration
         output_file: Optional CSV output file
         signing_key_file: Optional signing key file from backend
-    
+
     Returns:
         List of generated license records
     """
-    signing_key = None
-    
-    # Load signing key from backend if provided
-    if signing_key_file and os.path.exists(signing_key_file):
-        try:
-            with open(signing_key_file, 'r') as f:
-                key_data = json.load(f)
-                signing_key = base64.b64decode(key_data.get('key', ''))
-        except Exception as e:
-            print(f"⚠️  Warning: Could not load signing key from {signing_key_file}: {e}")
-            print("    Using default signing key instead\n")
+    signing_key = load_signing_key(signing_key_file)
     
     licenses = []
     
@@ -254,7 +263,8 @@ Examples:
             clinic_name=args.clinic,
             device_id=args.device,
             plan_name=args.plan,
-            expiry_days=args.expiry
+            expiry_days=args.expiry,
+            signing_key=load_signing_key(args.key_file),
         )
         
         print(f"✓ SERIAL NUMBER: {serial}\n")
