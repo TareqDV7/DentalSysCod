@@ -10804,6 +10804,47 @@ def _bt_handle_request(cursor, req, authed):
     return {'error': 'unknown op'}, authed
 
 
+def _bt_serve_session(stream_in, stream_out, db_path=None):
+    """Drive one BT session: read frames, dispatch, write responses, exit
+    when the peer disconnects or sends a malformed frame. Closes on the
+    first unauthorized response (auth failure) or fatal protocol error.
+
+    Opens its own short-lived SQLite connection so the caller (the BT
+    server thread) doesn't have to manage one. `db_path` defaults to
+    DB_NAME — exposed for tests."""
+    conn = sqlite3.connect(db_path or DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    authed = False
+    try:
+        while True:
+            try:
+                req = decode_bt_frame(stream_in)
+            except EOFError:
+                return
+            except ValueError:
+                try:
+                    stream_out.write(encode_bt_frame({'error': 'malformed frame'}))
+                    stream_out.flush()
+                except Exception:
+                    pass
+                return
+            resp, authed = _bt_handle_request(cursor, req, authed)
+            try:
+                stream_out.write(encode_bt_frame(resp))
+                stream_out.flush()
+            except Exception:
+                return
+            conn.commit()
+            if 'error' in resp and resp['error'] == 'unauthorized':
+                return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _cloud_http_request(method, url, headers=None, body=None, timeout=15):
     """Tiny JSON HTTP helper (stdlib only). Returns (status_code, parsed_body).
     HTTP error responses (4xx/5xx with a body) are returned, not raised; a real
