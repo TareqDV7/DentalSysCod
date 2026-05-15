@@ -10751,6 +10751,59 @@ def decode_bt_frame(stream):
         raise ValueError(f'malformed JSON: {exc}') from exc
 
 
+BT_PROTOCOL_VERSION = '1.0.0'
+
+
+def _bt_lookup_device_by_token(cursor, token):
+    """Return the device row for a token, or None. Mirrors the auth lookup
+    in get_authenticated_device but without using request context."""
+    if not token:
+        return None
+    cursor.execute(
+        'SELECT device_id, device_name, is_active FROM paired_devices WHERE device_token = ?',
+        (token,),
+    )
+    row = cursor.fetchone()
+    if not row or int(row['is_active']) != 1:
+        return None
+    cursor.execute(
+        'UPDATE paired_devices SET last_seen_at = CURRENT_TIMESTAMP WHERE device_id = ?',
+        (row['device_id'],),
+    )
+    return {'device_id': row['device_id'], 'device_name': row['device_name']}
+
+
+def _bt_handle_request(cursor, req, authed):
+    """Dispatch one BT request. Returns (response_dict, new_authed_flag).
+    Pure function — no I/O, no threading."""
+    op = req.get('op')
+    if op == 'hello':
+        device = _bt_lookup_device_by_token(cursor, req.get('device_token'))
+        if device is None:
+            return {'error': 'unauthorized'}, False
+        return {'ok': True, 'server_version': BT_PROTOCOL_VERSION}, True
+
+    if not authed:
+        return {'error': 'unauthorized'}, authed
+
+    if op == 'sync_export':
+        since_raw = req.get('since')
+        since_dt = parse_timestamp_for_sync(since_raw) if since_raw else None
+        tables, tombstones, _total = _collect_sync_export(cursor, since_dt)
+        return {
+            'ok': True,
+            'tables': tables,
+            'tombstones': tombstones,
+            'generated_at': _naive_utc_now().isoformat(),
+        }, authed
+
+    if op == 'sync_import':
+        applied, skipped, _tombs_applied, _by_table = _apply_sync_import(cursor, req)
+        return {'ok': True, 'applied': applied, 'skipped': skipped}, authed
+
+    return {'error': 'unknown op'}, authed
+
+
 def _cloud_http_request(method, url, headers=None, body=None, timeout=15):
     """Tiny JSON HTTP helper (stdlib only). Returns (status_code, parsed_body).
     HTTP error responses (4xx/5xx with a body) are returned, not raised; a real
