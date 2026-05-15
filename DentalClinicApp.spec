@@ -22,6 +22,8 @@ a = Analysis(
         'jinja2',
         'jinja2.ext',
         'click',
+        'serial',
+        'serial.tools.list_ports',
         'sqlite3',
         'hmac',
         'hashlib',
