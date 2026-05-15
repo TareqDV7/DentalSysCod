@@ -3842,6 +3842,31 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
+                <div class="settings-card" id="bt-sync-card">
+                  <h3 data-en="Bluetooth Sync" data-ar="مزامنة عبر بلوتوث">Bluetooth Sync</h3>
+                  <p class="hint"
+                     data-en="Pair the clinic PC with a phone in Windows Bluetooth Settings, then pick the assigned COM port below. The phone will sync automatically over Bluetooth when Wi-Fi and cloud are unreachable."
+                     data-ar="قم بإقران الجهاز اللوحي مع كمبيوتر العيادة من إعدادات بلوتوث ويندوز، ثم اختر منفذ COM المخصّص.">
+                  </p>
+                  <label>
+                    <input type="checkbox" id="bt-enabled"/>
+                    <span data-en="Enable Bluetooth Sync" data-ar="تفعيل مزامنة بلوتوث">Enable Bluetooth Sync</span>
+                  </label>
+                  <label>
+                    <span data-en="COM port" data-ar="منفذ COM">COM port:</span>
+                    <select id="bt-com-port"></select>
+                  </label>
+                  <div class="bt-actions">
+                    <button id="bt-save-btn" data-en="Save" data-ar="حفظ">Save</button>
+                    <button id="bt-open-windows-btn" type="button"
+                            data-en="Pair a phone (Windows BT settings)"
+                            data-ar="إقران الجهاز (إعدادات بلوتوث ويندوز)">
+                      Pair a phone (Windows BT settings)
+                    </button>
+                  </div>
+                  <div id="bt-status-line" class="bt-status"></div>
+                </div>
+
                 <h3 style="margin-top:4px;" data-i18n="audit_log">Audit Log</h3>
                 <div class="table-container" style="margin-top:12px;">
                     <table>
@@ -6133,6 +6158,8 @@ HTML_TEMPLATE = '''
             await loadSupportTips();
             await loadAuditLogs();
             await loadCloudSyncSettings();
+            loadBluetoothSyncSettings();
+            bindBluetoothSyncControls();
         }
 
         async function loadReceivables() {
@@ -6744,6 +6771,62 @@ HTML_TEMPLATE = '''
                 alert(_ar() ? 'تم إلغاء الربط.' : 'Unpaired from the cloud.');
             } catch (_) {}
             await loadCloudSyncSettings();
+        }
+
+        // ── Bluetooth Sync (Settings → Bluetooth Sync) ────────────────────────
+
+        async function loadBluetoothSyncSettings() {
+          try {
+            const r = await fetch('/api/bt/status', {credentials: 'same-origin'});
+            if (!r.ok) { document.getElementById('bt-sync-card').style.display = 'none'; return; }
+            const s = await r.json();
+            document.getElementById('bt-enabled').checked = !!s.enabled;
+            const sel = document.getElementById('bt-com-port');
+            sel.innerHTML = '';
+            const opt0 = document.createElement('option');
+            opt0.value = ''; opt0.textContent = '— pick a port —';
+            sel.appendChild(opt0);
+            for (const p of (s.available_ports || [])) {
+              const o = document.createElement('option');
+              o.value = p.device; o.textContent = `${p.device} (${p.description})`;
+              if (p.device === s.com_port) o.selected = true;
+              sel.appendChild(o);
+            }
+            if (s.com_port && !Array.from(sel.options).some(o => o.value === s.com_port)) {
+              const o = document.createElement('option');
+              o.value = s.com_port; o.textContent = `${s.com_port} (not currently present)`;
+              o.selected = true;
+              sel.appendChild(o);
+            }
+            let line = '';
+            if (!s.enabled) line = (_ar() ? 'متوقّفة' : 'Disabled');
+            else if (!s.com_port) line = (_ar() ? 'لم يُختر منفذ' : 'No port selected');
+            else if (s.last_error) line = `⚠️ ${s.last_error}`;
+            else if (s.last_sync_at) line = (_ar() ? 'آخر مزامنة: ' : 'Last sync: ') + s.last_sync_at;
+            else line = (_ar() ? 'في الانتظار…' : 'Waiting for a phone…');
+            document.getElementById('bt-status-line').textContent = line;
+          } catch (_) {
+            document.getElementById('bt-sync-card').style.display = 'none';
+          }
+        }
+
+        async function saveBluetoothSyncSettings() {
+          const enabled = document.getElementById('bt-enabled').checked;
+          const com_port = document.getElementById('bt-com-port').value || '';
+          const r = await fetch('/api/bt/configure', {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled, com_port}),
+          });
+          if (!r.ok) { alert(_ar() ? 'فشل الحفظ' : 'Save failed'); return; }
+          await loadBluetoothSyncSettings();
+        }
+
+        function bindBluetoothSyncControls() {
+          const saveBtn = document.getElementById('bt-save-btn');
+          if (saveBtn) saveBtn.onclick = saveBluetoothSyncSettings;
+          const winBtn = document.getElementById('bt-open-windows-btn');
+          if (winBtn) winBtn.onclick = () => { window.location.href = 'ms-settings:bluetooth'; };
         }
 
         function switchProfileTab(tabName, btn) {
