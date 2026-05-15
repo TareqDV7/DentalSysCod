@@ -10899,6 +10899,83 @@ def _bt_serve_session(stream_in, stream_out, db_path=None):
             pass
 
 
+# How long the BT worker idles when disabled or after an error.
+_BT_LOOP_SLEEP = 30.0
+_BT_LOOP_ERROR_SLEEP = 15.0
+_BT_LOOP_RECONNECT_SLEEP = 60.0  # Wait between reconnect attempts after a session ends.
+
+
+def _bt_open_port(port, baudrate=115200, timeout=1.0):
+    """Open a pyserial port. Indirection so tests can swap this."""
+    import serial as _pyserial
+    return _pyserial.Serial(port, baudrate=baudrate, timeout=timeout)
+
+
+def bt_sync_server(stop_event=None):
+    """Daemon loop: re-read settings every cycle, accept one peer at a time
+    on the configured COM port. Skipped on the cloud node and in debug mode
+    (the parent process gates startup)."""
+    import serial as _pyserial
+    while stop_event is None or not stop_event.is_set():
+        try:
+            conn = get_db_connection()
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            enabled = read_app_setting(cur, 'bt_sync_enabled', '0') == '1'
+            port = (read_app_setting(cur, 'bt_sync_com_port', '') or '').strip()
+            conn.close()
+        except sqlite3.Error:
+            enabled, port = False, ''
+        if not enabled or not port:
+            _bt_sleep(_BT_LOOP_SLEEP, stop_event)
+            continue
+        try:
+            ser = _bt_open_port(port)
+            with ser:
+                _bt_serve_session(ser, ser)
+            _bt_record_success()
+            _bt_sleep(_BT_LOOP_RECONNECT_SLEEP, stop_event)
+        except _pyserial.SerialException as exc:
+            _bt_record_error(f'serial: {exc}')
+            _bt_sleep(_BT_LOOP_ERROR_SLEEP, stop_event)
+        except Exception as exc:  # noqa: BLE001
+            _bt_record_error(f'{type(exc).__name__}: {exc}')
+            _bt_sleep(_BT_LOOP_ERROR_SLEEP, stop_event)
+
+
+def _bt_sleep(seconds, stop_event):
+    """Sleep up to `seconds`, waking early if stop_event fires."""
+    if stop_event is None:
+        time.sleep(seconds)
+        return
+    stop_event.wait(timeout=seconds)
+
+
+def _bt_record_success():
+    try:
+        conn = get_db_connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        write_app_setting(cur, 'bt_last_sync_at', _naive_utc_now().isoformat())
+        write_app_setting(cur, 'bt_last_error', '')
+        conn.commit()
+        conn.close()
+    except sqlite3.Error:
+        pass
+
+
+def _bt_record_error(message):
+    try:
+        conn = get_db_connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        write_app_setting(cur, 'bt_last_error', message[:300])
+        conn.commit()
+        conn.close()
+    except sqlite3.Error:
+        pass
+
+
 def _cloud_http_request(method, url, headers=None, body=None, timeout=15):
     """Tiny JSON HTTP helper (stdlib only). Returns (status_code, parsed_body).
     HTTP error responses (4xx/5xx with a body) are returned, not raised; a real
@@ -11047,6 +11124,11 @@ if __name__ == '__main__':
     if cloud_sync_on:
         threading.Thread(target=cloud_sync_worker, daemon=True).start()
 
+    # Background Bluetooth-SPP server (local clinic server only — production runs).
+    bt_sync_on = (not CLOUD_MODE) and (not debug_mode)
+    if bt_sync_on:
+        threading.Thread(target=bt_sync_server, daemon=True).start()
+
     print("\n✅ System ready!")
     print(f'🌐 Opening browser at http://127.0.0.1:{port}')
     print('🔐 Portal login required (default: admin / admin)')
@@ -11057,6 +11139,8 @@ if __name__ == '__main__':
             print(f'☁️  Cloud sync every {_cloud_interval:g} min → {_cloud_url}')
         else:
             print('☁️  Cloud sync ready (not yet paired — POST /api/cloud/pair or set CLINIC_CLOUD_URL + CLINIC_CLOUD_TOKEN)')
+    if bt_sync_on:
+        print('📡 Bluetooth sync ready (configure in Settings → Bluetooth Sync)')
     if host != '127.0.0.1':
         print(f'📶 LAN mode enabled on {host}:{port}')
     print("\n📝 Press CTRL+C to stop the server\n")
