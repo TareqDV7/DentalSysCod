@@ -14,6 +14,11 @@ class LocalStorageService {
   static const _cloudUrlKey = 'cloud_url';
   static const _cloudClinicTokenKey = 'cloud_clinic_token';
   static const _cloudClinicIdKey = 'cloud_clinic_id';
+  static const _btEnabledKey = 'bt_enabled';
+  static const _btBondedMacKey = 'bt_bonded_mac';
+  static const _btBondedLabelKey = 'bt_bonded_label';
+  static const _btLastSyncAtKey = 'bt_last_sync_at';
+  static const _btLastErrorKey = 'bt_last_error';
 
   Future<String> getOrCreateDeviceId() async {
     final existing = await _storage.read(key: _deviceIdKey);
@@ -108,4 +113,40 @@ class LocalStorageService {
     final v = await _storage.read(key: _cloudClinicIdKey);
     return v == null ? null : int.tryParse(v);
   }
+
+  // ── Bluetooth peer (links this device to a clinic PC over BT-SPP) ──
+
+  Future<bool> getBtEnabled() async {
+    final v = await _storage.read(key: _btEnabledKey);
+    return v == '1';
+  }
+
+  Future<void> setBtEnabled(bool enabled) =>
+      _storage.write(key: _btEnabledKey, value: enabled ? '1' : '0');
+
+  Future<String?> getBtBondedMac() => _storage.read(key: _btBondedMacKey);
+
+  Future<String?> getBtBondedLabel() => _storage.read(key: _btBondedLabelKey);
+
+  Future<void> setBtBondedPeer({required String mac, required String label}) async {
+    await _storage.write(key: _btBondedMacKey, value: mac);
+    await _storage.write(key: _btBondedLabelKey, value: label);
+  }
+
+  Future<void> clearBtBondedPeer() async {
+    await _storage.delete(key: _btBondedMacKey);
+    await _storage.delete(key: _btBondedLabelKey);
+  }
+
+  Future<String?> getBtLastSyncAt() => _storage.read(key: _btLastSyncAtKey);
+
+  Future<void> setBtLastSyncAt(String iso) =>
+      _storage.write(key: _btLastSyncAtKey, value: iso);
+
+  Future<String?> getBtLastError() => _storage.read(key: _btLastErrorKey);
+
+  Future<void> setBtLastError(String message) =>
+      _storage.write(key: _btLastErrorKey, value: message);
+
+  Future<void> clearBtLastError() => _storage.delete(key: _btLastErrorKey);
 }
