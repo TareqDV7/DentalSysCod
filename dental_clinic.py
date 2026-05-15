@@ -10709,6 +10709,48 @@ except ValueError:
     CLOUD_SYNC_INTERVAL_MINUTES = 15.0
 
 
+# ── Bluetooth-SPP wire protocol ─────────────────────────────────────────────
+# Frames are 4-byte big-endian unsigned length + UTF-8 JSON payload. The cap
+# guards against a peer claiming a 4 GB frame; real deltas are a few KB.
+BT_MAX_FRAME_BYTES = 4 * 1024 * 1024  # 4 MB
+
+
+def encode_bt_frame(payload):
+    """Encode a JSON-serialisable dict into a length-prefixed BT frame."""
+    body = json.dumps(payload).encode('utf-8')
+    if len(body) > BT_MAX_FRAME_BYTES:
+        raise ValueError(f'frame too large: {len(body)} > {BT_MAX_FRAME_BYTES}')
+    return len(body).to_bytes(4, 'big') + body
+
+
+def _read_exactly(stream, n):
+    """Read exactly n bytes from a stream, or raise EOFError."""
+    chunks = []
+    remaining = n
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            raise EOFError(f'stream closed after {n - remaining} of {n} bytes')
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b''.join(chunks)
+
+
+def decode_bt_frame(stream):
+    """Read one length-prefixed BT frame from a binary stream and return the
+    decoded JSON dict. Raises EOFError on truncation, ValueError on malformed
+    JSON or an oversized frame."""
+    header = _read_exactly(stream, 4)
+    length = int.from_bytes(header, 'big')
+    if length > BT_MAX_FRAME_BYTES:
+        raise ValueError(f'frame too large: {length} > {BT_MAX_FRAME_BYTES}')
+    body = _read_exactly(stream, length)
+    try:
+        return json.loads(body.decode('utf-8'))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f'malformed JSON: {exc}') from exc
+
+
 def _cloud_http_request(method, url, headers=None, body=None, timeout=15):
     """Tiny JSON HTTP helper (stdlib only). Returns (status_code, parsed_body).
     HTTP error responses (4xx/5xx with a body) are returned, not raised; a real
