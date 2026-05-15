@@ -8032,7 +8032,7 @@ def _safe_next_url(target):
 # Browser-facing endpoints that require a logged-in staff session. The data/sync
 # REST API and mobile/license/pairing endpoints are intentionally left open so the
 # offline-first mobile app keeps working unchanged.
-_AUTH_REQUIRED_EXACT = {'/', '/api/backup'}
+_AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 
@@ -10215,6 +10215,60 @@ def cloud_unpair():
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+
+def _bt_list_serial_ports():
+    """Return COM port entries that look like Bluetooth SPP ports."""
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return []
+    ports = []
+    for p in list_ports.comports():
+        desc = (p.description or '').lower()
+        if 'bluetooth' in desc or 'standard serial over bluetooth' in desc:
+            ports.append({'device': p.device, 'description': p.description})
+    return ports
+
+
+@app.route('/api/bt/status', methods=['GET'])
+def bt_status():
+    if CLOUD_MODE:
+        return jsonify({'error': 'Bluetooth sync is local-server only'}), 400
+    conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    enabled = read_app_setting(cur, 'bt_sync_enabled', '0') == '1'
+    com_port = read_app_setting(cur, 'bt_sync_com_port', '') or ''
+    last_sync_at = read_app_setting(cur, 'bt_last_sync_at', '') or ''
+    last_error = read_app_setting(cur, 'bt_last_error', '') or ''
+    conn.close()
+    return jsonify({
+        'enabled': enabled,
+        'com_port': com_port,
+        'last_sync_at': last_sync_at,
+        'last_error': last_error,
+        'available_ports': _bt_list_serial_ports(),
+    })
+
+
+@app.route('/api/bt/configure', methods=['POST'])
+def bt_configure():
+    if CLOUD_MODE:
+        return jsonify({'error': 'Bluetooth sync is local-server only'}), 400
+    data = request.get_json(silent=True) or {}
+    enabled = data.get('enabled')
+    com_port = data.get('com_port')
+    if not isinstance(enabled, bool) or not isinstance(com_port, str):
+        return jsonify({'error': 'enabled (bool) and com_port (str) required'}), 400
+    conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    write_app_setting(cur, 'bt_sync_enabled', '1' if enabled else '0')
+    write_app_setting(cur, 'bt_sync_com_port', com_port.strip())
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True})
 
 
 @app.route('/api/license/activate', methods=['POST'])
