@@ -104,6 +104,14 @@ The mobile app and the local↔cloud mirror reconcile with the server through tw
 
 Both endpoints require a paired-device token (`X-Device-Token` header or `device_token` query param).
 
+### Bluetooth sync (offline fallback)
+
+When the phone can reach neither the LAN nor the cloud node, it falls back to **classic Bluetooth (SPP)** with the desktop. Pair phone ↔ PC once in Windows Bluetooth settings; in the local server's **Settings → Bluetooth Sync** card (`GET /api/bt/status`, `POST /api/bt/configure`), enable the toggle and pick the COM port Windows assigned to the phone. On the phone, **Settings → Bluetooth peer** → "Pick clinic PC" → choose the bonded desktop.
+
+From then on, whenever the phone is in range and Wi-Fi/cloud are unreachable, an Android foreground service connects every 30 s and runs one `hello → sync_export → sync_import` round-trip over a 4-byte length-prefixed JSON protocol — same `{tables, tombstones}` envelope as the HTTP `/api/sync/*` endpoints, reusing `_collect_sync_export` and `_apply_sync_import` on the server so there is no duplicated sync logic. Last-write-wins by `updated_at` is unchanged. The first wire message is `{"op":"hello","device_token":…}`; the desktop verifies it against `paired_devices` and closes the socket on mismatch.
+
+Desktop side: a daemon thread parallel to `cloud_sync_worker()` re-reads its settings each cycle (`bt_sync_enabled`, `bt_sync_com_port` in `app_settings`), so toggles in the UI take effect without restart. The thread is started in production runs only, skipped on the cloud node, and never holds the socket open between syncs. Phone side: a `flutter_background_service` foreground service runs the 30 s loop; battery cost ≈ a smartwatch in standby because each cycle is a brief connect → sync → disconnect rather than a held-open socket.
+
 ---
 
 ## Branding & Configuration
@@ -195,7 +203,7 @@ class AppBranding {
 ```
 clinic/
 ├── dental_clinic.py          # Entire backend: Flask app + HTML/CSS/JS template + SQLite schema
-├── requirements.txt          # Flask, Flask-CORS, waitress
+├── requirements.txt          # Flask, Flask-CORS, pyserial, waitress
 ├── serial_generator.py       # CLI tool to generate and batch-export license serials
 ├── pytest.ini                # pytest config
 ├── DentalClinicApp.spec      # PyInstaller build spec
@@ -205,12 +213,17 @@ clinic/
 │   ├── Dockerfile            #   the app image (CLINIC_CLOUD_MODE=1)
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   └── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
-├── tests/                    # 116 tests across 14 suites
+├── tests/                    # 145 tests across 19 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
 │   ├── test_appointment_status.py   # Status-update accepts the full dropdown set
 │   ├── test_backup.py               # Per-tenant cloud backups + flat single-tenant layout
+│   ├── test_bt_codec.py             # 4-byte length-prefixed JSON frame codec
+│   ├── test_bt_endpoints.py         # /api/bt/status + /api/bt/configure
+│   ├── test_bt_protocol.py          # hello / sync_export / sync_import dispatcher
+│   ├── test_bt_session.py           # Frame in → dispatch → frame out, auth gating
+│   ├── test_bt_worker.py            # BT daemon thread settings re-read + back-off
 │   ├── test_catalog_migration.py    # Legacy treatment_catalog → treatment_procedures
 │   ├── test_cloud_mode.py           # Cloud-mode routing, isolation, rate limit, HMAC gate
 │   ├── test_cloud_sync_worker.py    # Local ⇄ cloud background sync round-trip
@@ -366,6 +379,13 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 | POST | `/api/pairing/start` | Begin device pairing flow |
 | POST | `/api/pairing/complete` | Complete pairing, issue token |
 
+### Bluetooth sync (local server only — see *Bluetooth sync* above)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/bt/status` | Current BT-sync state (`enabled`, `com_port`, `last_sync_at`, `last_error`, `available_ports`) — requires login |
+| POST | `/api/bt/configure` | Persist `{enabled, com_port}` to `app_settings`; the daemon thread picks up the new settings on its next loop iteration — requires login |
+
 ### Cloud sync (local server only — see *Cloud sync* above)
 
 | Method | Endpoint | Description |
@@ -431,7 +451,9 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**116 tests across 14 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**145 tests across 19 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/sync_export/sync_import dispatcher reusing the HTTP helpers, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+
+The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart`, `bluetooth_sync_service_test.dart`, and the default widget test (13 tests total). Run with `cd clinic_mobile_app && flutter test`.
 
 Financial logic can also be exercised end-to-end against a running server with the ad-hoc runner under `tools/`:
 
@@ -454,7 +476,7 @@ pyinstaller DentalClinicApp.spec
 # Output: dist/DentaCare.exe
 ```
 
-The `.spec` file bundles `dental_clinic.py` and `DentaCare.PNG` into a single portable `.exe` — no Python installation required on the target machine. The SQLite database, `uploads/` and `backups/` are created at runtime next to the executable. The `hiddenimports` list includes `waitress`, `markupsafe`, and `werkzeug.security`, which the auth / production-server code relies on; keep them there if you regenerate the spec. When frozen, the app defaults to production mode (waitress + automatic backups).
+The `.spec` file bundles `dental_clinic.py` and `DentaCare.PNG` into a single portable `.exe` — no Python installation required on the target machine. The SQLite database, `uploads/` and `backups/` are created at runtime next to the executable. The `hiddenimports` list includes `waitress`, `markupsafe`, `werkzeug.security` (auth / production server), and `serial` + `serial.tools.list_ports` (Bluetooth-SPP sync — the daemon thread imports `pyserial` lazily but PyInstaller needs them declared up front); keep them there if you regenerate the spec. When frozen, the app defaults to production mode (waitress + automatic backups).
 
 ---
 
@@ -467,7 +489,8 @@ The `.spec` file bundles `dental_clinic.py` and `DentaCare.PNG` into a single po
 | `dio` | HTTP client |
 | `flutter_secure_storage` | Encrypted token storage |
 | `connectivity_plus` | Network detection |
-| `flutter_blue_plus` | Bluetooth sync fallback |
+| `flutter_bluetooth_serial` | Classic BT-SPP sync fallback (Android) |
+| `flutter_background_service` | Android foreground service for the 30 s BT auto-reconnect loop |
 | `fl_chart` | Financial charts |
 | `table_calendar` | Appointment calendar view |
 | `flutter_animate` | UI micro-animations |
