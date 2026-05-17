@@ -2928,6 +2928,95 @@ HTML_TEMPLATE = '''
             flex-wrap: wrap;
             align-items: center;
         }
+
+        /* ── Bluetooth-sync status pill ── */
+        .bt-status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            padding: 8px 16px;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--line);
+            max-width: 100%;
+        }
+        .bt-status-pill .bt-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #98a4b0;
+            box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+            transition: box-shadow 200ms ease, background 200ms ease;
+            flex: 0 0 auto;
+        }
+        .bt-status-pill.bt-listening {
+            background: #e6f7f5;
+            color: #0d6f64;
+            border-color: #13b5a7;
+        }
+        .bt-status-pill.bt-listening .bt-dot {
+            background: #13b5a7;
+            box-shadow: 0 0 0 4px rgba(19, 181, 167, 0.18);
+        }
+        .bt-status-pill.bt-waiting {
+            background: #fef6e3;
+            color: #7a4d0e;
+            border-color: #e69b1a;
+        }
+        .bt-status-pill.bt-waiting .bt-dot {
+            background: #e69b1a;
+            box-shadow: 0 0 0 4px rgba(230, 155, 26, 0.18);
+        }
+        .bt-status-pill.bt-error {
+            background: #fde7e9;
+            color: #9c2e36;
+            border-color: #d9434e;
+        }
+        .bt-status-pill.bt-error .bt-dot {
+            background: #d9434e;
+            box-shadow: 0 0 0 4px rgba(217, 67, 78, 0.18);
+        }
+        .bt-toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin: 14px 0;
+        }
+        .bt-toggle-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .bt-advanced > summary {
+            cursor: pointer;
+            color: var(--muted);
+            font-size: 0.85rem;
+            padding: 6px 0;
+            user-select: none;
+        }
+        .bt-advanced[open] > summary {
+            color: var(--text);
+        }
+        .bt-advanced-body {
+            padding-top: 10px;
+            display: grid;
+            gap: 10px;
+        }
+        .bt-advanced-body select {
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+            color: var(--text);
+            font: inherit;
+            width: 100%;
+        }
         .screen-shell {
             display: grid;
             gap: 16px;
@@ -3842,29 +3931,45 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
-                <div class="settings-card" id="bt-sync-card">
-                  <h3 data-en="Bluetooth Sync" data-ar="مزامنة عبر بلوتوث">Bluetooth Sync</h3>
-                  <p class="hint"
-                     data-en="Pair the clinic PC with a phone in Windows Bluetooth Settings, then pick the assigned COM port below. The phone will sync automatically over Bluetooth when Wi-Fi and cloud are unreachable."
-                     data-ar="قم بإقران الجهاز اللوحي مع كمبيوتر العيادة من إعدادات بلوتوث ويندوز، ثم اختر منفذ COM المخصّص.">
-                  </p>
-                  <label>
-                    <input type="checkbox" id="bt-enabled"/>
-                    <span data-en="Enable Bluetooth Sync" data-ar="تفعيل مزامنة بلوتوث">Enable Bluetooth Sync</span>
-                  </label>
-                  <label>
-                    <span data-en="COM port" data-ar="منفذ COM">COM port:</span>
-                    <select id="bt-com-port"></select>
-                  </label>
-                  <div class="bt-actions">
-                    <button id="bt-save-btn" data-en="Save" data-ar="حفظ">Save</button>
-                    <button id="bt-open-windows-btn" type="button"
-                            data-en="Pair a phone (Windows BT settings)"
-                            data-ar="إقران الجهاز (إعدادات بلوتوث ويندوز)">
-                      Pair a phone (Windows BT settings)
-                    </button>
-                  </div>
-                  <div id="bt-status-line" class="bt-status"></div>
+                <h3 style="margin-top:18px;" data-en="Bluetooth Sync" data-ar="مزامنة عبر بلوتوث">Bluetooth Sync</h3>
+                <div class="section-card" id="bt-sync-card" style="max-width:560px;margin-bottom:18px;">
+                    <p style="margin:0 0 12px;color:var(--muted);font-size:0.9em;line-height:1.6;"
+                       data-en="A paired phone syncs over Bluetooth whenever Wi-Fi and the cloud aren't reachable. Pair phone ↔ PC once in Windows Bluetooth settings, then just flip the toggle — the clinic PC auto-picks the right COM port."
+                       data-ar="يتزامن الهاتف المُقترن عبر بلوتوث عند تعذّر الوصول إلى الإنترنت والشبكة المحلية. اقترن الجهازَين مرّة واحدة من إعدادات بلوتوث في ويندوز، ثم فعّل الخيار — يختار الكمبيوتر منفذ COM تلقائيًا.">
+                    </p>
+
+                    <div id="bt-status-pill" class="bt-status-pill">
+                        <span class="bt-dot"></span>
+                        <span id="bt-status-text" data-en="Loading…" data-ar="جارٍ التحميل…">Loading…</span>
+                    </div>
+
+                    <div class="bt-toggle-row">
+                        <label>
+                            <input type="checkbox" id="bt-enabled" onchange="bluetoothToggleEnabled(this.checked)"/>
+                            <span data-en="Enable Bluetooth Sync" data-ar="تفعيل المزامنة عبر بلوتوث">Enable Bluetooth Sync</span>
+                        </label>
+                    </div>
+
+                    <details class="bt-advanced">
+                        <summary data-en="Advanced — pick COM port manually" data-ar="إعدادات متقدّمة — اختيار منفذ COM يدويًا">Advanced — pick COM port manually</summary>
+                        <div class="bt-advanced-body">
+                            <select id="bt-com-port"></select>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                <button class="btn btn-warning" type="button" onclick="loadBluetoothSyncSettings()"
+                                        data-en="Refresh ports" data-ar="تحديث القائمة">Refresh ports</button>
+                                <button class="btn btn-primary" type="button" id="bt-save-btn"
+                                        data-en="Save" data-ar="حفظ">Save</button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+                        <button class="btn btn-secondary" id="bt-open-windows-btn" type="button"
+                                data-en="Open Windows Bluetooth settings"
+                                data-ar="فتح إعدادات بلوتوث في ويندوز">
+                            Open Windows Bluetooth settings
+                        </button>
+                    </div>
                 </div>
 
                 <h3 style="margin-top:4px;" data-i18n="audit_log">Audit Log</h3>
@@ -6775,6 +6880,35 @@ HTML_TEMPLATE = '''
 
         // ── Bluetooth Sync (Settings → Bluetooth Sync) ────────────────────────
 
+        function _renderBtStatusPill(s) {
+          // Drive both the status pill (color + dot) and its text from /api/bt/status.
+          const pill = document.getElementById('bt-status-pill');
+          const txt  = document.getElementById('bt-status-text');
+          if (!pill || !txt) return;
+          pill.classList.remove('bt-listening', 'bt-waiting', 'bt-error');
+          const ar = _ar();
+          let cls = '', line = '';
+          if (!s.enabled) {
+            line = ar ? 'متوقّفة' : 'Disabled';
+          } else if (s.last_error) {
+            cls = 'bt-error';
+            line = (ar ? '⚠️ ' : '⚠️ ') + s.last_error;
+          } else if (!s.com_port) {
+            cls = 'bt-waiting';
+            line = ar ? 'لم يُعثر على منفذ بلوتوث — اقترن هاتفًا من إعدادات ويندوز.'
+                       : 'No Bluetooth port found — pair a phone in Windows BT settings first.';
+          } else if (s.last_sync_at) {
+            cls = 'bt-listening';
+            line = (ar ? 'آخر مزامنة: ' : 'Last sync: ') + s.last_sync_at + ' · ' + s.com_port;
+          } else {
+            cls = 'bt-listening';
+            line = (ar ? 'يستمع على ' : 'Listening on ') + s.com_port +
+                   (ar ? ' — بانتظار الهاتف…' : ' — waiting for a phone…');
+          }
+          if (cls) pill.classList.add(cls);
+          txt.textContent = line;
+        }
+
         async function loadBluetoothSyncSettings() {
           try {
             const r = await fetch('/api/bt/status', {credentials: 'same-origin'});
@@ -6782,43 +6916,78 @@ HTML_TEMPLATE = '''
             const s = await r.json();
             document.getElementById('bt-enabled').checked = !!s.enabled;
             const sel = document.getElementById('bt-com-port');
-            sel.innerHTML = '';
-            const opt0 = document.createElement('option');
-            opt0.value = ''; opt0.textContent = '— pick a port —';
-            sel.appendChild(opt0);
-            for (const p of (s.available_ports || [])) {
-              const o = document.createElement('option');
-              o.value = p.device; o.textContent = `${p.device} (${p.description})`;
-              if (p.device === s.com_port) o.selected = true;
-              sel.appendChild(o);
+            if (sel) {
+              sel.innerHTML = '';
+              const opt0 = document.createElement('option');
+              opt0.value = '';
+              opt0.textContent = _ar()
+                ? (s.recommended_port ? `— تلقائي (${s.recommended_port}) —` : '— تلقائي —')
+                : (s.recommended_port ? `— Auto (${s.recommended_port}) —` : '— Auto —');
+              sel.appendChild(opt0);
+              for (const p of (s.available_ports || [])) {
+                const o = document.createElement('option');
+                const tag = p.looks_incoming ? (_ar() ? ' [موصى به]' : ' [recommended]') : '';
+                o.value = p.device;
+                o.textContent = `${p.device} (${p.description || '—'})${tag}`;
+                if (p.device === s.com_port) o.selected = true;
+                sel.appendChild(o);
+              }
+              if (s.com_port && !Array.from(sel.options).some(o => o.value === s.com_port)) {
+                const o = document.createElement('option');
+                o.value = s.com_port;
+                o.textContent = `${s.com_port} ` + (_ar() ? '(غير متوفّر حاليًا)' : '(not currently present)');
+                o.selected = true;
+                sel.appendChild(o);
+              }
             }
-            if (s.com_port && !Array.from(sel.options).some(o => o.value === s.com_port)) {
-              const o = document.createElement('option');
-              o.value = s.com_port; o.textContent = `${s.com_port} (not currently present)`;
-              o.selected = true;
-              sel.appendChild(o);
-            }
-            let line = '';
-            if (!s.enabled) line = (_ar() ? 'متوقّفة' : 'Disabled');
-            else if (!s.com_port) line = (_ar() ? 'لم يُختر منفذ' : 'No port selected');
-            else if (s.last_error) line = `⚠️ ${s.last_error}`;
-            else if (s.last_sync_at) line = (_ar() ? 'آخر مزامنة: ' : 'Last sync: ') + s.last_sync_at;
-            else line = (_ar() ? 'في الانتظار…' : 'Waiting for a phone…');
-            document.getElementById('bt-status-line').textContent = line;
+            _renderBtStatusPill(s);
           } catch (_) {
             document.getElementById('bt-sync-card').style.display = 'none';
           }
         }
 
+        async function _btConfigure(enabled, com_port) {
+          // Single network call. Returns the parsed JSON or null on failure.
+          try {
+            const r = await fetch('/api/bt/configure', {
+              method: 'POST', credentials: 'same-origin',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({enabled, com_port}),
+            });
+            if (!r.ok) return null;
+            return await r.json();
+          } catch (_) { return null; }
+        }
+
+        async function bluetoothToggleEnabled(enabled) {
+          // Toggle path: leave com_port blank so the server auto-picks the
+          // best-looking Bluetooth port. If the user already picked one
+          // manually, preserve it.
+          const sel = document.getElementById('bt-com-port');
+          const picked = sel ? (sel.value || '') : '';
+          const res = await _btConfigure(!!enabled, picked);
+          if (!res) {
+            alert(_ar() ? 'فشل الحفظ' : 'Save failed');
+            // Revert the checkbox to whatever the server still thinks.
+            await loadBluetoothSyncSettings();
+            return;
+          }
+          if (enabled && res.auto_picked && res.com_port) {
+            // Briefly flash a hint so the user knows we picked a port for them.
+            const txt = document.getElementById('bt-status-text');
+            if (txt) {
+              txt.textContent = (_ar() ? 'اختير المنفذ تلقائيًا: ' : 'Auto-picked port: ') + res.com_port;
+            }
+          }
+          await loadBluetoothSyncSettings();
+        }
+
         async function saveBluetoothSyncSettings() {
-          const enabled = document.getElementById('bt-enabled').checked;
-          const com_port = document.getElementById('bt-com-port').value || '';
-          const r = await fetch('/api/bt/configure', {
-            method: 'POST', credentials: 'same-origin',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({enabled, com_port}),
-          });
-          if (!r.ok) { alert(_ar() ? 'فشل الحفظ' : 'Save failed'); return; }
+          // Advanced path: explicit Save inside the manual COM-port disclosure.
+          const enabled  = document.getElementById('bt-enabled').checked;
+          const com_port = (document.getElementById('bt-com-port') || {}).value || '';
+          const res = await _btConfigure(enabled, com_port);
+          if (!res) { alert(_ar() ? 'فشل الحفظ' : 'Save failed'); return; }
           await loadBluetoothSyncSettings();
         }
 
@@ -10301,7 +10470,14 @@ def cloud_unpair():
 
 
 def _bt_list_serial_ports():
-    """Return COM port entries that look like Bluetooth SPP ports."""
+    """Return COM port entries that look like Bluetooth SPP ports.
+
+    On Windows, the **incoming** BT-SPP port (the one we want to listen on)
+    typically has a hwid containing ``LOCALMFG``; outgoing per-device ports
+    have the remote device's address in the hwid instead. We surface both —
+    the user can override — but rank the incoming-looking ones first so the
+    auto-pick lands on the right port without the user needing to know.
+    """
     try:
         from serial.tools import list_ports
     except ImportError:
@@ -10309,9 +10485,32 @@ def _bt_list_serial_ports():
     ports = []
     for p in list_ports.comports():
         desc = (p.description or '').lower()
-        if 'bluetooth' in desc or 'standard serial over bluetooth' in desc:
-            ports.append({'device': p.device, 'description': p.description})
+        hwid = (p.hwid or '').lower()
+        is_bt = (
+            'bluetooth' in desc
+            or 'standard serial over bluetooth' in desc
+            or 'bthenum' in hwid
+        )
+        if not is_bt:
+            continue
+        looks_incoming = 'localmfg' in hwid
+        ports.append({
+            'device': p.device,
+            'description': p.description or '',
+            'hwid': p.hwid or '',
+            'looks_incoming': looks_incoming,
+        })
+    # Sort: incoming-looking first, then alphabetical for stability.
+    ports.sort(key=lambda x: (not x['looks_incoming'], x['device']))
     return ports
+
+
+def _bt_pick_default_port():
+    """Best guess at the COM port the desktop should listen on. Empty string
+    if no Bluetooth port is registered with Windows yet (user needs to enable
+    'Allow other devices to send files' or pair a phone first)."""
+    ports = _bt_list_serial_ports()
+    return ports[0]['device'] if ports else ''
 
 
 @app.route('/api/bt/status', methods=['GET'])
@@ -10326,12 +10525,17 @@ def bt_status():
     last_sync_at = read_app_setting(cur, 'bt_last_sync_at', '') or ''
     last_error = read_app_setting(cur, 'bt_last_error', '') or ''
     conn.close()
+    available = _bt_list_serial_ports()
     return jsonify({
         'enabled': enabled,
         'com_port': com_port,
         'last_sync_at': last_sync_at,
         'last_error': last_error,
-        'available_ports': _bt_list_serial_ports(),
+        'available_ports': available,
+        # The port the server *would* listen on if the user just toggled
+        # Enable without picking anything. The JS UI uses this for the
+        # "Smart pick" UX so the user doesn't need to know about COM ports.
+        'recommended_port': available[0]['device'] if available else '',
     })
 
 
@@ -10341,17 +10545,35 @@ def bt_configure():
         return jsonify({'error': 'Bluetooth sync is local-server only'}), 400
     data = request.get_json(silent=True) or {}
     enabled = data.get('enabled')
+    if not isinstance(enabled, bool):
+        return jsonify({'error': 'enabled (bool) required'}), 400
     com_port = data.get('com_port')
-    if not isinstance(enabled, bool) or not isinstance(com_port, str):
-        return jsonify({'error': 'enabled (bool) and com_port (str) required'}), 400
+    if com_port is None:
+        com_port = ''
+    elif not isinstance(com_port, str):
+        return jsonify({'error': 'com_port must be a string'}), 400
+    com_port = com_port.strip()
+    # Smart pick: if enabling without a port, fall back to whatever Windows
+    # has registered as a Bluetooth port. The user can override later.
+    auto_picked = False
+    if enabled and not com_port:
+        com_port = _bt_pick_default_port()
+        auto_picked = bool(com_port)
     conn = get_db_connection()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     write_app_setting(cur, 'bt_sync_enabled', '1' if enabled else '0')
-    write_app_setting(cur, 'bt_sync_com_port', com_port.strip())
+    write_app_setting(cur, 'bt_sync_com_port', com_port)
+    # Saving fresh settings clears the previous error — the next loop
+    # iteration on the worker thread will either re-error or recover.
+    write_app_setting(cur, 'bt_last_error', '')
     conn.commit()
     conn.close()
-    return jsonify({'ok': True})
+    return jsonify({
+        'ok': True,
+        'com_port': com_port,
+        'auto_picked': auto_picked,
+    })
 
 
 @app.route('/api/license/activate', methods=['POST'])
@@ -11207,8 +11429,13 @@ if __name__ == '__main__':
     if cloud_sync_on:
         threading.Thread(target=cloud_sync_worker, daemon=True).start()
 
-    # Background Bluetooth-SPP server (local clinic server only — production runs).
-    bt_sync_on = (not CLOUD_MODE) and (not debug_mode)
+    # Background Bluetooth-SPP listener. Local clinic server only. Runs in
+    # *both* production and debug — but in debug, only inside the Werkzeug
+    # reloader's child process (WERKZEUG_RUN_MAIN=true), so the parent
+    # watchdog doesn't try to open the same COM port and lose to the child.
+    bt_sync_on = (not CLOUD_MODE) and (
+        not debug_mode or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+    )
     if bt_sync_on:
         threading.Thread(target=bt_sync_server, daemon=True).start()
 

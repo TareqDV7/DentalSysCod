@@ -44,6 +44,36 @@ def test_configure_rejects_invalid_payload(client):
     assert r.status_code == 400
 
 
+def test_status_includes_recommended_port(client, monkeypatch):
+    monkeypatch.setattr(
+        dental_clinic, '_bt_list_serial_ports',
+        lambda: [{'device': 'COM9', 'description': 'BT', 'hwid': '', 'looks_incoming': True}],
+    )
+    data = client.get('/api/bt/status').get_json()
+    assert data['recommended_port'] == 'COM9'
+
+
+def test_configure_auto_picks_when_port_omitted(client, monkeypatch):
+    monkeypatch.setattr(dental_clinic, '_bt_pick_default_port', lambda: 'COM11')
+    r = client.post('/api/bt/configure', json={'enabled': True})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body == {'ok': True, 'com_port': 'COM11', 'auto_picked': True}
+    assert client.get('/api/bt/status').get_json()['com_port'] == 'COM11'
+
+
+def test_configure_clears_last_error(client):
+    # Seed an error, then save fresh settings — the error should be wiped so
+    # the next worker pass starts clean rather than the UI showing a stale ⚠️.
+    conn = dental_clinic.get_db_connection()
+    cur = conn.cursor()
+    dental_clinic.write_app_setting(cur, 'bt_last_error', 'boom')
+    conn.commit()
+    conn.close()
+    client.post('/api/bt/configure', json={'enabled': True, 'com_port': 'COM7'})
+    assert client.get('/api/bt/status').get_json()['last_error'] == ''
+
+
 def test_endpoints_require_login(tmp_path, monkeypatch):
     db = tmp_path / 'bt_ep2.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(db))
