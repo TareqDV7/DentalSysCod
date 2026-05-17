@@ -23,7 +23,11 @@ class AppState extends ChangeNotifier {
   late final AppointmentService appointments;
   late final BillingService billing;
   late final ReportService reports;
-  late final ConnectivitySyncService sync;
+  late final ConnectivitySyncService _connectivity;
+  late final InternetSyncService _internet;
+  late final BluetoothSyncService _bluetooth;
+
+  ConnectivitySyncService get sync => _connectivity;
 
   String _clinicName = 'Clinic';
   String _locale = 'en';
@@ -39,11 +43,19 @@ class AppState extends ChangeNotifier {
     appointments = AppointmentService(db, api);
     billing = BillingService(db, api);
     reports = ReportService(db, api);
-    final internet = InternetSyncService(db, api);
-    final bluetooth = BluetoothSyncService(db);
-    sync = ConnectivitySyncService(
-      internet: internet,
-      bluetooth: bluetooth,
+    _internet = InternetSyncService(db, api);
+    _bluetooth = BluetoothSyncService.production(
+      deviceTokenLoader: _storage.getDeviceToken,
+      sinceLoader: () async => null,
+      onExport: (exported) async {
+        await _internet.applyExportedDelta(exported);
+      },
+      buildPushPayload: _internet.buildPushPayload,
+      clientVersion: '1.0.0',
+    );
+    _connectivity = ConnectivitySyncService(
+      internet: _internet,
+      bluetooth: _bluetooth,
       storage: _storage,
       api: api,
       cloud: cloud,
@@ -56,6 +68,55 @@ class AppState extends ChangeNotifier {
   bool get isArabic => _locale == 'ar';
   String? get cloudUrl => _cloudUrl;
   bool get hasCloudAccount => _hasCloudAccount;
+
+  // ── Bluetooth peer ───────────────────────────────────────────────────────
+  bool _btEnabled = false;
+  String? _btBondedMac;
+  String? _btBondedLabel;
+  String? _btLastSyncAt;
+  String? _btLastError;
+
+  bool get btEnabled => _btEnabled;
+  String? get btBondedMac => _btBondedMac;
+  String? get btBondedLabel => _btBondedLabel;
+  String? get btLastSyncAt => _btLastSyncAt;
+  String? get btLastError => _btLastError;
+
+  Future<void> _loadBtState() async {
+    _btEnabled = await _storage.getBtEnabled();
+    _btBondedMac = await _storage.getBtBondedMac();
+    _btBondedLabel = await _storage.getBtBondedLabel();
+    _btLastSyncAt = await _storage.getBtLastSyncAt();
+    _btLastError = await _storage.getBtLastError();
+    notifyListeners();
+  }
+
+  Future<void> setBtEnabled(bool enabled) async {
+    _btEnabled = enabled;
+    await _storage.setBtEnabled(enabled);
+    if (enabled && _btBondedMac != null && _btBondedMac!.isNotEmpty) {
+      _connectivity.startBluetoothAutoLoop();
+    } else {
+      _connectivity.stopBluetoothAutoLoop();
+    }
+    notifyListeners();
+  }
+
+  Future<void> bindBtPeer({required String mac, required String label}) async {
+    await _storage.setBtBondedPeer(mac: mac, label: label);
+    _btBondedMac = mac;
+    _btBondedLabel = label;
+    if (_btEnabled) _connectivity.startBluetoothAutoLoop();
+    notifyListeners();
+  }
+
+  Future<void> unbindBtPeer() async {
+    _connectivity.stopBluetoothAutoLoop();
+    await _storage.clearBtBondedPeer();
+    _btBondedMac = null;
+    _btBondedLabel = null;
+    notifyListeners();
+  }
 
   Future<void> init() async {
     final baseUrl = await _storage.getBaseUrl();
@@ -74,6 +135,11 @@ class AppState extends ChangeNotifier {
     unawaited(sync.syncNow().catchError((error) {
       debugPrint('Initial sync failed: $error');
     }));
+    // Load BT state and start the auto-fallback loop if a peer is bonded + enabled.
+    await _loadBtState();
+    if (_btEnabled && _btBondedMac != null && _btBondedMac!.isNotEmpty) {
+      _connectivity.startBluetoothAutoLoop();
+    }
   }
 
   void setLocale(String locale) {
@@ -133,7 +199,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
-    sync.dispose();
+    _connectivity.dispose();
     super.dispose();
   }
 }

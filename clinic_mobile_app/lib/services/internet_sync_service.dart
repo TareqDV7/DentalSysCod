@@ -26,6 +26,43 @@ class InternetSyncService {
     }
   }
 
+  /// Apply a sync export response (from server or Bluetooth peer) to the local DB.
+  /// [response] should be the full export response map containing 'tables' and
+  /// 'tombstones' keys (the same shape returned by /api/sync/export).
+  Future<void> applyExportedDelta(Map<String, dynamic> response) async {
+    final tables = response['tables'];
+    if (tables is Map) {
+      await _mergeTables(Map<String, dynamic>.from(tables));
+    }
+    final tombstones = response['tombstones'];
+    if (tombstones is List) {
+      for (final t in tombstones) {
+        if (t is Map && t['table_name'] != null && t['row_id'] != null) {
+          final rowId = int.tryParse('${t['row_id']}');
+          if (rowId != null) {
+            await _db.applyTombstone(t['table_name'].toString(), rowId);
+          }
+        }
+      }
+    }
+  }
+
+  /// Build the payload to push to the server (or Bluetooth peer).
+  /// Returns {'tables': ..., 'tombstones': ...}.
+  Future<Map<String, dynamic>> buildPushPayload() async {
+    final tables = <String, dynamic>{};
+    for (final entry in DatabaseService.localToRemoteTable.entries) {
+      final localTable = entry.key;
+      final remoteTable = entry.value;
+      final rows = await _db.getUnsyncedRows(localTable);
+      if (rows.isEmpty) continue;
+      tables[remoteTable] =
+          rows.map((r) => _toServerRow(localTable, r)).toList();
+    }
+    final tombstones = await _db.getUnsyncedTombstones();
+    return {'tables': tables, 'tombstones': tombstones};
+  }
+
   /// Returns the server's `generated_at` (cursor for the next incremental pull).
   Future<String?> _pullFromServer() async {
     try {
@@ -34,21 +71,7 @@ class InternetSyncService {
         '/api/sync/export',
         query: (since != null && since.isNotEmpty) ? {'since': since} : null,
       );
-      final tables = snapshot['tables'];
-      if (tables is Map) {
-        await _mergeTables(Map<String, dynamic>.from(tables));
-      }
-      final tombstones = snapshot['tombstones'];
-      if (tombstones is List) {
-        for (final t in tombstones) {
-          if (t is Map && t['table_name'] != null && t['row_id'] != null) {
-            final rowId = int.tryParse('${t['row_id']}');
-            if (rowId != null) {
-              await _db.applyTombstone(t['table_name'].toString(), rowId);
-            }
-          }
-        }
-      }
+      await applyExportedDelta(snapshot);
       return snapshot['generated_at']?.toString();
     } catch (_) {
       // pull failures are non-fatal; we'll retry next sync
@@ -83,22 +106,19 @@ class InternetSyncService {
   }
 
   Future<void> _pushToServer() async {
-    final tables = <String, dynamic>{};
     final pushedRows = <String, List<int>>{};
     for (final entry in DatabaseService.localToRemoteTable.entries) {
       final localTable = entry.key;
-      final remoteTable = entry.value;
       final rows = await _db.getUnsyncedRows(localTable);
-      if (rows.isEmpty) continue;
-      tables[remoteTable] =
-          rows.map((r) => _toServerRow(localTable, r)).toList();
       pushedRows[localTable] = [
         for (final r in rows)
           if (r['id'] is int) r['id'] as int,
       ];
     }
 
-    final tombstones = await _db.getUnsyncedTombstones();
+    final payload = await buildPushPayload();
+    final tables = payload['tables'] as Map<String, dynamic>;
+    final tombstones = payload['tombstones'] as List;
     if (tables.isEmpty && tombstones.isEmpty) return;
 
     try {

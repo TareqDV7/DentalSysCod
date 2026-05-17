@@ -5,7 +5,7 @@ import '../state/app_state.dart';
 import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
 import '../services/cloud_sync_service.dart';
-import '../services/bluetooth_sync_service.dart';
+// flutter_bluetooth_serial imported in Task 14 for peer picker
 import '../widgets/gradient_button.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/section_header.dart';
@@ -63,8 +63,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _bluetoothSync() async {
-    setState(() { _btScanning = true; _btStatus = 'Scanning for nearby devices…'; });
-    final ok = await context.read<AppState>().sync.syncViaBluetooth();
+    final app = context.read<AppState>();
+    final mac = app.btBondedMac;
+    if (mac == null || mac.isEmpty) {
+      setState(() { _btScanning = false; _btStatus = 'No device bonded — pick one below'; });
+      return;
+    }
+    setState(() { _btScanning = true; _btStatus = 'Connecting via Bluetooth…'; });
+    final ok = await app.sync.syncViaBluetooth(mac);
     if (mounted) {
       setState(() {
         _btScanning = false;
@@ -360,30 +366,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ],
                 const SizedBox(height: 14),
-                StreamBuilder<BluetoothSyncState>(
-                  stream: state.sync
-                      // ignore: invalid_use_of_protected_member
-                      .statusStream
-                      .map((_) => BluetoothSyncState.idle),
-                  builder: (_, _) => OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(44),
-                      side: BorderSide(color: scheme.primary),
-                      foregroundColor: scheme.primary,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                    ),
-                    onPressed: _btScanning ? null : _bluetoothSync,
-                    icon: _btScanning
-                        ? SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: scheme.primary))
-                        : const Icon(Icons.bluetooth_searching),
-                    label: Text(_btScanning ? 'Scanning…' : 'Find via Bluetooth',
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(44),
+                    side: BorderSide(color: scheme.primary),
+                    foregroundColor: scheme.primary,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                   ),
+                  onPressed: _btScanning ? null : _bluetoothSync,
+                  icon: _btScanning
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: scheme.primary))
+                      : const Icon(Icons.bluetooth_searching),
+                  label: Text(_btScanning ? 'Connecting…' : 'Sync via Bluetooth',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
                 ),
               ],
             ),

@@ -139,25 +139,70 @@ class ConnectivitySyncService {
     }
   }
 
-  Future<bool> syncViaBluetooth() async {
+  Future<bool> syncViaBluetooth(String bondedMac) async {
     _emit(SyncStatus.syncing, 'Bluetooth sync…');
-    final ok = await _bluetooth.scanAndSync();
-    if (ok) {
+    final result = await _bluetooth.runOneSyncCycle(bondedMac);
+    if (result.success) {
       _activeLink = SyncLink.bluetooth;
       _emit(SyncStatus.synced, 'Synced · Bluetooth');
-    } else {
-      _activeLink = SyncLink.none;
-      _emit(SyncStatus.error,
-          _bluetooth.lastError ?? 'Bluetooth sync failed');
+      await _storage.setBtLastSyncAt(DateTime.now().toIso8601String());
+      await _storage.clearBtLastError();
+      return true;
     }
-    return ok;
+    _activeLink = SyncLink.none;
+    await _storage.setBtLastError(result.errorMessage ?? 'unknown');
+    _emit(SyncStatus.error, result.errorMessage ?? 'Bluetooth sync failed');
+    return false;
+  }
+
+  Timer? _btAutoTimer;
+
+  /// Start the auto-fallback BT loop. Idempotent; safe to call repeatedly.
+  void startBluetoothAutoLoop({Duration interval = const Duration(seconds: 30)}) {
+    _btAutoTimer?.cancel();
+    _btAutoTimer = Timer.periodic(interval, (_) => _btAutoTick());
+    // also tick immediately so we don't wait 30 s on first activation
+    unawaited(_btAutoTick());
+  }
+
+  void stopBluetoothAutoLoop() {
+    _btAutoTimer?.cancel();
+    _btAutoTimer = null;
+  }
+
+  Future<void> _btAutoTick() async {
+    if (_status == SyncStatus.syncing) return;
+    final mac = await _storage.getBtBondedMac();
+    if (mac == null || mac.isEmpty) return;
+    final enabled = await _storage.getBtEnabled();
+    if (!enabled) return;
+    // Skip if LAN or cloud just synced — fallback-only mode.
+    final lanOk = await _isLanReachable();
+    if (lanOk) return;
+    final cloudOk = await _isCloudReachable();
+    if (cloudOk) return;
+    await syncViaBluetooth(mac);
+  }
+
+  Future<bool> _isLanReachable() async {
+    final url = await _storage.getLocalUrl();
+    final token = await _storage.getDeviceToken();
+    if (url == null || url.isEmpty || token == null || token.isEmpty) return false;
+    return _cloud.isReachable(url);
+  }
+
+  Future<bool> _isCloudReachable() async {
+    final url = await _storage.getCloudUrl();
+    final token = await _storage.getCloudClinicToken();
+    if (url == null || url.isEmpty || token == null || token.isEmpty) return false;
+    return _cloud.isReachable(url, clinicToken: token);
   }
 
   Future<String?> getLastSyncTime() => _internet.getLastSyncTime();
 
   void dispose() {
+    _btAutoTimer?.cancel();
     _connectivitySub?.cancel();
     _statusController.close();
-    _bluetooth.dispose();
   }
 }
