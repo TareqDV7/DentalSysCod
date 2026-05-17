@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import '../config/app_config.dart';
 import '../state/app_state.dart';
+import '../services/bluetooth_permissions.dart';
 import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
 import '../services/cloud_sync_service.dart';
@@ -306,6 +307,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Consumer<AppState>(
                   builder: (context, app, _) {
+                    final hasError =
+                        app.btLastError != null && app.btLastError!.isNotEmpty;
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -335,9 +338,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             icon: Icons.bluetooth_searching_rounded,
                             onPressed: () => _pickBondedPeer(context, app),
                           ),
-                        const SizedBox(height: 8),
-                        Text(_btStatusLine(app),
-                            style: Theme.of(context).textTheme.bodySmall),
+                        if (hasError) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFDE7E9),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFD9434E)),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.error_outline,
+                                    color: Color(0xFF9C2E36), size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(app.btLastError!,
+                                      style: const TextStyle(
+                                          color: Color(0xFF9C2E36),
+                                          fontSize: 13)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 8),
+                          Text(_btStatusLine(app),
+                              style: Theme.of(context).textTheme.bodySmall),
+                        ],
+                        if (app.btBondedMac != null && app.btEnabled) ...[
+                          const SizedBox(height: 12),
+                          GradientButton(
+                            label: app.locale == 'ar'
+                                ? 'مزامنة الآن عبر بلوتوث'
+                                : 'Sync now via Bluetooth',
+                            icon: Icons.bluetooth_connected_rounded,
+                            onPressed: () => _syncBtNow(context, app),
+                            width: double.infinity,
+                          ),
+                        ],
                       ],
                     );
                   },
@@ -464,7 +504,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return app.locale == 'ar' ? 'في انتظار الاقتراب…' : 'Waiting to come into range…';
   }
 
+  Future<void> _syncBtNow(BuildContext context, AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 2),
+        content: Text(app.locale == 'ar'
+            ? 'محاولة المزامنة عبر بلوتوث…'
+            : 'Trying Bluetooth sync…')));
+    final ok = await app.syncViaBluetoothNow();
+    if (!context.mounted) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+        backgroundColor:
+            ok ? const Color(0xFF1F9A5F) : const Color(0xFFD9434E),
+        content: Text(ok
+            ? (app.locale == 'ar' ? 'تمت المزامنة عبر بلوتوث' : 'Synced via Bluetooth')
+            : (app.locale == 'ar'
+                ? 'فشل: ${app.btLastError ?? "غير معروف"}'
+                : 'Failed: ${app.btLastError ?? "unknown"}'))));
+    if (ok) await _loadLastSync();
+  }
+
   Future<void> _pickBondedPeer(BuildContext context, AppState app) async {
+    // Android 12+ runtime perms — getBondedDevices() returns empty without
+    // BLUETOOTH_CONNECT granted, which is indistinguishable from "no devices
+    // paired" to the user.
+    final granted = await BluetoothPermissions.ensureGranted();
+    if (!granted) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          app.locale == 'ar'
+              ? 'يلزم منح إذن بلوتوث من إعدادات أندرويد'
+              : 'Bluetooth permission denied — grant it in Android settings')));
+      return;
+    }
     final List<BluetoothDevice> devices;
     try {
       devices = await FlutterBluetoothSerial.instance.getBondedDevices();

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'bluetooth_permissions.dart';
 import 'clinic_api.dart';
 import 'cloud_sync_service.dart';
 import 'internet_sync_service.dart';
@@ -176,6 +177,13 @@ class ConnectivitySyncService {
     if (mac == null || mac.isEmpty) return;
     final enabled = await _storage.getBtEnabled();
     if (!enabled) return;
+    // Non-prompting status check — if the user revoked BT permissions after
+    // enabling the toggle, the next session would just hang. Bail early
+    // with a clear error.
+    if (!await BluetoothPermissions.areGranted()) {
+      await _storage.setBtLastError('Bluetooth permission revoked');
+      return;
+    }
     // Skip if LAN or cloud just synced — fallback-only mode.
     final lanOk = await _isLanReachable();
     if (lanOk) return;

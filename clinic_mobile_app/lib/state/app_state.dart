@@ -9,6 +9,7 @@ import '../services/appointment_service.dart';
 import '../services/billing_service.dart';
 import '../services/report_service.dart';
 import '../services/internet_sync_service.dart';
+import '../services/bluetooth_permissions.dart';
 import '../services/bluetooth_sync_service.dart';
 import '../services/connectivity_sync_service.dart';
 import '../services/local_storage_service.dart';
@@ -99,6 +100,23 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> setBtEnabled(bool enabled) async {
+    if (enabled) {
+      // Android 12+ runtime perms — without these, every BT call fails
+      // silently. Must be called from a foreground activity, which is
+      // where this toggle lives.
+      final granted = await BluetoothPermissions.ensureGranted();
+      if (!granted) {
+        _btEnabled = false;
+        _btLastError = 'Bluetooth permission denied';
+        await _storage.setBtEnabled(false);
+        await _storage.setBtLastError(_btLastError!);
+        _connectivity.stopBluetoothAutoLoop();
+        notifyListeners();
+        return;
+      }
+      _btLastError = null;
+      await _storage.clearBtLastError();
+    }
     _btEnabled = enabled;
     await _storage.setBtEnabled(enabled);
     if (enabled && _btBondedMac != null && _btBondedMac!.isNotEmpty) {
@@ -123,6 +141,28 @@ class AppState extends ChangeNotifier {
     _btBondedMac = null;
     _btBondedLabel = null;
     notifyListeners();
+  }
+
+  /// Force one Bluetooth sync cycle right now, bypassing the LAN/cloud
+  /// reachability gate. Use for the explicit "Sync now via Bluetooth" button.
+  Future<bool> syncViaBluetoothNow() async {
+    final mac = _btBondedMac;
+    if (mac == null || mac.isEmpty) {
+      _btLastError = 'No clinic PC paired';
+      await _storage.setBtLastError(_btLastError!);
+      notifyListeners();
+      return false;
+    }
+    final granted = await BluetoothPermissions.ensureGranted();
+    if (!granted) {
+      _btLastError = 'Bluetooth permission denied';
+      await _storage.setBtLastError(_btLastError!);
+      notifyListeners();
+      return false;
+    }
+    final ok = await _connectivity.syncViaBluetooth(mac);
+    await _loadBtState();
+    return ok;
   }
 
   Future<void> init() async {
