@@ -1,5 +1,6 @@
 import '../models/patient.dart';
 import '../models/visit.dart';
+import '../models/followup.dart';
 import 'database_service.dart';
 import 'clinic_api.dart';
 
@@ -103,6 +104,31 @@ class PatientService {
       await _api.delete('/api/patients/$patientId/followups/$visitId');
     } catch (_) {}
   }
+
+  // ── Follow-ups (canonical patient ledger) ───────────────────────────────────
+  //
+  // Offline-first: writes go to the local sqflite + record `is_synced=0` and
+  // a recompute fires on the patient's whole ledger. The next sync cycle
+  // pushes the row to the server, which runs its own canonical recompute and
+  // emits the new `remaining_amount` back on the following pull. Callers that
+  // want the desktop to see the row immediately should trigger
+  // `ConnectivitySyncService.syncNow()` after the write.
+
+  Future<List<Followup>> getPatientFollowups(int patientId) =>
+      _db.getPatientFollowups(patientId);
+
+  Future<int> addFollowup(Followup f) {
+    return _db.upsertFollowup(
+        f.copyWith(updatedAt: DateTime.now().toIso8601String(), isSynced: false));
+  }
+
+  Future<int> updateFollowup(Followup f) {
+    return _db.upsertFollowup(
+        f.copyWith(updatedAt: DateTime.now().toIso8601String(), isSynced: false));
+  }
+
+  Future<void> deleteFollowup({required int patientId, required int id}) =>
+      _db.deleteFollowup(id: id, patientId: patientId);
 }
 
 extension _VisitExt on Visit {

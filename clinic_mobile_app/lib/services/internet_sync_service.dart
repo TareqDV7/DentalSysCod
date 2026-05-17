@@ -3,6 +3,7 @@ import '../models/appointment.dart';
 import '../models/visit.dart';
 import '../models/billing_record.dart';
 import '../models/expense.dart';
+import '../models/followup.dart';
 import '../models/treatment_procedure.dart';
 import 'database_service.dart';
 import 'clinic_api.dart';
@@ -137,6 +138,8 @@ class InternetSyncService {
     await each('expenses', (e) => _db.upsertExpense(Expense.fromJson(e)));
     await each('treatment_procedures',
         (p) => _db.upsertProcedure(TreatmentProcedure.fromJson(p)));
+    await each('patient_followups',
+        (f) => _db.upsertFollowup(Followup.fromJson(f).copyWith(isSynced: true)));
   }
 
   Future<void> _pushToServer() async {

@@ -35,6 +35,8 @@ class AppStrings {
       'save_visit': 'حفظ الزيارة',
       'time': 'الوقت',
       'status': 'الحالة',
+      'discount': 'الخصم',
+      'tooth_no': 'رقم السن',
     },
     'en': {
       'cancel': 'Cancel',
@@ -71,6 +73,8 @@ class AppStrings {
       'save_visit': 'Save Visit',
       'time': 'Time',
       'status': 'Status',
+      'discount': 'Discount',
+      'tooth_no': 'Tooth #',
     }
   };
 

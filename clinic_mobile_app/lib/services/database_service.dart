@@ -5,6 +5,7 @@ import '../models/appointment.dart';
 import '../models/visit.dart';
 import '../models/billing_record.dart';
 import '../models/expense.dart';
+import '../models/followup.dart';
 import '../models/treatment_procedure.dart';
 
 class DatabaseService {
@@ -19,7 +20,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 2, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 3, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -30,6 +31,7 @@ class DatabaseService {
     'billing_records': 'billing',
     'expenses': 'expenses',
     'treatment_procedures': 'treatment_procedures',
+    'followups': 'patient_followups',
   };
   static final Map<String, String> remoteToLocalTable = {
     for (final e in localToRemoteTable.entries) e.value: e.key,
@@ -50,7 +52,35 @@ class DatabaseService {
     if (oldVersion < 2) {
       await db.execute(_createTombstones);
     }
+    if (oldVersion < 3) {
+      await db.execute(_createFollowups);
+      await db.execute(_idxFollowupsPatient);
+    }
   }
+
+  static const String _createFollowups = '''
+    CREATE TABLE IF NOT EXISTS followups (
+      id INTEGER PRIMARY KEY,
+      patient_id INTEGER NOT NULL,
+      followup_date TEXT,
+      treatment_procedure TEXT,
+      procedure_id INTEGER,
+      tooth_no TEXT,
+      diagnosis TEXT,
+      price REAL DEFAULT 0,
+      discount REAL DEFAULT 0,
+      lab_expense REAL DEFAULT 0,
+      payment REAL DEFAULT 0,
+      remaining_amount REAL DEFAULT 0,
+      clinic_profit REAL DEFAULT 0,
+      notes TEXT,
+      updated_at TEXT,
+      is_synced INTEGER DEFAULT 0
+    )
+  ''';
+
+  static const String _idxFollowupsPatient =
+      'CREATE INDEX IF NOT EXISTS idx_followups_patient ON followups(patient_id)';
 
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
@@ -150,6 +180,8 @@ class DatabaseService {
     ''');
 
     await db.execute(_createTombstones);
+    await db.execute(_createFollowups);
+    await db.execute(_idxFollowupsPatient);
   }
 
   // ── Patients ──────────────────────────────────────────────────────────────
@@ -397,6 +429,90 @@ class DatabaseService {
     await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
     await recordTombstone('expenses', id);
   }
+
+  // ── Follow-ups ────────────────────────────────────────────────────────────
+
+  Future<List<Followup>> getPatientFollowups(int patientId) async {
+    final db = await database;
+    final rows = await db.query('followups',
+        where: 'patient_id = ?',
+        whereArgs: [patientId],
+        orderBy: 'followup_date ASC, id ASC');
+    return rows.map(Followup.fromDb).toList();
+  }
+
+  Future<Followup?> getFollowup(int id) async {
+    final db = await database;
+    final rows = await db
+        .query('followups', where: 'id = ?', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : Followup.fromDb(rows.first);
+  }
+
+  /// Insert or update a follow-up, then rewrite the running balance for the
+  /// whole patient ledger. Returns the row id.
+  Future<int> upsertFollowup(Followup f) async {
+    final db = await database;
+    final data = f.toDb();
+    int rowId;
+    if (f.id != null) {
+      final exists = await db.query('followups',
+          where: 'id = ?', whereArgs: [f.id], limit: 1);
+      if (exists.isNotEmpty) {
+        await db.update('followups', data, where: 'id = ?', whereArgs: [f.id]);
+        rowId = f.id!;
+      } else {
+        rowId = await db.insert('followups', data,
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    } else {
+      rowId = await db.insert('followups', data,
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await _recomputeFollowupBalances(f.patientId);
+    return rowId;
+  }
+
+  Future<void> deleteFollowup({required int id, required int patientId}) async {
+    final db = await database;
+    await db.delete('followups', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('followups', id);
+    await _recomputeFollowupBalances(patientId);
+  }
+
+  /// Port of the server's `_recompute_followup_balances`: rewrite every row's
+  /// `remaining_amount` as the cumulative `Σ (price − discount − payment)`
+  /// walked in `(followup_date ASC, id ASC)` order. May go negative (patient
+  /// credit) — no clamping, matching the server.
+  Future<void> _recomputeFollowupBalances(int patientId) async {
+    final db = await database;
+    final rows = await db.query('followups',
+        columns: ['id', 'price', 'discount', 'payment', 'remaining_amount'],
+        where: 'patient_id = ?',
+        whereArgs: [patientId],
+        orderBy: 'followup_date ASC, id ASC');
+    double running = 0.0;
+    final batch = db.batch();
+    var dirty = false;
+    for (final r in rows) {
+      final price = (r['price'] as num?)?.toDouble() ?? 0.0;
+      final discount = (r['discount'] as num?)?.toDouble() ?? 0.0;
+      final payment = (r['payment'] as num?)?.toDouble() ?? 0.0;
+      running += price - discount - payment;
+      final newAmount = (running * 100).round() / 100;
+      final stored = (r['remaining_amount'] as num?)?.toDouble() ?? 0.0;
+      if ((newAmount - stored).abs() > 0.005) {
+        batch.update('followups', {'remaining_amount': newAmount},
+            where: 'id = ?', whereArgs: [r['id']]);
+        dirty = true;
+      }
+    }
+    if (dirty) await batch.commit(noResult: true);
+  }
+
+  /// Test seam: the recompute is private but tests need to verify it directly
+  /// for edge cases (out-of-order insertion, edit changing the date, etc.).
+  Future<void> debugRecomputeFollowups(int patientId) =>
+      _recomputeFollowupBalances(patientId);
 
   // ── Treatment Procedures ──────────────────────────────────────────────────
 

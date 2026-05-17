@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -5,7 +6,7 @@ import '../state/app_state.dart';
 import '../utils/date_format_helper.dart';
 import '../utils/app_strings.dart';
 import '../models/patient.dart';
-import '../models/visit.dart';
+import '../models/followup.dart';
 import '../models/appointment.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/status_badge.dart';
@@ -23,7 +24,7 @@ class PatientDetailScreen extends StatefulWidget {
 class _PatientDetailScreenState extends State<PatientDetailScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
-  List<Visit> _visits = [];
+  List<Followup> _followups = [];
   List<Appointment> _appointments = [];
   bool _loading = true;
   bool _editing = false;
@@ -51,11 +52,11 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
 
   Future<void> _load() async {
     final state = context.read<AppState>();
-    final visits = await state.patients.getPatientVisits(_patient.id!);
+    final followups = await state.patients.getPatientFollowups(_patient.id!);
     final appts = await state.appointments.getPatientAppointments(_patient.id!);
     if (mounted) {
       setState(() {
-        _visits = visits;
+        _followups = followups;
         _appointments = appts;
         _loading = false;
       });
@@ -78,39 +79,44 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     }
   }
 
-  void _addVisit() {
+  void _addFollowup() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _AddVisitSheet(
+      builder: (_) => _FollowupSheet(
         patientId: _patient.id!,
-        patientName: _patient.fullName,
-        onSaved: (v) async {
-          await context.read<AppState>().patients.addVisit(v);
+        onSaved: (f) async {
+          final state = context.read<AppState>();
+          await state.patients.addFollowup(f);
+          // Fire-and-forget — keeps the save snappy; sync runs in background.
+          unawaited(state.sync.syncNow());
           if (mounted) _load();
         },
       ),
     );
   }
 
-  void _editVisit(Visit visit, bool isArabic, Function(String) t) {
+  void _editFollowup(Followup followup) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _EditVisitSheet(
+      builder: (_) => _FollowupSheet(
         patientId: _patient.id!,
-        visit: visit,
-        onSaved: (v) async {
-          await context.read<AppState>().patients.updateVisit(_patient.id!, v);
+        existing: followup,
+        onSaved: (f) async {
+          final state = context.read<AppState>();
+          await state.patients.updateFollowup(f);
+          unawaited(state.sync.syncNow());
           if (mounted) _load();
         },
       ),
     );
   }
 
-  Future<void> _deleteVisit(Visit visit, int patientId, bool isArabic, Function(String) t) async {
+  Future<void> _deleteFollowup(Followup followup, Function(String) t) async {
+    if (followup.id == null) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -128,14 +134,18 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
         ],
       ),
     );
-    if (confirm == true && mounted && visit.id != null) {
-      await context.read<AppState>().patients.deleteVisit(patientId, visit.id!);
-      if (mounted) _load();
-    }
+    if (confirm != true || !mounted) return;
+    final state = context.read<AppState>();
+    await state.patients
+        .deleteFollowup(patientId: _patient.id!, id: followup.id!);
+    unawaited(state.sync.syncNow());
+    if (mounted) _load();
   }
 
-  double get _totalBalance =>
-      _visits.fold(0, (sum, v) => sum + v.balance);
+  /// Patient's outstanding ledger balance = the last follow-up's running total
+  /// (already cumulative). Negative values represent patient credit.
+  double get _runningBalance =>
+      _followups.isEmpty ? 0.0 : _followups.last.remainingAmount;
 
   @override
   Widget build(BuildContext context) {
@@ -166,7 +176,6 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
       ),
       body: Column(
         children: [
-          // Header card
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: ClinicCard(
@@ -237,7 +246,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text('${_visits.length}',
+                            Text('${_followups.length}',
                                 style: TextStyle(
                                     fontWeight: FontWeight.w800,
                                     color: scheme.primary,
@@ -247,10 +256,14 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                                     fontSize: 11,
                                     color: scheme.onSurfaceVariant)),
                             const SizedBox(height: 4),
-                            Text('₪${fmt.format(_totalBalance)}',
-                                style: const TextStyle(
+                            Text('₪${fmt.format(_runningBalance)}',
+                                style: TextStyle(
                                     fontWeight: FontWeight.w800,
-                                    color: Color(0xFFD9434E),
+                                    color: _runningBalance > 0
+                                        ? const Color(0xFFD9434E)
+                                        : _runningBalance < 0
+                                            ? const Color(0xFF1F9A5F)
+                                            : scheme.onSurfaceVariant,
                                     fontSize: 13)),
                             Text(t('balance'),
                                 style: TextStyle(
@@ -277,13 +290,12 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                 : TabBarView(
                     controller: _tabs,
                     children: [
-                      _VisitsTab(
-                          visits: _visits,
-                          onAdd: _addVisit,
-                          fmt: fmt,
-                          patientId: _patient.id!,
-                          onEdit: _editVisit,
-                          onDelete: _deleteVisit),
+                      _FollowupsTab(
+                          followups: _followups,
+                          onAdd: _addFollowup,
+                          onEdit: _editFollowup,
+                          onDelete: _deleteFollowup,
+                          fmt: fmt),
                       _AppointmentsTab(appointments: _appointments),
                     ],
                   ),
@@ -294,27 +306,26 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   }
 }
 
-class _VisitsTab extends StatelessWidget {
-  final List<Visit> visits;
+class _FollowupsTab extends StatelessWidget {
+  final List<Followup> followups;
   final VoidCallback onAdd;
+  final void Function(Followup) onEdit;
+  final Future<void> Function(Followup, String Function(String)) onDelete;
   final NumberFormat fmt;
-  final int patientId;
-  final Function(Visit, bool, Function(String))? onEdit;
-  final Function(Visit, int, bool, Function(String))? onDelete;
-  const _VisitsTab(
-      {required this.visits,
-      required this.onAdd,
-      required this.fmt,
-      this.patientId = 0,
-      this.onEdit,
-      this.onDelete});
+  const _FollowupsTab({
+    required this.followups,
+    required this.onAdd,
+    required this.onEdit,
+    required this.onDelete,
+    required this.fmt,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isArabic = context.select<AppState, bool>((state) => state.isArabic);
     String t(String key) => AppStrings.t(key, isArabic: isArabic);
-    if (visits.isEmpty) {
+    if (followups.isEmpty) {
       return EmptyState(
         icon: Icons.receipt_long_outlined,
         message: t('no_followups'),
@@ -327,72 +338,81 @@ class _VisitsTab extends StatelessWidget {
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.all(16),
-            itemCount: visits.length,
+            itemCount: followups.length,
             itemBuilder: (_, i) {
-              final v = visits[i];
-              final parsedVisitDate = DateFormatHelper.parseApiDate(v.visitDate);
-              final visitDateDisplay = parsedVisitDate != null
-                  ? DateFormatHelper.formatDate(parsedVisitDate)
-                  : v.visitDate;
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: scheme.surface,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: scheme.outlineVariant),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Text(v.procedureName ?? t('visit'),
-                              style: const TextStyle(fontWeight: FontWeight.w700)),
-                        ),
-                        Text(visitDateDisplay,
+              final f = followups[i];
+              final parsedDate = DateFormatHelper.parseApiDate(f.followupDate);
+              final dateDisplay = parsedDate != null
+                  ? DateFormatHelper.formatDate(parsedDate)
+                  : f.followupDate;
+              final balanceColor = f.remainingAmount > 0
+                  ? const Color(0xFFD9434E)
+                  : f.remainingAmount < 0
+                      ? const Color(0xFF1F9A5F)
+                      : scheme.onSurface;
+              return InkWell(
+                onTap: () => onEdit(f),
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: scheme.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              f.treatmentProcedure.isEmpty
+                                  ? t('visit')
+                                  : f.treatmentProcedure,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          Text(dateDisplay,
+                              style: TextStyle(
+                                  color: scheme.onSurfaceVariant, fontSize: 12)),
+                        ],
+                      ),
+                      if ((f.toothNo ?? '').isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text('${t('tooth_no')}: ${f.toothNo}',
                             style: TextStyle(
                                 color: scheme.onSurfaceVariant, fontSize: 12)),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _col(t('price'), '₪${fmt.format(v.price ?? 0)}', scheme),
-                        _col(t('lab'), '₪${fmt.format(v.labExpense ?? 0)}', scheme),
-                        _col(t('paid'), '₪${fmt.format(v.payment ?? 0)}', scheme),
-                        _col(t('balance'),
-                            '₪${fmt.format(v.balance)}',
-                            scheme,
-                            v.balance > 0
-                                ? const Color(0xFFD9434E)
-                                : const Color(0xFF1F9A5F)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit, size: 18),
-                          onPressed: v.id != null && onEdit != null
-                              ? () => onEdit!(v, isArabic, t)
-                              : null,
-                          tooltip: t('edit'),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete,
-                              size: 18, color: Color(0xFFD9434E)),
-                          onPressed: v.id != null && onDelete != null
-                              ? () => onDelete!(v, patientId, isArabic, t)
-                              : null,
-                          tooltip: t('delete'),
-                        ),
-                      ],
-                    ),
-                  ],
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          _col(t('price'), '₪${fmt.format(f.price)}', scheme),
+                          _col(t('discount'), '₪${fmt.format(f.discount)}',
+                              scheme),
+                          _col(t('paid'), '₪${fmt.format(f.payment)}', scheme),
+                          _col(t('balance'),
+                              '₪${fmt.format(f.remainingAmount)}', scheme,
+                              balanceColor),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.delete,
+                                size: 18, color: Color(0xFFD9434E)),
+                            onPressed: () => onDelete(f, t),
+                            tooltip: t('delete'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               );
             },
@@ -486,53 +506,93 @@ class _AppointmentsTab extends StatelessWidget {
   }
 }
 
-class _AddVisitSheet extends StatefulWidget {
+class _FollowupSheet extends StatefulWidget {
   final int patientId;
-  final String patientName;
-  final Future<void> Function(Visit) onSaved;
-  const _AddVisitSheet(
-      {required this.patientId,
-      required this.patientName,
-      required this.onSaved});
+  final Followup? existing;
+  final Future<void> Function(Followup) onSaved;
+  const _FollowupSheet({
+    required this.patientId,
+    required this.onSaved,
+    this.existing,
+  });
 
   @override
-  State<_AddVisitSheet> createState() => _AddVisitSheetState();
+  State<_FollowupSheet> createState() => _FollowupSheetState();
 }
 
-class _AddVisitSheetState extends State<_AddVisitSheet> {
+class _FollowupSheetState extends State<_FollowupSheet> {
   final _procedure = TextEditingController();
+  final _tooth = TextEditingController();
   final _price = TextEditingController();
+  final _discount = TextEditingController();
   final _lab = TextEditingController();
   final _payment = TextEditingController();
   final _notes = TextEditingController();
   bool _saving = false;
   late String _date;
-  
+
+  bool get _isEdit => widget.existing != null;
+
   @override
   void initState() {
     super.initState();
-    _date = DateFormatHelper.formatDateForApi(DateTime.now());
+    final e = widget.existing;
+    if (e != null) {
+      _date = e.followupDate.isEmpty
+          ? DateFormatHelper.formatDateForApi(DateTime.now())
+          : e.followupDate;
+      _procedure.text = e.treatmentProcedure;
+      _tooth.text = e.toothNo ?? '';
+      _price.text = e.price == 0 ? '' : e.price.toString();
+      _discount.text = e.discount == 0 ? '' : e.discount.toString();
+      _lab.text = e.labExpense == 0 ? '' : e.labExpense.toString();
+      _payment.text = e.payment == 0 ? '' : e.payment.toString();
+      _notes.text = e.notes ?? '';
+    } else {
+      _date = DateFormatHelper.formatDateForApi(DateTime.now());
+    }
   }
 
   @override
   void dispose() {
-    for (final c in [_procedure, _price, _lab, _payment, _notes]) { c.dispose(); }
+    for (final c in [_procedure, _tooth, _price, _discount, _lab, _payment, _notes]) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final current = DateFormatHelper.parseApiDate(_date) ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: current,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+    );
+    if (picked != null) {
+      setState(() => _date = DateFormatHelper.formatDateForApi(picked));
+    }
   }
 
   Future<void> _save() async {
     if (_procedure.text.trim().isEmpty) return;
     setState(() => _saving = true);
-    await widget.onSaved(Visit(
+    final existing = widget.existing;
+    final f = Followup(
+      id: existing?.id,
       patientId: widget.patientId,
-      patientName: widget.patientName,
-      visitDate: _date,
-      procedureName: _procedure.text.trim(),
-      price: double.tryParse(_price.text),
-      labExpense: double.tryParse(_lab.text),
-      payment: double.tryParse(_payment.text),
+      followupDate: _date,
+      treatmentProcedure: _procedure.text.trim(),
+      procedureId: existing?.procedureId,
+      toothNo: _tooth.text.trim().isEmpty ? null : _tooth.text.trim(),
+      price: double.tryParse(_price.text) ?? 0,
+      discount: double.tryParse(_discount.text) ?? 0,
+      labExpense: double.tryParse(_lab.text) ?? 0,
+      payment: double.tryParse(_payment.text) ?? 0,
+      remainingAmount: existing?.remainingAmount ?? 0,
       notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
-    ));
+    );
+    await widget.onSaved(f);
     if (mounted) Navigator.pop(context);
   }
 
@@ -540,6 +600,9 @@ class _AddVisitSheetState extends State<_AddVisitSheet> {
   Widget build(BuildContext context) {
     final isArabic = context.select<AppState, bool>((state) => state.isArabic);
     String t(String key) => AppStrings.t(key, isArabic: isArabic);
+    final dateDisplay = DateFormatHelper.parseApiDate(_date) != null
+        ? DateFormatHelper.formatDate(DateFormatHelper.parseApiDate(_date)!)
+        : _date;
     return DraggableScrollableSheet(
       initialChildSize: 0.85,
       minChildSize: 0.5,
@@ -561,9 +624,12 @@ class _AddVisitSheetState extends State<_AddVisitSheet> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Row(children: [
-                Text(t('add_visit'), style: Theme.of(context).textTheme.titleLarge),
+                Text(_isEdit ? t('edit_visit') : t('add_visit'),
+                    style: Theme.of(context).textTheme.titleLarge),
                 const Spacer(),
-                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+                IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close)),
               ]),
             ),
             Expanded(
@@ -571,22 +637,88 @@ class _AddVisitSheetState extends State<_AddVisitSheet> {
                 controller: scroll,
                 padding: const EdgeInsets.all(16),
                 children: [
+                  InkWell(
+                    onTap: _pickDate,
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: t('date'),
+                        suffixIcon: const Icon(Icons.calendar_today_outlined),
+                      ),
+                      child: Text(dateDisplay,
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _procedure,
-                    decoration: InputDecoration(labelText: t('procedure_treatment')),
+                    decoration:
+                        InputDecoration(labelText: t('procedure_treatment')),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _tooth,
+                    decoration: InputDecoration(labelText: t('tooth_no')),
+                    keyboardType: TextInputType.text,
                   ),
                   const SizedBox(height: 12),
                   Row(children: [
-                    Expanded(child: TextField(controller: _price, decoration: InputDecoration(labelText: '${t('price')} (₪)', prefixText: '₪ '), keyboardType: TextInputType.number)),
+                    Expanded(
+                      child: TextField(
+                        controller: _price,
+                        decoration: InputDecoration(
+                            labelText: '${t('price')} (₪)',
+                            prefixText: '₪ '),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                      ),
+                    ),
                     const SizedBox(width: 12),
-                    Expanded(child: TextField(controller: _lab, decoration: InputDecoration(labelText: '${t('lab_expense')} (₪)', prefixText: '₪ '), keyboardType: TextInputType.number)),
+                    Expanded(
+                      child: TextField(
+                        controller: _discount,
+                        decoration: InputDecoration(
+                            labelText: '${t('discount')} (₪)',
+                            prefixText: '₪ '),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                      ),
+                    ),
                   ]),
                   const SizedBox(height: 12),
-                  TextField(controller: _payment, decoration: InputDecoration(labelText: '${t('payment_received')} (₪)', prefixText: '₪ '), keyboardType: TextInputType.number),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _lab,
+                        decoration: InputDecoration(
+                            labelText: '${t('lab_expense')} (₪)',
+                            prefixText: '₪ '),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _payment,
+                        decoration: InputDecoration(
+                            labelText: '${t('payment_received')} (₪)',
+                            prefixText: '₪ '),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                      ),
+                    ),
+                  ]),
                   const SizedBox(height: 12),
-                  TextField(controller: _notes, decoration: InputDecoration(labelText: t('notes')), maxLines: 2),
+                  TextField(
+                      controller: _notes,
+                      decoration: InputDecoration(labelText: t('notes')),
+                      maxLines: 2),
                   const SizedBox(height: 20),
-                  GradientButton(label: t('save_visit'), loading: _saving, onPressed: _saving ? null : _save, width: double.infinity),
+                  GradientButton(
+                      label: t('save_visit'),
+                      loading: _saving,
+                      onPressed: _saving ? null : _save,
+                      width: double.infinity),
                   const SizedBox(height: 16),
                 ],
               ),
@@ -598,121 +730,3 @@ class _AddVisitSheetState extends State<_AddVisitSheet> {
   }
 }
 
-class _EditVisitSheet extends StatefulWidget {
-  final int patientId;
-  final Visit visit;
-  final Future<void> Function(Visit) onSaved;
-  const _EditVisitSheet(
-      {required this.patientId,
-      required this.visit,
-      required this.onSaved});
-
-  @override
-  State<_EditVisitSheet> createState() => _EditVisitSheetState();
-}
-
-class _EditVisitSheetState extends State<_EditVisitSheet> {
-  final _procedure = TextEditingController();
-  final _price = TextEditingController();
-  final _lab = TextEditingController();
-  final _payment = TextEditingController();
-  final _notes = TextEditingController();
-  bool _saving = false;
-  late String _date;
-  
-  @override
-  void initState() {
-    super.initState();
-    _date = widget.visit.visitDate;
-    _procedure.text = widget.visit.procedureName ?? '';
-    _price.text = widget.visit.price?.toString() ?? '';
-    _lab.text = widget.visit.labExpense?.toString() ?? '';
-    _payment.text = widget.visit.payment?.toString() ?? '';
-    _notes.text = widget.visit.notes ?? '';
-  }
-
-  @override
-  void dispose() {
-    for (final c in [_procedure, _price, _lab, _payment, _notes]) { c.dispose(); }
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (_procedure.text.trim().isEmpty) return;
-    setState(() => _saving = true);
-    await widget.onSaved(Visit(
-      id: widget.visit.id,
-      patientId: widget.visit.patientId,
-      patientName: widget.visit.patientName,
-      visitDate: _date,
-      procedureName: _procedure.text.trim(),
-      price: double.tryParse(_price.text),
-      labExpense: double.tryParse(_lab.text),
-      payment: double.tryParse(_payment.text),
-      notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
-      updatedAt: widget.visit.updatedAt,
-    ));
-    if (mounted) Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isArabic = context.select<AppState, bool>((state) => state.isArabic);
-    String t(String key) => AppStrings.t(key, isArabic: isArabic);
-    return DraggableScrollableSheet(
-      initialChildSize: 0.85,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      builder: (_, scroll) => Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Row(children: [
-                Text(t('edit_visit'), style: Theme.of(context).textTheme.titleLarge),
-                const Spacer(),
-                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
-              ]),
-            ),
-            Expanded(
-              child: ListView(
-                controller: scroll,
-                padding: const EdgeInsets.all(16),
-                children: [
-                  TextField(
-                    controller: _procedure,
-                    decoration: InputDecoration(labelText: t('procedure_treatment')),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(children: [
-                    Expanded(child: TextField(controller: _price, decoration: InputDecoration(labelText: '${t('price')} (₪)', prefixText: '₪ '), keyboardType: TextInputType.number)),
-                    const SizedBox(width: 12),
-                    Expanded(child: TextField(controller: _lab, decoration: InputDecoration(labelText: '${t('lab_expense')} (₪)', prefixText: '₪ '), keyboardType: TextInputType.number)),
-                  ]),
-                  const SizedBox(height: 12),
-                  TextField(controller: _payment, decoration: InputDecoration(labelText: '${t('payment_received')} (₪)', prefixText: '₪ '), keyboardType: TextInputType.number),
-                  const SizedBox(height: 12),
-                  TextField(controller: _notes, decoration: InputDecoration(labelText: t('notes')), maxLines: 2),
-                  const SizedBox(height: 20),
-                  GradientButton(label: t('save_visit'), loading: _saving, onPressed: _saving ? null : _save, width: double.infinity),
-                  const SizedBox(height: 16),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
