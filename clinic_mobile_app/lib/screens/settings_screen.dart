@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import '../config/app_config.dart';
 import '../state/app_state.dart';
 import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
 import '../services/cloud_sync_service.dart';
-// flutter_bluetooth_serial imported in Task 14 for peer picker
 import '../widgets/gradient_button.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/section_header.dart';
@@ -23,10 +23,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _cloudSerialCtrl;
   late TextEditingController _cloudClinicNameCtrl;
   bool _syncing = false;
-  bool _btScanning = false;
   bool _pairingCloud = false;
   String? _lastSync;
-  String? _btStatus;
   String? _cloudStatus;
 
   @override
@@ -60,25 +58,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await context.read<AppState>().sync.syncNow();
     await _loadLastSync();
     if (mounted) setState(() => _syncing = false);
-  }
-
-  Future<void> _bluetoothSync() async {
-    final app = context.read<AppState>();
-    final mac = app.btBondedMac;
-    if (mac == null || mac.isEmpty) {
-      setState(() { _btScanning = false; _btStatus = 'No device bonded — pick one below'; });
-      return;
-    }
-    setState(() { _btScanning = true; _btStatus = 'Connecting via Bluetooth…'; });
-    final ok = await app.sync.syncViaBluetooth(mac);
-    if (mounted) {
-      setState(() {
-        _btScanning = false;
-        _btStatus = ok
-            ? 'Sync complete!'
-            : context.read<AppState>().sync.statusMessage ?? 'Failed';
-      });
-    }
   }
 
   Future<void> _saveUrl() async {
@@ -317,73 +296,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
 
-          // ── Bluetooth ──────────────────────────────────────────────────
+          // ── Bluetooth Peer ─────────────────────────────────────────────
+          SectionHeader(title: 'Bluetooth peer'),
           ClinicCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1D7FB7).withAlpha(25),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.bluetooth,
-                          color: Color(0xFF1D7FB7), size: 20),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Bluetooth Sync',
-                              style: TextStyle(fontWeight: FontWeight.w700)),
-                          Text('Sync with nearby devices when offline',
-                              style:
-                                  TextStyle(fontSize: 12, color: Color(0xFF627386))),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                if (_btStatus != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: scheme.secondaryContainer,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(_btStatus!,
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSecondaryContainer)),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(44),
-                    side: BorderSide(color: scheme.primary),
-                    foregroundColor: scheme.primary,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14)),
-                  ),
-                  onPressed: _btScanning ? null : _bluetoothSync,
-                  icon: _btScanning
-                      ? SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: scheme.primary))
-                      : const Icon(Icons.bluetooth_searching),
-                  label: Text(_btScanning ? 'Connecting…' : 'Sync via Bluetooth',
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                Consumer<AppState>(
+                  builder: (context, app, _) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SwitchListTile.adaptive(
+                          contentPadding: EdgeInsets.zero,
+                          value: app.btEnabled,
+                          onChanged: (v) => app.setBtEnabled(v),
+                          title: Text(app.locale == 'ar'
+                              ? 'تفعيل المزامنة عبر بلوتوث'
+                              : 'Enable Bluetooth sync'),
+                        ),
+                        const SizedBox(height: 8),
+                        if (app.btBondedLabel != null)
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.devices_other_rounded),
+                            title: Text(app.btBondedLabel!),
+                            subtitle: Text(app.btBondedMac ?? ''),
+                            trailing: TextButton(
+                              onPressed: () => app.unbindBtPeer(),
+                              child: Text(app.locale == 'ar' ? 'إزالة' : 'Remove'),
+                            ),
+                          )
+                        else
+                          GradientButton(
+                            label: app.locale == 'ar' ? 'اختر كمبيوتر العيادة' : 'Pick clinic PC',
+                            icon: Icons.bluetooth_searching_rounded,
+                            onPressed: () => _pickBondedPeer(context, app),
+                          ),
+                        const SizedBox(height: 8),
+                        Text(_btStatusLine(app),
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ],
+                    );
+                  },
                 ),
               ],
             ),
@@ -489,6 +446,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'Bluetooth';
       case SyncLink.none:
         return null;
+    }
+  }
+
+  String _btStatusLine(AppState app) {
+    if (!app.btEnabled) return app.locale == 'ar' ? 'متوقّفة' : 'Disabled';
+    if (app.btBondedMac == null) {
+      return app.locale == 'ar' ? 'لم يتم الاقتران' : 'Not paired';
+    }
+    if (app.btLastError != null && app.btLastError!.isNotEmpty) {
+      return '⚠️ ${app.btLastError}';
+    }
+    if (app.btLastSyncAt != null && app.btLastSyncAt!.isNotEmpty) {
+      return (app.locale == 'ar' ? 'آخر مزامنة: ' : 'Last sync: ') +
+          app.btLastSyncAt!;
+    }
+    return app.locale == 'ar' ? 'في انتظار الاقتراب…' : 'Waiting to come into range…';
+  }
+
+  Future<void> _pickBondedPeer(BuildContext context, AppState app) async {
+    final List<BluetoothDevice> devices;
+    try {
+      devices = await FlutterBluetoothSerial.instance.getBondedDevices();
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          app.locale == 'ar'
+              ? 'تعذّر الوصول إلى بلوتوث'
+              : 'Could not access Bluetooth')));
+      return;
+    }
+    if (!context.mounted) return;
+    if (devices.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          app.locale == 'ar'
+              ? 'لا توجد أجهزة مقترنة — اقترن أولًا من إعدادات بلوتوث'
+              : 'No bonded devices — pair in Android Bluetooth settings first')));
+      return;
+    }
+    final picked = await showModalBottomSheet<BluetoothDevice>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final d in devices)
+              ListTile(
+                leading: const Icon(Icons.computer_rounded),
+                title: Text(d.name ?? d.address),
+                subtitle: Text(d.address),
+                onTap: () => Navigator.of(context).pop(d),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) {
+      await app.bindBtPeer(mac: picked.address, label: picked.name ?? picked.address);
     }
   }
 }
