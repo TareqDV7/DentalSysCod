@@ -212,7 +212,8 @@ clinic/
 ├── cloud/                    # Cloud-node deploy stack
 │   ├── Dockerfile            #   the app image (CLINIC_CLOUD_MODE=1)
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
-│   └── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
+│   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
+│   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
 ├── tests/                    # 145 tests across 19 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
