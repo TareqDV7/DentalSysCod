@@ -57,7 +57,7 @@ def check_and_install_dependencies():
 check_and_install_dependencies()
 
 # Now import the packages
-from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for
+from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for, g
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -192,7 +192,7 @@ DEFAULT_LICENSE_DAYS = 30
 DEFAULT_LICENSE_GRACE_DAYS = 7
 
 # Endpoints reachable on the cloud node without a clinic token.
-_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/logo', '/favicon.ico'}
+_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/healthz', '/logo', '/favicon.ico'}
 _CLOUD_OPEN_PREFIXES = ('/static/',)
 # Not available on the cloud node: uploads aren't part of cloud sync and the
 # folder isn't tenant-scoped; the /api/cloud/* endpoints are for a clinic's own
@@ -361,6 +361,8 @@ def _cloud_tenant_routing_teardown(exc):
 
 # Persistent session secret (needs DB_NAME, so set here rather than at app creation).
 app.secret_key = _load_or_create_secret_key()
+
+_APP_STARTED_AT = time.time()
 
 SYNC_TABLES = [
     'patients',
@@ -10887,6 +10889,117 @@ def clinic_settings():
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'doctor_name': effective_en, 'doctor_name_ar': effective_ar})
+
+import logging as _logging
+
+# One-line JSON access log per request when CLINIC_LOG_FORMAT=json. Default
+# text leaves Flask's stdout logging alone — set the env var on the cloud node
+# to make logs parseable by log shippers (Better Stack, Datadog, CloudWatch, etc.).
+_REQUEST_LOG = _logging.getLogger('clinic.access')
+
+
+def _configure_access_logging():
+    if os.environ.get('CLINIC_LOG_FORMAT', 'text').lower() != 'json':
+        return
+    _REQUEST_LOG.setLevel(_logging.INFO)
+    if not _REQUEST_LOG.handlers:
+        handler = _logging.StreamHandler(sys.stdout)
+        # The message IS the JSON payload — no extra formatting.
+        handler.setFormatter(_logging.Formatter('%(message)s'))
+        _REQUEST_LOG.addHandler(handler)
+    _REQUEST_LOG.propagate = False  # avoid double-emit via root logger
+
+
+_configure_access_logging()
+
+
+@app.before_request
+def _access_log_start():
+    g._req_started_at = time.time()
+
+
+@app.after_request
+def _access_log_end(response):
+    if os.environ.get('CLINIC_LOG_FORMAT', 'text').lower() != 'json':
+        return response
+    try:
+        started = getattr(g, '_req_started_at', None)
+        latency_ms = int((time.time() - started) * 1000) if started else 0
+        payload = {
+            'ts': datetime.now(timezone.utc).isoformat(),
+            'method': request.method,
+            'path': request.path,
+            'status': response.status_code,
+            'latency_ms': latency_ms,
+        }
+        clinic_id = getattr(g, 'clinic_id', None) if CLOUD_MODE else None
+        if clinic_id is not None:
+            payload['clinic_id'] = clinic_id
+        _REQUEST_LOG.info(json.dumps(payload))
+    except Exception:  # noqa: BLE001 — access log MUST NEVER tank a response
+        pass
+    return response
+
+
+def _newest_backup_timestamp():
+    """Walk the backups directory and return an ISO timestamp for the newest
+    backup file, or None if none exist. Handles both the single-tenant flat
+    layout (`backups/*.db`) and the per-tenant cloud layout (`backups/<label>/*.db`)."""
+    try:
+        if not BACKUP_DIR.exists():
+            return None
+        newest_mtime = 0.0
+        for path in BACKUP_DIR.rglob('*.db'):
+            try:
+                mtime = path.stat().st_mtime
+                if mtime > newest_mtime:
+                    newest_mtime = mtime
+            except OSError:
+                continue
+        if newest_mtime == 0.0:
+            return None
+        return datetime.fromtimestamp(newest_mtime, tz=timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001 — health checks must never raise
+        return None
+
+
+@app.route('/healthz')
+def healthz():
+    """Unauthenticated liveness/readiness probe.
+
+    Designed for external monitoring (uptime checks, k8s probes). Returns 200
+    if the database opens and a trivial query succeeds; 503 otherwise. Exposed
+    on the cloud node without a clinic token (added to `_CLOUD_OPEN_EXACT`).
+
+    The response is intentionally small — no per-tenant counts, no auth state —
+    so it can be polled aggressively without hitting hot paths.
+    """
+    db_ok = True
+    db_error = None
+    try:
+        # On the cloud node, _cloud_tenant_routing skips this path, so the
+        # global DB_NAME default is whatever was last set — try opening the
+        # master/single DB directly to keep this independent of routing state.
+        target_db = MASTER_DB_PATH if CLOUD_MODE else str(DB_NAME)
+        conn = sqlite3.connect(target_db, timeout=2.0)
+        try:
+            conn.execute('SELECT 1')
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        db_ok = False
+        db_error = type(exc).__name__
+    body = {
+        'status': 'ok' if db_ok else 'degraded',
+        'mode': 'cloud' if CLOUD_MODE else 'local',
+        'db_writable': db_ok,
+        'last_backup_at': _newest_backup_timestamp(),
+        'uptime_seconds': int(time.time() - _APP_STARTED_AT),
+    }
+    if db_error:
+        body['db_error'] = db_error
+    return jsonify(body), (200 if db_ok else 503)
+
 
 @app.route('/api/system/readiness')
 def system_readiness():

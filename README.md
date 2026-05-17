@@ -80,7 +80,7 @@ The SQLite database runs in **WAL mode** (set once in `init_database()`), so rea
 - **Manual** — the dashboard's **Download Backup** button (`GET /api/backup`, login required) downloads the current database on demand. (Local server only — the cloud node has no portal.)
 - Tune with env vars: `CLINIC_BACKUP_INTERVAL_HOURS` (default `6`; set `0` to disable the automatic loop), `CLINIC_BACKUP_RETENTION` (default `20`).
 
-Other env vars: `CLINIC_HOST` (default `127.0.0.1`; set to `0.0.0.0` for LAN access), `CLINIC_PORT` (default `5000`), `CLINIC_ADMIN_PASSWORD` (first-run admin password), `CLINIC_DATA_DIR` (override where the DB / `uploads/` / `backups/` live — used by the Docker/cloud deployment), `CLINIC_CLOUD_MODE` (run as the cloud node — see below), `CLINIC_CLOUD_URL` + `CLINIC_CLOUD_TOKEN` (point a local server at the cloud node for background sync — usually set via the UI's pairing flow instead), `CLINIC_CLOUD_SYNC_INTERVAL_MINUTES` (default `15`).
+Other env vars: `CLINIC_HOST` (default `127.0.0.1`; set to `0.0.0.0` for LAN access), `CLINIC_PORT` (default `5000`), `CLINIC_ADMIN_PASSWORD` (first-run admin password), `CLINIC_DATA_DIR` (override where the DB / `uploads/` / `backups/` live — used by the Docker/cloud deployment), `CLINIC_CLOUD_MODE` (run as the cloud node — see below), `CLINIC_CLOUD_URL` + `CLINIC_CLOUD_TOKEN` (point a local server at the cloud node for background sync — usually set via the UI's pairing flow instead), `CLINIC_CLOUD_SYNC_INTERVAL_MINUTES` (default `15`), `CLINIC_LOG_FORMAT` (default `text`; set to `json` to emit one JSON line per HTTP request to stdout — `{ts, method, path, status, latency_ms, clinic_id?}` — for ingestion by log shippers like Better Stack, Datadog, or CloudWatch).
 
 ### Cloud node (multi-tenant)
 
@@ -411,7 +411,8 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 | POST | `/api/license/login` | Token-based login |
 | POST | `/api/license/offline-verify` | Verify HMAC token offline |
 | GET | `/api/license/status` | Current license info |
-| GET | `/api/system/readiness` | Health check |
+| GET | `/api/system/readiness` | Authenticated readiness summary (paired devices, active licenses) |
+| GET | `/healthz` | Unauthenticated liveness/readiness probe (`status`, `mode`, `db_writable`, `last_backup_at`, `uptime_seconds`) — works on local and cloud, returns 503 if the DB is unreachable. Designed for external monitoring; payload kept under 500 bytes for aggressive polling. |
 
 ### Mobile Downloads
 
@@ -451,7 +452,7 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**148 tests across 19 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/sync_export/sync_import dispatcher reusing the HTTP helpers, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**153 tests across 20 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/sync_export/sync_import dispatcher reusing the HTTP helpers, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
 The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart`, `bluetooth_sync_service_test.dart`, `followup_balance_test.dart`, and the default widget test (23 tests total). Run with `cd clinic_mobile_app && flutter test`.
 
