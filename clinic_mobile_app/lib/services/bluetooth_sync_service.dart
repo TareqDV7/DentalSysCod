@@ -28,6 +28,8 @@ typedef DeviceTokenLoader = Future<String?> Function();
 typedef SinceLoader = Future<String?> Function();
 typedef OnExportHandler = Future<void> Function(Map<String, dynamic> exported);
 typedef PushPayloadBuilder = Future<Map<String, dynamic>> Function();
+typedef OnPushAckedHandler = Future<void> Function(
+    Map<String, dynamic> pushedPayload);
 
 /// One-shot Bluetooth sync runner. The 30-s cadence loop lives in
 /// ConnectivitySyncService; this class just runs one cycle when called.
@@ -37,6 +39,7 @@ class BluetoothSyncService {
   final SinceLoader _loadSince;
   final OnExportHandler _onExport;
   final PushPayloadBuilder _buildPush;
+  final OnPushAckedHandler? _onPushAcked;
   final String _clientVersion;
 
   BluetoothSyncService._({
@@ -46,11 +49,13 @@ class BluetoothSyncService {
     required OnExportHandler onExport,
     required PushPayloadBuilder buildPush,
     required String clientVersion,
+    OnPushAckedHandler? onPushAcked,
   })  : _open = open,
         _loadToken = loadToken,
         _loadSince = loadSince,
         _onExport = onExport,
         _buildPush = buildPush,
+        _onPushAcked = onPushAcked,
         _clientVersion = clientVersion;
 
   factory BluetoothSyncService.production({
@@ -59,6 +64,7 @@ class BluetoothSyncService {
     required OnExportHandler onExport,
     required PushPayloadBuilder buildPushPayload,
     required String clientVersion,
+    OnPushAckedHandler? onPushAcked,
   }) {
     return BluetoothSyncService._(
       open: (mac) async {
@@ -70,6 +76,7 @@ class BluetoothSyncService {
       loadSince: sinceLoader,
       onExport: onExport,
       buildPush: buildPushPayload,
+      onPushAcked: onPushAcked,
       clientVersion: clientVersion,
     );
   }
@@ -82,6 +89,7 @@ class BluetoothSyncService {
     required OnExportHandler onExport,
     required PushPayloadBuilder buildPushPayload,
     required String clientVersion,
+    OnPushAckedHandler? onPushAcked,
   }) =>
       BluetoothSyncService._(
         open: streamOpener,
@@ -89,6 +97,7 @@ class BluetoothSyncService {
         loadSince: sinceLoader,
         onExport: onExport,
         buildPush: buildPushPayload,
+        onPushAcked: onPushAcked,
         clientVersion: clientVersion,
       );
 
@@ -110,6 +119,7 @@ class BluetoothSyncService {
       getSince: _loadSince,
       onExport: _onExport,
       buildPushPayload: _buildPush,
+      onPushAcked: _onPushAcked,
     );
   }
 }

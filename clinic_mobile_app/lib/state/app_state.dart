@@ -46,11 +46,18 @@ class AppState extends ChangeNotifier {
     _internet = InternetSyncService(db, api);
     _bluetooth = BluetoothSyncService.production(
       deviceTokenLoader: _storage.getDeviceToken,
-      sinceLoader: () async => null,
+      // Incremental cursor — same key the HTTP pull writes, so a BT cycle
+      // that follows an HTTP pull (or vice versa) only fetches what changed.
+      // A null cursor here would re-pull the entire database every 30 s and
+      // could clobber unpushed local edits with stale server rows.
+      sinceLoader: () => db.getSyncMeta('last_sync_cursor'),
       onExport: (exported) async {
         await _internet.applyExportedDelta(exported);
       },
       buildPushPayload: _internet.buildPushPayload,
+      onPushAcked: (payload) async {
+        await _internet.markPayloadAsSynced(payload);
+      },
       clientVersion: '1.0.0',
     );
     _connectivity = ConnectivitySyncService(

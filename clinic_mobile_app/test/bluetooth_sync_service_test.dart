@@ -73,4 +73,68 @@ void main() {
     expect(result.success, false);
     expect(result.unauthorized, false);
   });
+
+  test('calls onPushAcked with the pushed payload after a successful import',
+      () async {
+    final stream = _ScriptedStream([
+      {'ok': true, 'server_version': '1.0.0'},
+      {'ok': true, 'tables': {}, 'tombstones': [], 'generated_at': 't'},
+      {'ok': true, 'applied': 1, 'skipped': 0},
+    ]);
+    Map<String, dynamic>? acked;
+    final svc = BluetoothSyncService.forTest(
+      streamOpener: (_) async => stream,
+      deviceTokenLoader: () async => 'good',
+      sinceLoader: () async => null,
+      onExport: (_) async {},
+      buildPushPayload: () async => {
+        'tables': {
+          'patients': [
+            {'id': 7, 'name': 'X'}
+          ],
+        },
+        'tombstones': [
+          {'table_name': 'patients', 'row_id': 9},
+        ],
+      },
+      onPushAcked: (p) async {
+        acked = p;
+      },
+      clientVersion: '1.0.0',
+    );
+    final result = await svc.runOneSyncCycle('00:11:22:33:44:55');
+    expect(result.success, true);
+    expect(acked, isNotNull);
+    expect(acked!['tables'], {
+      'patients': [
+        {'id': 7, 'name': 'X'}
+      ],
+    });
+    expect(acked!['tombstones'], [
+      {'table_name': 'patients', 'row_id': 9},
+    ]);
+  });
+
+  test('does NOT call onPushAcked when the import step fails', () async {
+    final stream = _ScriptedStream([
+      {'ok': true, 'server_version': '1.0.0'},
+      {'ok': true, 'tables': {}, 'tombstones': []},
+      {'error': 'boom'},
+    ]);
+    var called = false;
+    final svc = BluetoothSyncService.forTest(
+      streamOpener: (_) async => stream,
+      deviceTokenLoader: () async => 'good',
+      sinceLoader: () async => null,
+      onExport: (_) async {},
+      buildPushPayload: () async => {'tables': {}, 'tombstones': []},
+      onPushAcked: (_) async {
+        called = true;
+      },
+      clientVersion: '1.0.0',
+    );
+    final result = await svc.runOneSyncCycle('00:11:22:33:44:55');
+    expect(result.success, false);
+    expect(called, false);
+  });
 }

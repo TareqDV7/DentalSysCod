@@ -29,6 +29,11 @@ class InternetSyncService {
   /// Apply a sync export response (from server or Bluetooth peer) to the local DB.
   /// [response] should be the full export response map containing 'tables' and
   /// 'tombstones' keys (the same shape returned by /api/sync/export).
+  ///
+  /// Also advances the `last_sync_cursor` to the server's `generated_at` so the
+  /// next pull (HTTP or Bluetooth) is incremental — critical for the BT path,
+  /// which would otherwise re-pull the entire database every 30 s and could
+  /// overwrite unpushed local edits with stale server rows.
   Future<void> applyExportedDelta(Map<String, dynamic> response) async {
     final tables = response['tables'];
     if (tables is Map) {
@@ -44,6 +49,35 @@ class InternetSyncService {
           }
         }
       }
+    }
+    final generatedAt = response['generated_at']?.toString();
+    if (generatedAt != null && generatedAt.isNotEmpty) {
+      await _db.setSyncMeta('last_sync_cursor', generatedAt);
+    }
+  }
+
+  /// Mark every row + tombstone in [payload] as synced.
+  ///
+  /// Called by the Bluetooth fallback path after the peer accepted our import,
+  /// mirroring what [_pushToServer] does after a successful HTTP push. Without
+  /// this, BT-pushed rows stay flagged `is_synced=0` forever and get re-sent
+  /// every cycle.
+  Future<void> markPayloadAsSynced(Map<String, dynamic> payload) async {
+    final tables = payload['tables'];
+    if (tables is Map) {
+      for (final entry in DatabaseService.localToRemoteTable.entries) {
+        final rows = tables[entry.value];
+        if (rows is! List) continue;
+        for (final r in rows) {
+          if (r is Map && r['id'] is int) {
+            await _db.markSynced(entry.key, r['id'] as int);
+          }
+        }
+      }
+    }
+    final tombstones = payload['tombstones'];
+    if (tombstones is List && tombstones.isNotEmpty) {
+      await _db.markAllTombstonesSynced();
     }
   }
 

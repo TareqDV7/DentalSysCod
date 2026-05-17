@@ -35,6 +35,7 @@ class BtSessionClient {
     required Future<String?> Function() getSince,
     required Future<void> Function(Map<String, dynamic> exported) onExport,
     required Future<Map<String, dynamic>> Function() buildPushPayload,
+    Future<void> Function(Map<String, dynamic> pushedPayload)? onPushAcked,
     Duration handshakeTimeout = const Duration(seconds: 10),
   }) async {
     final reader = FrameReader();
@@ -102,6 +103,15 @@ class BtSessionClient {
       final importResp = await awaitOne();
       if (importResp['error'] != null) {
         return finishWith(BtSessionResult.failure(importResp['error'].toString()));
+      }
+      if (onPushAcked != null) {
+        try {
+          await onPushAcked(push);
+        } catch (_) {
+          // A bookkeeping failure (mark-synced) shouldn't tank the whole
+          // session — the peer already accepted the import. Next cycle's
+          // unsynced query will simply re-push the same rows.
+        }
       }
 
       return finishWith(const BtSessionResult.ok());
