@@ -7,6 +7,7 @@ import '../utils/date_format_helper.dart';
 import '../utils/app_strings.dart';
 import '../models/patient.dart';
 import '../models/followup.dart';
+import '../models/treatment_plan.dart';
 import '../models/appointment.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/status_badge.dart';
@@ -26,6 +27,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   late TabController _tabs;
   List<Followup> _followups = [];
   List<Appointment> _appointments = [];
+  List<TreatmentPlan> _plans = [];
   bool _loading = true;
   bool _editing = false;
   late Patient _patient;
@@ -39,7 +41,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   void initState() {
     super.initState();
     _patient = widget.patient;
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 3, vsync: this);
     _load();
   }
 
@@ -54,13 +56,77 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     final state = context.read<AppState>();
     final followups = await state.patients.getPatientFollowups(_patient.id!);
     final appts = await state.appointments.getPatientAppointments(_patient.id!);
+    final plans = await state.db.getPatientTreatmentPlans(_patient.id!);
     if (mounted) {
       setState(() {
         _followups = followups;
         _appointments = appts;
+        _plans = plans;
         _loading = false;
       });
     }
+  }
+
+  void _addPlan() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _TreatmentPlanSheet(
+        patientId: _patient.id!,
+        onSaved: (p) async {
+          final state = context.read<AppState>();
+          await state.db.upsertTreatmentPlan(
+              p.copyWith(updatedAt: DateTime.now().toIso8601String(), isSynced: false));
+          unawaited(state.sync.syncNow());
+          if (mounted) _load();
+        },
+      ),
+    );
+  }
+
+  void _editPlan(TreatmentPlan plan) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _TreatmentPlanSheet(
+        patientId: _patient.id!,
+        existing: plan,
+        onSaved: (p) async {
+          final state = context.read<AppState>();
+          await state.db.upsertTreatmentPlan(
+              p.copyWith(updatedAt: DateTime.now().toIso8601String(), isSynced: false));
+          unawaited(state.sync.syncNow());
+          if (mounted) _load();
+        },
+      ),
+    );
+  }
+
+  Future<void> _deletePlan(TreatmentPlan plan, String Function(String) t) async {
+    if (plan.id == null) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('confirm_delete')),
+        content: Text(t('delete_plan_confirm')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t('cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t('delete'),
+                  style: const TextStyle(color: Color(0xFFD9434E)))),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final state = context.read<AppState>();
+    await state.db.deleteTreatmentPlan(plan.id!);
+    unawaited(state.sync.syncNow());
+    if (mounted) _load();
   }
 
   Future<void> _saveEdit() async {
@@ -281,7 +347,11 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
             indicatorColor: scheme.primary,
             labelColor: scheme.primary,
             unselectedLabelColor: scheme.onSurfaceVariant,
-            tabs: [Tab(text: t('follow_ups')), Tab(text: t('appointments'))],
+            tabs: [
+              Tab(text: t('follow_ups')),
+              Tab(text: t('appointments')),
+              Tab(text: t('plans')),
+            ],
           ),
 
           Expanded(
@@ -297,6 +367,12 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                           onDelete: _deleteFollowup,
                           fmt: fmt),
                       _AppointmentsTab(appointments: _appointments),
+                      _PlansTab(
+                          plans: _plans,
+                          onAdd: _addPlan,
+                          onEdit: _editPlan,
+                          onDelete: _deletePlan,
+                          fmt: fmt),
                     ],
                   ),
           ),
@@ -445,6 +521,367 @@ class _FollowupsTab extends StatelessWidget {
               style: TextStyle(
                   fontSize: 10, color: scheme.onSurfaceVariant)),
         ],
+      ),
+    );
+  }
+}
+
+class _PlansTab extends StatelessWidget {
+  final List<TreatmentPlan> plans;
+  final VoidCallback onAdd;
+  final void Function(TreatmentPlan) onEdit;
+  final Future<void> Function(TreatmentPlan, String Function(String)) onDelete;
+  final NumberFormat fmt;
+  const _PlansTab({
+    required this.plans,
+    required this.onAdd,
+    required this.onEdit,
+    required this.onDelete,
+    required this.fmt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isArabic = context.select<AppState, bool>((state) => state.isArabic);
+    String t(String key) => AppStrings.t(key, isArabic: isArabic);
+    if (plans.isEmpty) {
+      return EmptyState(
+        icon: Icons.assignment_outlined,
+        message: t('no_plans'),
+        actionLabel: t('add_plan'),
+        onAction: onAdd,
+      );
+    }
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: plans.length,
+            itemBuilder: (_, i) {
+              final p = plans[i];
+              return InkWell(
+                onTap: () => onEdit(p),
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: scheme.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(p.planName,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: _statusColor(p.status).withAlpha(35),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(p.status,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: _statusColor(p.status))),
+                          ),
+                        ],
+                      ),
+                      if ((p.goals ?? '').isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(p.goals!,
+                            style: TextStyle(
+                                color: scheme.onSurfaceVariant, fontSize: 13)),
+                      ],
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          if ((p.startDate ?? '').isNotEmpty)
+                            Text('${t('start_date')}: ${p.startDate}',
+                                style: TextStyle(
+                                    color: scheme.onSurfaceVariant,
+                                    fontSize: 12)),
+                          const Spacer(),
+                          Text('₪${fmt.format(p.estimatedCost)}',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w800, fontSize: 13)),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.delete,
+                                size: 18, color: Color(0xFFD9434E)),
+                            onPressed: () => onDelete(p, t),
+                            tooltip: t('delete'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: GradientButton(
+            label: t('add_plan'),
+            icon: Icons.add,
+            onPressed: onAdd,
+            width: double.infinity,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'active':
+      case 'in_progress':
+        return const Color(0xFF1D7FB7);
+      case 'completed':
+        return const Color(0xFF1F9A5F);
+      case 'cancelled':
+        return const Color(0xFFD9434E);
+      default:
+        return const Color(0xFF627386);
+    }
+  }
+}
+
+class _TreatmentPlanSheet extends StatefulWidget {
+  final int patientId;
+  final TreatmentPlan? existing;
+  final Future<void> Function(TreatmentPlan) onSaved;
+  const _TreatmentPlanSheet({
+    required this.patientId,
+    required this.onSaved,
+    this.existing,
+  });
+
+  @override
+  State<_TreatmentPlanSheet> createState() => _TreatmentPlanSheetState();
+}
+
+class _TreatmentPlanSheetState extends State<_TreatmentPlanSheet> {
+  final _name = TextEditingController();
+  final _goals = TextEditingController();
+  final _cost = TextEditingController();
+  final _notes = TextEditingController();
+  String _status = 'draft';
+  String? _startDate;
+  String? _endDate;
+  bool _saving = false;
+
+  bool get _isEdit => widget.existing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    if (e != null) {
+      _name.text = e.planName;
+      _goals.text = e.goals ?? '';
+      _cost.text = e.estimatedCost == 0 ? '' : e.estimatedCost.toString();
+      _notes.text = e.notes ?? '';
+      _status = e.status;
+      _startDate = e.startDate;
+      _endDate = e.endDate;
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_name, _goals, _cost, _notes]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _pickStart() async {
+    final initial = DateTime.tryParse(_startDate ?? '') ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+    );
+    if (picked != null) {
+      setState(() => _startDate = DateFormatHelper.formatDateForApi(picked));
+    }
+  }
+
+  Future<void> _pickEnd() async {
+    final initial = DateTime.tryParse(_endDate ?? '') ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+    );
+    if (picked != null) {
+      setState(() => _endDate = DateFormatHelper.formatDateForApi(picked));
+    }
+  }
+
+  Future<void> _save() async {
+    if (_name.text.trim().isEmpty) return;
+    setState(() => _saving = true);
+    await widget.onSaved(TreatmentPlan(
+      id: widget.existing?.id,
+      patientId: widget.patientId,
+      planName: _name.text.trim(),
+      goals: _goals.text.trim().isEmpty ? null : _goals.text.trim(),
+      estimatedCost: double.tryParse(_cost.text) ?? 0,
+      status: _status,
+      startDate: _startDate,
+      endDate: _endDate,
+      notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
+    ));
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isArabic = context.select<AppState, bool>((state) => state.isArabic);
+    String t(String key) => AppStrings.t(key, isArabic: isArabic);
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      builder: (_, scroll) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(2)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Row(children: [
+                Text(_isEdit ? t('edit_plan') : t('add_plan'),
+                    style: Theme.of(context).textTheme.titleLarge),
+                const Spacer(),
+                IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close)),
+              ]),
+            ),
+            Expanded(
+              child: ListView(
+                controller: scroll,
+                padding: const EdgeInsets.all(16),
+                children: [
+                  TextField(
+                    controller: _name,
+                    decoration: InputDecoration(labelText: t('plan_name')),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _goals,
+                    decoration: InputDecoration(labelText: t('goals')),
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _cost,
+                        decoration: InputDecoration(
+                            labelText: '${t('estimated_cost')} (₪)',
+                            prefixText: '₪ '),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _status,
+                        decoration: InputDecoration(labelText: t('status')),
+                        items: const [
+                          DropdownMenuItem(
+                              value: 'draft', child: Text('Draft')),
+                          DropdownMenuItem(
+                              value: 'active', child: Text('Active')),
+                          DropdownMenuItem(
+                              value: 'completed', child: Text('Completed')),
+                          DropdownMenuItem(
+                              value: 'cancelled', child: Text('Cancelled')),
+                        ],
+                        onChanged: (v) =>
+                            setState(() => _status = v ?? 'draft'),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: _pickStart,
+                        child: InputDecorator(
+                          decoration: InputDecoration(
+                              labelText: t('start_date'),
+                              suffixIcon:
+                                  const Icon(Icons.calendar_today_outlined)),
+                          child: Text(_startDate ?? '—'),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: InkWell(
+                        onTap: _pickEnd,
+                        child: InputDecorator(
+                          decoration: InputDecoration(
+                              labelText: t('end_date'),
+                              suffixIcon:
+                                  const Icon(Icons.calendar_today_outlined)),
+                          child: Text(_endDate ?? '—'),
+                        ),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _notes,
+                    decoration: InputDecoration(labelText: t('notes')),
+                    maxLines: 3,
+                  ),
+                  const SizedBox(height: 20),
+                  GradientButton(
+                      label: t('save'),
+                      loading: _saving,
+                      onPressed: _saving ? null : _save,
+                      width: double.infinity),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

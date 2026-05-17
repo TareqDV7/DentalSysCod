@@ -4,6 +4,8 @@ import '../models/visit.dart';
 import '../models/billing_record.dart';
 import '../models/expense.dart';
 import '../models/followup.dart';
+import '../models/holiday.dart';
+import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
 import 'database_service.dart';
 import 'clinic_api.dart';
@@ -140,6 +142,12 @@ class InternetSyncService {
         (p) => _db.upsertProcedure(TreatmentProcedure.fromJson(p)));
     await each('patient_followups',
         (f) => _db.upsertFollowup(Followup.fromJson(f).copyWith(isSynced: true)));
+    await each(
+        'treatment_plans',
+        (p) => _db.upsertTreatmentPlan(
+            TreatmentPlan.fromJson(p).copyWith(isSynced: true)));
+    await each('holidays',
+        (h) => _db.upsertHoliday(Holiday.fromJson(h).copyWith(isSynced: true)));
   }
 
   Future<void> _pushToServer() async {

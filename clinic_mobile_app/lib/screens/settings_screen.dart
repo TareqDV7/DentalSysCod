@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import '../config/app_config.dart';
+import '../models/holiday.dart';
 import '../state/app_state.dart';
 import '../services/bluetooth_permissions.dart';
 import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
 import '../services/cloud_sync_service.dart';
+import '../utils/app_strings.dart';
+import '../utils/date_format_helper.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/section_header.dart';
@@ -388,6 +391,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 20),
 
+          // ── Holidays ────────────────────────────────────────────────────
+          SectionHeader(
+              title:
+                  AppStrings.t('holidays', isArabic: state.locale == 'ar')),
+          ClinicCard(child: _HolidaysSection()),
+
+          const SizedBox(height: 20),
+
           // ── About ───────────────────────────────────────────────────────
           SectionHeader(title: 'About'),
           ClinicCard(
@@ -579,3 +590,140 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 }
+
+class _HolidaysSection extends StatefulWidget {
+  const _HolidaysSection();
+  @override
+  State<_HolidaysSection> createState() => _HolidaysSectionState();
+}
+
+class _HolidaysSectionState extends State<_HolidaysSection> {
+  List<Holiday> _holidays = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final db = context.read<AppState>().db;
+    final rows = await db.getHolidays();
+    if (mounted) setState(() { _holidays = rows; _loading = false; });
+  }
+
+  Future<void> _add() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(DateTime.now().year - 1),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
+    );
+    if (picked == null || !mounted) return;
+    final nameCtrl = TextEditingController();
+    final isArabic = context.read<AppState>().locale == 'ar';
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(AppStrings.t('add_holiday', isArabic: isArabic)),
+        content: TextField(
+          controller: nameCtrl,
+          decoration: InputDecoration(
+              labelText: AppStrings.t('holiday_name', isArabic: isArabic)),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(AppStrings.t('cancel', isArabic: isArabic))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(AppStrings.t('save', isArabic: isArabic))),
+        ],
+      ),
+    );
+    nameCtrl.dispose();
+    if (saved != true || !mounted) return;
+    final state = context.read<AppState>();
+    await state.db.upsertHoliday(Holiday(
+      holidayDate: DateFormatHelper.formatDateForApi(picked),
+      name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
+      updatedAt: DateTime.now().toIso8601String(),
+      isSynced: false,
+    ));
+    unawaited(state.sync.syncNow());
+    await _load();
+  }
+
+  Future<void> _delete(Holiday h) async {
+    if (h.id == null) return;
+    final isArabic = context.read<AppState>().locale == 'ar';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(AppStrings.t('confirm_delete', isArabic: isArabic)),
+        content: Text(
+            AppStrings.t('delete_holiday_confirm', isArabic: isArabic)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(AppStrings.t('cancel', isArabic: isArabic))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(AppStrings.t('delete', isArabic: isArabic),
+                  style: const TextStyle(color: Color(0xFFD9434E)))),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final state = context.read<AppState>();
+    await state.db.deleteHoliday(h.id!);
+    unawaited(state.sync.syncNow());
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final isArabic = state.locale == 'ar';
+    if (_loading) {
+      return const SizedBox(
+        height: 60,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_holidays.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text(AppStrings.t('no_holidays', isArabic: isArabic),
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          )
+        else
+          ..._holidays.map((h) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.event_busy_outlined),
+                title: Text(h.holidayDate),
+                subtitle: (h.name ?? '').isEmpty ? null : Text(h.name!),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete,
+                      size: 18, color: Color(0xFFD9434E)),
+                  onPressed: () => _delete(h),
+                ),
+              )),
+        const SizedBox(height: 8),
+        GradientButton(
+          label: AppStrings.t('add_holiday', isArabic: isArabic),
+          icon: Icons.add,
+          onPressed: _add,
+          width: double.infinity,
+        ),
+      ],
+    );
+  }
+}
+
+void unawaited(Future<void> f) {}

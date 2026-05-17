@@ -6,6 +6,8 @@ import '../models/visit.dart';
 import '../models/billing_record.dart';
 import '../models/expense.dart';
 import '../models/followup.dart';
+import '../models/holiday.dart';
+import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
 
 class DatabaseService {
@@ -20,7 +22,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 3, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 4, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -32,6 +34,8 @@ class DatabaseService {
     'expenses': 'expenses',
     'treatment_procedures': 'treatment_procedures',
     'followups': 'patient_followups',
+    'treatment_plans': 'treatment_plans',
+    'holidays': 'holidays',
   };
   static final Map<String, String> remoteToLocalTable = {
     for (final e in localToRemoteTable.entries) e.value: e.key,
@@ -56,7 +60,46 @@ class DatabaseService {
       await db.execute(_createFollowups);
       await db.execute(_idxFollowupsPatient);
     }
+    if (oldVersion < 4) {
+      await db.execute(_createTreatmentPlans);
+      await db.execute(_idxPlansPatient);
+      await db.execute(_createHolidays);
+      await db.execute(_idxHolidaysDate);
+    }
   }
+
+  static const String _createTreatmentPlans = '''
+    CREATE TABLE IF NOT EXISTS treatment_plans (
+      id INTEGER PRIMARY KEY,
+      patient_id INTEGER NOT NULL,
+      plan_name TEXT NOT NULL,
+      goals TEXT,
+      estimated_cost REAL DEFAULT 0,
+      status TEXT DEFAULT 'draft',
+      start_date TEXT,
+      end_date TEXT,
+      notes TEXT,
+      updated_at TEXT,
+      is_synced INTEGER DEFAULT 0
+    )
+  ''';
+
+  static const String _idxPlansPatient =
+      'CREATE INDEX IF NOT EXISTS idx_plans_patient ON treatment_plans(patient_id)';
+
+  static const String _createHolidays = '''
+    CREATE TABLE IF NOT EXISTS holidays (
+      id INTEGER PRIMARY KEY,
+      holiday_date TEXT NOT NULL,
+      name TEXT,
+      notes TEXT,
+      updated_at TEXT,
+      is_synced INTEGER DEFAULT 0
+    )
+  ''';
+
+  static const String _idxHolidaysDate =
+      'CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays(holiday_date)';
 
   static const String _createFollowups = '''
     CREATE TABLE IF NOT EXISTS followups (
@@ -182,6 +225,10 @@ class DatabaseService {
     await db.execute(_createTombstones);
     await db.execute(_createFollowups);
     await db.execute(_idxFollowupsPatient);
+    await db.execute(_createTreatmentPlans);
+    await db.execute(_idxPlansPatient);
+    await db.execute(_createHolidays);
+    await db.execute(_idxHolidaysDate);
   }
 
   // ── Patients ──────────────────────────────────────────────────────────────
@@ -513,6 +560,83 @@ class DatabaseService {
   /// for edge cases (out-of-order insertion, edit changing the date, etc.).
   Future<void> debugRecomputeFollowups(int patientId) =>
       _recomputeFollowupBalances(patientId);
+
+  // ── Treatment Plans ───────────────────────────────────────────────────────
+
+  Future<List<TreatmentPlan>> getPatientTreatmentPlans(int patientId) async {
+    final db = await database;
+    final rows = await db.query('treatment_plans',
+        where: 'patient_id = ?',
+        whereArgs: [patientId],
+        orderBy: 'COALESCE(start_date, "") DESC, id DESC');
+    return rows.map(TreatmentPlan.fromDb).toList();
+  }
+
+  Future<int> upsertTreatmentPlan(TreatmentPlan p) async {
+    final db = await database;
+    final data = p.toDb();
+    if (p.id != null) {
+      final exists = await db.query('treatment_plans',
+          where: 'id = ?', whereArgs: [p.id], limit: 1);
+      if (exists.isNotEmpty) {
+        await db.update('treatment_plans', data,
+            where: 'id = ?', whereArgs: [p.id]);
+        return p.id!;
+      }
+    }
+    return db.insert('treatment_plans', data,
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> deleteTreatmentPlan(int id) async {
+    final db = await database;
+    await db.delete('treatment_plans', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('treatment_plans', id);
+  }
+
+  // ── Holidays ──────────────────────────────────────────────────────────────
+
+  Future<List<Holiday>> getHolidays() async {
+    final db = await database;
+    final rows = await db.query('holidays', orderBy: 'holiday_date ASC');
+    return rows.map(Holiday.fromDb).toList();
+  }
+
+  /// Returns the calendar dates that fall on a clinic holiday. Used by the
+  /// appointments calendar to grey them out.
+  Future<Set<DateTime>> getHolidayDates() async {
+    final db = await database;
+    final rows = await db.query('holidays', columns: ['holiday_date']);
+    final out = <DateTime>{};
+    for (final r in rows) {
+      final s = r['holiday_date']?.toString();
+      if (s == null || s.isEmpty) continue;
+      final dt = DateTime.tryParse(s);
+      if (dt != null) out.add(DateTime(dt.year, dt.month, dt.day));
+    }
+    return out;
+  }
+
+  Future<int> upsertHoliday(Holiday h) async {
+    final db = await database;
+    final data = h.toDb();
+    if (h.id != null) {
+      final exists = await db.query('holidays',
+          where: 'id = ?', whereArgs: [h.id], limit: 1);
+      if (exists.isNotEmpty) {
+        await db.update('holidays', data, where: 'id = ?', whereArgs: [h.id]);
+        return h.id!;
+      }
+    }
+    return db.insert('holidays', data,
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> deleteHoliday(int id) async {
+    final db = await database;
+    await db.delete('holidays', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('holidays', id);
+  }
 
   // ── Treatment Procedures ──────────────────────────────────────────────────
 
