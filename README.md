@@ -36,14 +36,17 @@ A self-contained dental clinic management platform with a Flask web portal and a
 ### Desktop server
 
 ```bash
-# Windows
+# Windows — double-click start.bat in Explorer, or from a terminal:
 py dental_clinic.py
+.\start.bat
 
 # Linux / macOS
 python3 dental_clinic.py
 ```
 
 Dependencies (`Flask`, `Flask-CORS`, `waitress`) are installed automatically on first run. The browser opens at `http://localhost:5000` automatically — which lands on the sign-in page.
+
+> **Windows note** — if double-clicking `dental_clinic.py` raises the OS dialog *"The application was unable to start correctly (0xc0000022)"*, that's Defender's **Controlled Folder Access** rejecting an interactive launch when the project lives under a protected folder (`%userprofile%\Desktop` is one by default). `start.bat` goes through `cmd → python.exe` instead of the `.py` shell association, which Defender lets through. The alternative is to whitelist Python in an **admin** PowerShell once: `Add-MpPreference -ControlledFolderAccessAllowedApplications '<path-to-python.exe>'`.
 
 **First login:** the web portal requires a staff sign-in. On first run a default account is created — username `admin`, password `admin` — and the console prints a reminder to change it. Either set `CLINIC_ADMIN_PASSWORD` before the first run, or change the password afterwards from **Settings → Account → Change Password**.
 
