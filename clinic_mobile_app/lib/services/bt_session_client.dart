@@ -24,6 +24,17 @@ class BtSessionResult {
       : success = false, unauthorized = false;
 }
 
+/// Outcome of one Bluetooth auto-pair handshake (`op:bt_pair`).
+class BtPairingResult {
+  final bool success;
+  final String? deviceToken;
+  final String? errorMessage;
+  const BtPairingResult.ok(String token)
+      : success = true, deviceToken = token, errorMessage = null;
+  const BtPairingResult.failure(this.errorMessage)
+      : success = false, deviceToken = null;
+}
+
 /// Runs one hello → sync_export → sync_import dialogue over the supplied stream.
 class BtSessionClient {
   final BtStream _stream;
@@ -119,6 +130,71 @@ class BtSessionClient {
       return finishWith(BtSessionResult.failure('timeout'));
     } catch (e) {
       return finishWith(BtSessionResult.failure(e.toString()));
+    }
+  }
+
+  /// One-shot `op:bt_pair` handshake. Sends device_id/device_name over the
+  /// already-OS-Bluetooth-bonded channel; server creates (or rotates) a
+  /// paired_devices row and returns a fresh device_token. The stream is
+  /// closed when this returns — callers should open a new one for the
+  /// subsequent sync session.
+  Future<BtPairingResult> runPairing({
+    required String deviceId,
+    required String deviceName,
+    required String clientVersion,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final reader = FrameReader();
+    final responses = StreamController<Map<String, dynamic>>.broadcast();
+    late StreamSubscription<Uint8List> sub;
+    sub = _stream.input.listen(
+      (chunk) {
+        reader.addBytes(chunk);
+        while (true) {
+          try {
+            final frame = reader.next();
+            if (frame == null) break;
+            responses.add(frame);
+          } on FormatException catch (e) {
+            responses.addError(e);
+            break;
+          }
+        }
+      },
+      onError: responses.addError,
+      onDone: () => responses.close(),
+      cancelOnError: false,
+    );
+
+    Future<BtPairingResult> finishWith(BtPairingResult r) async {
+      await sub.cancel();
+      await responses.close();
+      await _stream.close();
+      return r;
+    }
+
+    try {
+      _stream.writeBytes(BluetoothFrameCodec.encode({
+        'op': 'bt_pair',
+        'device_id': deviceId,
+        'device_name': deviceName,
+        'client_version': clientVersion,
+      }));
+      final resp = await responses.stream.first.timeout(timeout);
+      final err = resp['error'];
+      if (err != null) {
+        return finishWith(BtPairingResult.failure(err.toString()));
+      }
+      final token = resp['device_token']?.toString();
+      if (token == null || token.isEmpty) {
+        return finishWith(
+            BtPairingResult.failure('pair response missing device_token'));
+      }
+      return finishWith(BtPairingResult.ok(token));
+    } on TimeoutException {
+      return finishWith(BtPairingResult.failure('timeout'));
+    } catch (e) {
+      return finishWith(BtPairingResult.failure(e.toString()));
     }
   }
 }

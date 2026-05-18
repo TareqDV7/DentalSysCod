@@ -102,6 +102,80 @@ def test_sync_import_applies_rows(cursor):
     assert cursor.fetchone()['first_name'] == 'Imported'
 
 
+def test_bt_pair_creates_new_paired_device(cursor):
+    """op:bt_pair is unauthenticated: server issues a fresh device_token,
+    inserts a paired_devices row, and the response includes the token.
+
+    Trust model: the BT-SPP COM port the server listens on is OS-Bluetooth-
+    bonded already, so anyone who can speak this protocol has the doctor's
+    physical/intent approval. Per-device tokens still let the server tell
+    devices apart for audit + revoke later."""
+    resp, authed = _bt_handle_request(cursor, {
+        'op': 'bt_pair',
+        'device_id': 'mobile-abc',
+        'device_name': 'Doctor phone',
+        'client_version': '1.0.0',
+    }, authed=False)
+    assert resp['ok'] is True
+    assert resp['device_token']
+    assert isinstance(resp['device_token'], str)
+    assert len(resp['device_token']) >= 16
+    # Authed flag flips on so the same BT session can immediately do
+    # sync_export / sync_import without a second hello round-trip.
+    assert authed is True
+
+    cursor.execute(
+        'SELECT device_id, device_name, is_active FROM paired_devices '
+        'WHERE device_token = ?', (resp['device_token'],))
+    row = cursor.fetchone()
+    assert row is not None
+    assert row['device_id'] == 'mobile-abc'
+    assert row['device_name'] == 'Doctor phone'
+    assert int(row['is_active']) == 1
+
+
+def test_bt_pair_reissues_token_for_same_device_id(cursor):
+    """If the same device_id pairs again (e.g. mobile lost its stored token
+    after a reinstall), don't proliferate paired_devices rows — rotate the
+    existing row's token and return the new one."""
+    first, _ = _bt_handle_request(cursor, {
+        'op': 'bt_pair', 'device_id': 'mobile-abc', 'device_name': 'phone',
+    }, authed=False)
+    second, _ = _bt_handle_request(cursor, {
+        'op': 'bt_pair', 'device_id': 'mobile-abc', 'device_name': 'phone',
+    }, authed=False)
+    assert first['device_token'] != second['device_token']
+
+    cursor.execute(
+        "SELECT COUNT(*) AS n FROM paired_devices WHERE device_id = 'mobile-abc'")
+    assert cursor.fetchone()['n'] == 1
+    # The previous token must no longer authenticate.
+    resp, _ = _bt_handle_request(cursor, {
+        'op': 'hello', 'device_token': first['device_token'],
+    }, authed=False)
+    assert resp == {'error': 'unauthorized'}
+
+
+def test_bt_pair_token_is_immediately_usable(cursor):
+    """A pair → hello on the same session uses the fresh token."""
+    pair_resp, _ = _bt_handle_request(cursor, {
+        'op': 'bt_pair', 'device_id': 'mobile-abc', 'device_name': 'phone',
+    }, authed=False)
+    hello_resp, authed = _bt_handle_request(cursor, {
+        'op': 'hello', 'device_token': pair_resp['device_token'],
+    }, authed=False)
+    assert hello_resp['ok'] is True
+    assert authed is True
+
+
+def test_bt_pair_rejects_missing_device_id(cursor):
+    resp, authed = _bt_handle_request(cursor, {
+        'op': 'bt_pair', 'device_name': 'phone',
+    }, authed=False)
+    assert resp == {'error': 'device_id required'}
+    assert authed is False
+
+
 def test_sync_import_isolates_bad_rows(cursor):
     # One good row + one row with no id — the good row must still apply.
     payload = {

@@ -8,6 +8,8 @@ import '../services/bluetooth_permissions.dart';
 import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
 import '../services/cloud_sync_service.dart';
+import '../services/local_storage_service.dart';
+import 'pairing_screen.dart';
 import '../utils/app_strings.dart';
 import '../utils/date_format_helper.dart';
 import '../widgets/gradient_button.dart';
@@ -62,6 +64,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await context.read<AppState>().sync.syncNow();
     await _loadLastSync();
     if (mounted) setState(() => _syncing = false);
+  }
+
+  Future<void> _openPairingScreen() async {
+    final app = context.read<AppState>();
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PairingScreen(onPaired: () async {
+        // Re-init so api.deviceToken + sync targets pick up the fresh token.
+        await app.init();
+        if (mounted) Navigator.of(context).pop();
+      }),
+    ));
+    await _loadLastSync();
   }
 
   Future<void> _saveUrl() async {
@@ -295,6 +309,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   loading: _syncing,
                   onPressed: _syncing ? null : _syncNow,
                   width: double.infinity,
+                ),
+                const SizedBox(height: 8),
+                FutureBuilder<String?>(
+                  future: LocalStorageService().getDeviceToken(),
+                  builder: (context, snap) {
+                    final hasToken =
+                        snap.data != null && snap.data!.isNotEmpty;
+                    final isArabic =
+                        context.read<AppState>().locale == 'ar';
+                    return OutlinedButton.icon(
+                      onPressed: _openPairingScreen,
+                      icon: Icon(
+                          hasToken ? Icons.refresh : Icons.qr_code_2_outlined),
+                      label: Text(hasToken
+                          ? (isArabic
+                              ? 'إعادة الإقران عبر الواي فاي (رمز)'
+                              : 'Re-pair via Wi-Fi (code)')
+                          : (isArabic
+                              ? 'إقران عبر الواي فاي (رمز 6 أرقام)'
+                              : 'Pair via Wi-Fi (6-digit code)')),
+                    );
+                  },
                 ),
               ],
             ),

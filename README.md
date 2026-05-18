@@ -105,13 +105,15 @@ The mobile app and the local↔cloud mirror reconcile with the server through tw
 - `GET /api/sync/export` — returns the synced tables. Pass `?since=<ISO timestamp>` to get only rows changed after that point (an incremental delta); without it you get a full snapshot. The response also carries a `tombstones` list — `{table_name, row_id, deleted_at}` entries recording rows that were deleted.
 - `POST /api/sync/import` — accepts the same shape (`tables` + `tombstones`). Rows are merged **last-write-wins by `updated_at`**; an incoming row that's older than the local copy is skipped. Tombstones propagate deletions the same way: a deletion only takes effect if it's newer than the local row's last update, and a stale row push won't resurrect something that was already deleted (the deletion is remembered in the `sync_tombstones` table).
 
-Both endpoints require a paired-device token (`X-Device-Token` header or `device_token` query param).
+Both endpoints require a paired-device token (`X-Device-Token` header or `device_token` query param). The mobile gets one via either:
+- **Wi-Fi/LAN onboarding** — Settings → "Pair via Wi-Fi (6-digit code)": clinic PC's web portal generates a `POST /api/pairing/start` code, mobile enters it and calls `POST /api/pairing/complete`, server stores the issued token in `paired_devices`.
+- **Bluetooth auto-pair** — first time the user taps "Sync now via Bluetooth" with no token, the mobile sends `op:bt_pair` over the already-OS-bonded BT-SPP channel; server issues + persists a fresh token and the mobile saves it. No code typing — the OS-level Bluetooth bond + the configured COM port are the trust gates. If the server's `paired_devices` is ever cleared, the next BT sync detects `unauthorized`, silently re-pairs, and retries.
 
 ### Bluetooth sync (offline fallback)
 
 When the phone can reach neither the LAN nor the cloud node, it falls back to **classic Bluetooth (SPP)** with the desktop. Pair phone ↔ PC once in Windows Bluetooth settings; in the local server's **Settings → Bluetooth Sync** card (`GET /api/bt/status`, `POST /api/bt/configure`), flip *Enable Bluetooth Sync* — that's it. The server auto-picks the right COM port (Windows registers an *incoming* SPP port with `LOCALMFG` in its hwid; the picker ranks that one first), reflected back in the status pill (grey = off, amber = no port found, green = listening / last-synced, red = error). For unusual setups, the *Advanced* disclosure exposes a manual port dropdown + Save. On the phone, **Settings → Bluetooth peer** → "Pick clinic PC" → choose the bonded desktop.
 
-From then on, whenever the phone is in range and Wi-Fi/cloud are unreachable, the app runs one `hello → sync_export → sync_import` round-trip every 30 s over a 4-byte length-prefixed JSON protocol — same `{tables, tombstones}` envelope as the HTTP `/api/sync/*` endpoints, reusing `_collect_sync_export` and `_apply_sync_import` on the server so there is no duplicated sync logic. Last-write-wins by `updated_at` is unchanged. The first wire message is `{"op":"hello","device_token":…}`; the desktop verifies it against `paired_devices` and closes the socket on mismatch. The Settings → Bluetooth peer card also has a **Sync now via Bluetooth** button that forces one immediate cycle, useful for verifying the link.
+From then on, whenever the phone is in range and Wi-Fi/cloud are unreachable, the app runs one `hello → sync_export → sync_import` round-trip every 30 s over a 4-byte length-prefixed JSON protocol — same `{tables, tombstones}` envelope as the HTTP `/api/sync/*` endpoints, reusing `_collect_sync_export` and `_apply_sync_import` on the server so there is no duplicated sync logic. Last-write-wins by `updated_at` is unchanged. The handshake is `{"op":"hello","device_token":…}`; the desktop verifies it against `paired_devices` and closes the socket on mismatch — **except** the very first time, when the phone has no token yet: then the mobile sends `{"op":"bt_pair","device_id":…,"device_name":…}` first, the server creates (or rotates) a `paired_devices` row and returns a fresh `device_token`, the mobile stores it, and subsequent cycles authenticate normally. The same self-pair runs again automatically if the stored token is later revoked or the server's DB is reset (mobile sees `unauthorized`, drops the token, re-pairs once, retries). Trust model: the BT-SPP COM port is gated by an OS-level Bluetooth bond plus the doctor explicitly enabling BT sync on the PC, so anyone who reaches this protocol already has physical-presence approval. The Settings → Bluetooth peer card also has a **Sync now via Bluetooth** button that forces one immediate cycle, useful for verifying the link or triggering the first-time pair.
 
 Desktop side: a daemon thread parallel to `cloud_sync_worker()` re-reads its settings each cycle (`bt_sync_enabled`, `bt_sync_com_port` in `app_settings`), so toggles in the UI take effect without restart. The thread runs in both production and debug (debug-mode guarded by `WERKZEUG_RUN_MAIN` so the reloader's parent process doesn't fight the child for the COM port), skipped on the cloud node, and never holds the socket open between syncs. Phone side: the 30 s loop is driven by a foreground `Timer.periodic` in `ConnectivitySyncService`, which means it ticks while the app is open. Required Android 12+ runtime permissions (`BLUETOOTH_CONNECT`, `BLUETOOTH_SCAN`) are requested when the user flips *Enable Bluetooth sync* in Settings and re-checked each tick — a denied / revoked permission writes a visible error into the card rather than failing silently. (Background-isolate fallback so the loop survives the app being killed is a planned v1.0.x follow-up; `flutter_background_service` is declared but not yet wired.)
 
@@ -217,7 +219,7 @@ clinic/
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 153 tests across 20 suites
+├── tests/                    # 157 tests across 20 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -225,7 +227,7 @@ clinic/
 │   ├── test_backup.py               # Per-tenant cloud backups + flat single-tenant layout
 │   ├── test_bt_codec.py             # 4-byte length-prefixed JSON frame codec
 │   ├── test_bt_endpoints.py         # /api/bt/status + /api/bt/configure
-│   ├── test_bt_protocol.py          # hello / sync_export / sync_import dispatcher
+│   ├── test_bt_protocol.py          # hello / bt_pair / sync_export / sync_import dispatcher
 │   ├── test_bt_session.py           # Frame in → dispatch → frame out, auth gating
 │   ├── test_bt_worker.py            # BT daemon thread settings re-read + back-off
 │   ├── test_catalog_migration.py    # Legacy treatment_catalog → treatment_procedures
@@ -255,7 +257,8 @@ clinic/
         │   └── app_state.dart          # Provider: theme, locale, sync, DB references
         ├── models/                     # Appointment, Patient, Visit, BillingRecord, …
         ├── screens/
-        │   ├── activation_screen.dart  # First-run: server URL + serial activation
+        │   ├── pairing_screen.dart     # Wi-Fi/LAN onboarding: server URL + 6-digit pair code → device token (reached from Settings → Pair via Wi-Fi)
+        │   ├── activation_screen.dart  # Offline-license flow: serial activation (legacy/manual entry)
         │   ├── home_screen.dart        # Shell: AppBar + NavigationBar + IndexedStack
         │   ├── dashboard_screen.dart   # Stats grid + recent appointments
         │   ├── patients_screen.dart
@@ -272,7 +275,7 @@ clinic/
         │   ├── connectivity_sync_service.dart  # LAN → cloud → BT fallback driver, 30 s loop
         │   ├── cloud_sync_service.dart      # Pair phone to cloud node, push/pull deltas
         │   ├── bluetooth_sync_service.dart  # Classic BT-SPP fallback (Android)
-        │   ├── bt_session_client.dart       # hello / sync_export / sync_import session driver
+        │   ├── bt_session_client.dart       # hello / bt_pair / sync_export / sync_import session driver
         │   ├── license_service.dart
         │   ├── patient_service.dart
         │   ├── appointment_service.dart
@@ -460,9 +463,9 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**153 tests across 20 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/sync_export/sync_import dispatcher reusing the HTTP helpers, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**157 tests across 20 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
-The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart`, `bluetooth_sync_service_test.dart`, `followup_balance_test.dart`, and the default widget test (23 tests total). Run with `cd clinic_mobile_app && flutter test`.
+The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `followup_balance_test.dart`, and the default widget test (27 tests total). Run with `cd clinic_mobile_app && flutter test`.
 
 Financial logic can also be exercised end-to-end against a running server with the ad-hoc runner under `tools/`:
 

@@ -61,6 +61,43 @@ void main() {
     expect(result.unauthorized, true);
   });
 
+  test('runPairing returns the device_token when server accepts the pair',
+      () async {
+    final stream = _FakeBtStream();
+    final client = BtSessionClient(stream);
+    final fut = client.runPairing(
+      deviceId: 'mobile-abc',
+      deviceName: 'Doctor phone',
+      clientVersion: '1.0.0',
+    );
+    await Future.delayed(Duration.zero);
+    stream.deliver({
+      'ok': true,
+      'device_token': 'fresh-token',
+      'server_version': '1.0.0',
+    });
+    final result = await fut;
+    expect(result.success, true);
+    expect(result.deviceToken, 'fresh-token');
+    expect(stream.closed, true);
+  });
+
+  test('runPairing surfaces server-side errors as failures', () async {
+    final stream = _FakeBtStream();
+    final client = BtSessionClient(stream);
+    final fut = client.runPairing(
+      deviceId: '',
+      deviceName: 'Doctor phone',
+      clientVersion: '1.0.0',
+    );
+    await Future.delayed(Duration.zero);
+    stream.deliver({'error': 'device_id required'});
+    final result = await fut;
+    expect(result.success, false);
+    expect(result.deviceToken, isNull);
+    expect(result.errorMessage, contains('device_id required'));
+  });
+
   test('error in import response is reported as failure but not unauthorized',
       () async {
     final stream = _FakeBtStream();

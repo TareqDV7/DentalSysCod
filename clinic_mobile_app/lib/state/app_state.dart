@@ -12,6 +12,7 @@ import '../services/internet_sync_service.dart';
 import '../services/bluetooth_permissions.dart';
 import '../services/bluetooth_sync_service.dart';
 import '../services/connectivity_sync_service.dart';
+import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
 
 class AppState extends ChangeNotifier {
@@ -45,8 +46,14 @@ class AppState extends ChangeNotifier {
     billing = BillingService(db, api);
     reports = ReportService(db, api);
     _internet = InternetSyncService(db, api);
+    final deviceService = DeviceService();
     _bluetooth = BluetoothSyncService.production(
       deviceTokenLoader: _storage.getDeviceToken,
+      // BT auto-pair: first sync attempt with no token sends op:bt_pair over
+      // the already-OS-bonded BT channel; server issues a fresh device_token
+      // and we persist it here. No 6-digit code dance required for BT.
+      deviceTokenSaver: _storage.setDeviceToken,
+      deviceIdLoader: deviceService.getDeviceId,
       // Incremental cursor — same key the HTTP pull writes, so a BT cycle
       // that follows an HTTP pull (or vice versa) only fetches what changed.
       // A null cursor here would re-pull the entire database every 30 s and

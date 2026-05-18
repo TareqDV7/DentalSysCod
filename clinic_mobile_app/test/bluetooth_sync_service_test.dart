@@ -115,6 +115,76 @@ void main() {
     ]);
   });
 
+  test('auto-pairs over BT when no device token is stored, then syncs',
+      () async {
+    // First connection: pair handshake. Second connection: full sync.
+    final pairStream = _ScriptedStream([
+      {'ok': true, 'device_token': 'freshly-paired', 'server_version': '1.0.0'},
+    ]);
+    final syncStream = _ScriptedStream([
+      {'ok': true, 'server_version': '1.0.0'},
+      {'ok': true, 'tables': {}, 'tombstones': [], 'generated_at': 't'},
+      {'ok': true, 'applied': 0, 'skipped': 0},
+    ]);
+    final opened = <BtStream>[];
+    String? loadedToken;
+    String? savedToken;
+    final svc = BluetoothSyncService.forTest(
+      streamOpener: (_) async {
+        final s = opened.isEmpty ? pairStream : syncStream;
+        opened.add(s);
+        return s;
+      },
+      deviceTokenLoader: () async => loadedToken,
+      deviceTokenSaver: (t) async {
+        savedToken = t;
+        loadedToken = t;
+      },
+      deviceIdLoader: () async => 'mobile-abc',
+      sinceLoader: () async => null,
+      onExport: (_) async {},
+      buildPushPayload: () async => {'tables': {}, 'tombstones': []},
+      clientVersion: '1.0.0',
+    );
+    final result = await svc.runOneSyncCycle('00:11:22:33:44:55');
+    expect(result.success, true);
+    expect(savedToken, 'freshly-paired');
+    expect(opened.length, 2,
+        reason: 'one connection for pair, one for sync');
+  });
+
+  test('re-pairs and retries when stored token is unauthorized', () async {
+    // First connection: hello returns unauthorized (server DB reset / token revoked).
+    // Second connection: bt_pair issues a fresh token.
+    // Third connection: full sync with the new token.
+    final helloUnauth = _ScriptedStream([{'error': 'unauthorized'}]);
+    final pairStream = _ScriptedStream([
+      {'ok': true, 'device_token': 'rotated-token', 'server_version': '1.0.0'},
+    ]);
+    final syncStream = _ScriptedStream([
+      {'ok': true, 'server_version': '1.0.0'},
+      {'ok': true, 'tables': {}, 'tombstones': [], 'generated_at': 't'},
+      {'ok': true, 'applied': 0, 'skipped': 0},
+    ]);
+    final streamsInOrder = [helloUnauth, pairStream, syncStream];
+    String? token = 'stale-token';
+    final svc = BluetoothSyncService.forTest(
+      streamOpener: (_) async => streamsInOrder.removeAt(0),
+      deviceTokenLoader: () async => token,
+      deviceTokenSaver: (t) async {
+        token = t;
+      },
+      deviceIdLoader: () async => 'mobile-abc',
+      sinceLoader: () async => null,
+      onExport: (_) async {},
+      buildPushPayload: () async => {'tables': {}, 'tombstones': []},
+      clientVersion: '1.0.0',
+    );
+    final result = await svc.runOneSyncCycle('00:11:22:33:44:55');
+    expect(result.success, true);
+    expect(token, 'rotated-token');
+  });
+
   test('does NOT call onPushAcked when the import step fails', () async {
     final stream = _ScriptedStream([
       {'ok': true, 'server_version': '1.0.0'},

@@ -11245,6 +11245,30 @@ def _bt_lookup_device_by_token(cursor, token):
     return {'device_id': row['device_id'], 'device_name': row['device_name']}
 
 
+def _bt_pair_new_device(cursor, device_id, device_name):
+    """Issue a fresh device_token over the BT-SPP channel. Used by op:bt_pair
+    so a freshly-OS-Bluetooth-bonded peer can self-pair without the user
+    juggling 6-digit codes — the OS bond + the configured BT-SPP COM port
+    are the trust gates.
+
+    Rotates the token on the existing row when device_id is already known,
+    so a mobile that lost its stored token (reinstall, factory reset) can
+    re-pair without leaking dead paired_devices rows."""
+    token = secrets.token_urlsafe(32)
+    cursor.execute('''
+        INSERT INTO paired_devices (device_id, device_name, device_token, paired_at, last_seen_at, is_active)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
+        ON CONFLICT(device_id) DO UPDATE SET
+            device_name = excluded.device_name,
+            device_token = excluded.device_token,
+            last_seen_at = CURRENT_TIMESTAMP,
+            is_active = 1
+    ''', (device_id, device_name, token))
+    append_audit_log(cursor, 'create', 'paired_device', None,
+                     {'device_id': device_id, 'device_name': device_name, 'via': 'bt_pair'})
+    return token
+
+
 def _bt_handle_request(cursor, req, authed):
     """Dispatch one BT request. Returns (response_dict, new_authed_flag).
     Pure function — no I/O, no threading."""
@@ -11254,6 +11278,15 @@ def _bt_handle_request(cursor, req, authed):
         if device is None:
             return {'error': 'unauthorized'}, False
         return {'ok': True, 'server_version': BT_PROTOCOL_VERSION}, True
+
+    if op == 'bt_pair':
+        device_id = str(req.get('device_id') or '').strip()
+        if not device_id:
+            return {'error': 'device_id required'}, False
+        device_name = str(req.get('device_name') or '').strip() or device_id
+        token = _bt_pair_new_device(cursor, device_id, device_name)
+        return {'ok': True, 'device_token': token,
+                'server_version': BT_PROTOCOL_VERSION}, True
 
     if not authed:
         return {'error': 'unauthorized'}, authed
