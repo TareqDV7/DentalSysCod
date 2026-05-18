@@ -214,7 +214,7 @@ clinic/
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 145 tests across 19 suites
+├── tests/                    # 153 tests across 20 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -232,6 +232,7 @@ clinic/
 │   ├── test_date_utils.py
 │   ├── test_expression_preservation.py  # "20+20" verbatim on sheet/invoice
 │   ├── test_followup_balance.py     # Recomputed Amount to Pay running balance
+│   ├── test_healthz.py              # /healthz probe (status, mode, db_writable, uptime)
 │   ├── test_sync_resilience.py      # Bad row doesn't kill batch; mobile fixes verified
 │   └── test_sync_tombstones.py      # Sync delta / tombstone propagation
 ├── tools/
@@ -261,11 +262,14 @@ clinic/
         │   ├── reports_screen.dart
         │   └── settings_screen.dart    # Server URL, sync, dark mode, language
         ├── services/
-        │   ├── database_service.dart       # Local SQLite (sqflite)
-        │   ├── api_client.dart             # Dio HTTP client
-        │   ├── internet_sync_service.dart  # Pull /api/sync/export, push /api/sync/import
-        │   ├── connectivity_sync_service.dart
-        │   ├── bluetooth_sync_service.dart # Fallback sync over BLE
+        │   ├── database_service.dart        # Local SQLite (sqflite)
+        │   ├── local_storage_service.dart   # Secure storage (tokens, bonded peer, server URL)
+        │   ├── api_client.dart              # Dio HTTP client
+        │   ├── internet_sync_service.dart   # Pull /api/sync/export, push /api/sync/import
+        │   ├── connectivity_sync_service.dart  # LAN → cloud → BT fallback driver, 30 s loop
+        │   ├── cloud_sync_service.dart      # Pair phone to cloud node, push/pull deltas
+        │   ├── bluetooth_sync_service.dart  # Classic BT-SPP fallback (Android)
+        │   ├── bt_session_client.dart       # hello / sync_export / sync_import session driver
         │   ├── license_service.dart
         │   ├── patient_service.dart
         │   ├── appointment_service.dart
@@ -453,7 +457,7 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**153 tests across 20 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/sync_export/sync_import dispatcher reusing the HTTP helpers, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**153 tests across 20 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/sync_export/sync_import dispatcher reusing the HTTP helpers, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
 The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart`, `bluetooth_sync_service_test.dart`, `followup_balance_test.dart`, and the default widget test (23 tests total). Run with `cd clinic_mobile_app && flutter test`.
 
