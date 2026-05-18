@@ -11498,6 +11498,16 @@ def cloud_sync_worker():
 
 
 if __name__ == '__main__':
+    # Windows defaults stdout/stderr to the locale code page (cp1252 on
+    # most English installs), which crashes the moment we print an emoji.
+    # Force UTF-8 with replacement so the banner and access log never bring
+    # the server down on a Unicode-unfriendly terminal.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, OSError):
+            pass
+
     host = os.environ.get('CLINIC_HOST', '127.0.0.1')
     port_raw = os.environ.get('CLINIC_PORT', '5000')
     try:
