@@ -360,63 +360,78 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ? 'تفعيل المزامنة عبر بلوتوث'
                               : 'Enable Bluetooth sync'),
                         ),
-                        const SizedBox(height: 8),
-                        if (app.btBondedLabel != null)
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.devices_other_rounded),
-                            title: Text(app.btBondedLabel!),
-                            subtitle: Text(app.btBondedMac ?? ''),
-                            trailing: TextButton(
-                              onPressed: () => app.unbindBtPeer(),
-                              child: Text(app.locale == 'ar' ? 'إزالة' : 'Remove'),
+                        if (app.btEnabled) ...[
+                          const SizedBox(height: 8),
+                          if (app.btBondedLabel != null)
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.devices_other_rounded),
+                              title: Text(app.btBondedLabel!),
+                              subtitle: Text(app.btBondedMac ?? ''),
+                              trailing: TextButton(
+                                onPressed: () => app.unbindBtPeer(),
+                                child: Text(app.locale == 'ar' ? 'إزالة' : 'Remove'),
+                              ),
+                            )
+                          else
+                            GradientButton(
+                              label: app.locale == 'ar' ? 'اختر كمبيوتر العيادة' : 'Pick clinic PC',
+                              icon: Icons.bluetooth_searching_rounded,
+                              onPressed: () => _pickBondedPeer(context, app),
                             ),
-                          )
-                        else
-                          GradientButton(
-                            label: app.locale == 'ar' ? 'اختر كمبيوتر العيادة' : 'Pick clinic PC',
-                            icon: Icons.bluetooth_searching_rounded,
-                            onPressed: () => _pickBondedPeer(context, app),
-                          ),
-                        if (hasError) ...[
-                          const SizedBox(height: 12),
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFDE7E9),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFD9434E)),
+                          if (hasError) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFDE7E9),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0xFFD9434E)),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(Icons.error_outline,
+                                      color: Color(0xFF9C2E36), size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(app.btLastError!,
+                                        style: const TextStyle(
+                                            color: Color(0xFF9C2E36),
+                                            fontSize: 13)),
+                                  ),
+                                ],
+                              ),
                             ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                          ] else ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              app.locale == 'ar'
+                                  ? 'نشِط · ${_btStatusLine(app)}'
+                                  : 'Active · ${_btStatusLine(app)}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                          if (app.btBondedMac != null) ...[
+                            const SizedBox(height: 8),
+                            ExpansionTile(
+                              tilePadding: EdgeInsets.zero,
+                              childrenPadding: EdgeInsets.zero,
+                              title: Text(
+                                app.locale == 'ar' ? 'متقدم' : 'Advanced',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
                               children: [
-                                const Icon(Icons.error_outline,
-                                    color: Color(0xFF9C2E36), size: 18),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(app.btLastError!,
-                                      style: const TextStyle(
-                                          color: Color(0xFF9C2E36),
-                                          fontSize: 13)),
+                                TextButton.icon(
+                                  icon: const Icon(Icons.bluetooth_connected_rounded),
+                                  label: Text(app.locale == 'ar'
+                                      ? 'مزامنة الآن عبر بلوتوث'
+                                      : 'Sync now via Bluetooth'),
+                                  onPressed: () => _syncBtNow(context, app),
                                 ),
                               ],
                             ),
-                          ),
-                        ] else ...[
-                          const SizedBox(height: 8),
-                          Text(_btStatusLine(app),
-                              style: Theme.of(context).textTheme.bodySmall),
-                        ],
-                        if (app.btBondedMac != null && app.btEnabled) ...[
-                          const SizedBox(height: 12),
-                          GradientButton(
-                            label: app.locale == 'ar'
-                                ? 'مزامنة الآن عبر بلوتوث'
-                                : 'Sync now via Bluetooth',
-                            icon: Icons.bluetooth_connected_rounded,
-                            onPressed: () => _syncBtNow(context, app),
-                            width: double.infinity,
-                          ),
+                          ],
                         ],
                       ],
                     );
