@@ -17,7 +17,7 @@ import '../services/connectivity_sync_service.dart';
 import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
 
-class AppState extends ChangeNotifier {
+class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final LocalStorageService _storage;
 
   late final ClinicApi api;
@@ -81,6 +81,7 @@ class AppState extends ChangeNotifier {
       cloud: cloud,
     );
     _bgSync = BackgroundSyncService.production();
+    WidgetsBinding.instance.addObserver(this);
   }
 
   String get clinicName => _clinicName;
@@ -274,7 +275,17 @@ class AppState extends ChangeNotifier {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // The sync isolate may have updated bt_last_sync_at / bt_last_error
+      // while we were backgrounded. Pull fresh values into UI state.
+      unawaited(_loadBtState());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _connectivity.dispose();
     super.dispose();
   }
