@@ -1,6 +1,15 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show WidgetsFlutterBinding;
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'database_service.dart';
+import 'local_storage_service.dart';
+import 'clinic_api.dart';
+import 'cloud_sync_service.dart';
+import 'internet_sync_service.dart';
+import 'bluetooth_sync_service.dart';
+import 'connectivity_sync_service.dart';
+import 'device_service.dart';
 
 /// Thin interface over the parts of [FlutterBackgroundService] we use.
 /// Lets unit tests inject a fake without touching platform channels.
@@ -46,11 +55,76 @@ class _ProductionBgServiceClient implements BgServiceClient {
 }
 
 /// Top-level function that runs inside the background isolate.
-/// Filled in by Task 3 — leave as stub for now.
+/// Background isolate: no UI, no Provider. Build a fresh dependency
+/// graph that mirrors what AppState builds in the UI isolate. Each
+/// isolate opens its own sqflite connection to the same file; WAL
+/// handles writer-writer concurrency.
 @pragma('vm:entry-point')
-void bgSyncOnStart(ServiceInstance service) {
-  // STUB: Task 3 wires the sync isolate (ConnectivitySyncService, BT loop,
-  // force_sync + stopService handlers). Do not implement here.
+void bgSyncOnStart(ServiceInstance service) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final storage = LocalStorageService();
+  final db = DatabaseService.instance;
+  final api = ClinicApi();
+  final baseUrl = await storage.getBaseUrl();
+  if (baseUrl != null) api.baseUrl = baseUrl;
+  final token = await storage.getDeviceToken();
+  if (token != null) api.deviceToken = token;
+  final clinicToken = await storage.getCloudClinicToken();
+  if (clinicToken != null) api.clinicToken = clinicToken;
+
+  final cloud = CloudSyncService();
+  final internet = InternetSyncService(db, api);
+  final deviceService = DeviceService();
+  final bluetooth = BluetoothSyncService.production(
+    deviceTokenLoader: storage.getDeviceToken,
+    deviceTokenSaver: storage.setDeviceToken,
+    deviceIdLoader: deviceService.getDeviceId,
+    sinceLoader: () => db.getSyncMeta('last_sync_cursor'),
+    onExport: (exported) async {
+      await internet.applyExportedDelta(exported);
+    },
+    buildPushPayload: internet.buildPushPayload,
+    onPushAcked: (payload) async {
+      await internet.markPayloadAsSynced(payload);
+    },
+    clientVersion: '1.0.0',
+  );
+  final connectivity = ConnectivitySyncService(
+    internet: internet,
+    bluetooth: bluetooth,
+    storage: storage,
+    api: api,
+    cloud: cloud,
+  );
+
+  // Start the 30s BT auto-fallback loop here, in the sync isolate. This
+  // is the whole point of the refactor: the Timer now lives in a
+  // background-service-anchored isolate, so it keeps ticking when the
+  // app is backgrounded.
+  connectivity.startBluetoothAutoLoop();
+
+  // Listen for manual "Sync now" from the UI isolate.
+  service.on('force_sync').listen((_) async {
+    try {
+      await connectivity.forceTick();
+      service.invoke('sync_finished', {
+        'ok': true,
+        'lastSyncAt': await storage.getBtLastSyncAt(),
+      });
+    } catch (e) {
+      service.invoke('sync_finished', {
+        'ok': false,
+        'error': e.toString(),
+      });
+    }
+  });
+
+  // Listen for shutdown from the UI isolate.
+  service.on('stopService').listen((_) {
+    connectivity.stopBluetoothAutoLoop();
+    connectivity.dispose();
+    service.stopSelf();
+  });
 }
 
 class BackgroundSyncService {
