@@ -1,6 +1,19 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clinic_mobile_app/services/background_sync_service.dart';
 
+class _FailingConfigureFake implements BgServiceClient {
+  @override
+  Future<bool> isRunning() async => false;
+  @override
+  Future<bool> configure() async => false;
+  @override
+  Future<bool> startService() async => true;
+  @override
+  void invoke(String event, [Map<String, dynamic>? data]) {}
+  @override
+  Stream<Map<String, dynamic>?> on(String event) => const Stream.empty();
+}
+
 class _FakeBgServiceClient implements BgServiceClient {
   bool running = false;
   int startServiceCalls = 0;
@@ -62,5 +75,11 @@ void main() {
     final svc = BackgroundSyncService.forTest(client: fake);
     svc.forceSync();
     expect(fake.invokes, ['force_sync']);
+  });
+
+  test('start() throws StateError when configure() returns false', () async {
+    final fake = _FailingConfigureFake();
+    final svc = BackgroundSyncService.forTest(client: fake);
+    expect(svc.start(), throwsA(isA<StateError>()));
   });
 }

@@ -66,7 +66,12 @@ class BackgroundSyncService {
   Future<void> start() async {
     if (await _client.isRunning()) return;
     if (!_configured) {
-      await _client.configure();
+      final ok = await _client.configure();
+      if (!ok) {
+        throw StateError(
+            'BackgroundSyncService: FlutterBackgroundService.configure() returned false. '
+            'Check AndroidManifest <service> declaration and notification channel.');
+      }
       _configured = true;
     }
     await _client.startService();
