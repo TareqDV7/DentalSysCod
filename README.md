@@ -27,7 +27,7 @@ A self-contained dental clinic management platform with a Flask web portal and a
 
 **Backend** — `dental_clinic.py`: single Python file, auto-installs its own dependencies, initialises a SQLite database, and serves both a full web portal and a REST API on `http://0.0.0.0:5000`. The clinic's staff always use their **local** server (works offline); set `CLINIC_CLOUD_MODE=1` (Docker deployment) to run the same file as the shared **cloud node** instead — see [`DEPLOY_CLOUD.md`](DEPLOY_CLOUD.md).
 
-**Mobile** — `clinic_mobile_app/`: Flutter app that keeps its own local SQLite database, writes locally first, then pushes/pulls from the server. Works fully offline; syncs when connectivity returns. Each sync picks the best available link in order: **LAN local server → cloud node → Bluetooth**. The app reaches the cloud node directly via a clinic token (paired from Settings → Cloud Account), so a phone stays in sync with the clinic's data even when it's off the clinic Wi-Fi. The patient detail screen carries the canonical follow-up sheet (date · procedure · tooth · price · discount · lab · payment · running balance — the same per-patient ledger as the desktop, recomputed locally so the doctor sees the new balance immediately after logging an entry, and reconciled against the server's recompute on the next sync), plus a Treatment Plans tab for multi-visit work and a Holidays card in Settings for clinic-wide non-working days. The mobile app intentionally skips the desktop's legacy `treatments` table — follow-ups supersede it.
+**Mobile** — `clinic_mobile_app/`: Flutter app that keeps its own local SQLite database, writes locally first, then pushes/pulls from the server. Works fully offline; syncs when connectivity returns. Each sync picks the best available link in order: **LAN local server → cloud node → Bluetooth**. The app reaches the cloud node directly via a clinic token (paired from Settings → Cloud Account), so a phone stays in sync with the clinic's data even when it's off the clinic Wi-Fi. The patient detail screen carries the canonical follow-up sheet (date · procedure · tooth · price · discount · lab · payment · running balance — the same per-patient ledger as the desktop, recomputed locally so the doctor sees the new balance immediately after logging an entry, and reconciled against the server's recompute on the next sync), plus a Treatment Plans tab for multi-visit work, a Holidays card in Settings for clinic-wide non-working days, and a Procedure-catalog admin sheet (Settings → Procedure catalog) that mirrors the desktop's catalog management — the same list the follow-up sheet picks from to prefill price/lab. The mobile app intentionally skips the desktop's legacy `treatments` table — follow-ups supersede it.
 
 ---
 
@@ -264,6 +264,7 @@ clinic/
         │   ├── patients_screen.dart
         │   ├── patient_detail_screen.dart
         │   ├── appointments_screen.dart
+        │   ├── catalog_screen.dart     # Procedure catalog admin (CRUD + active/inactive toggle) — opens from Settings → Procedure catalog
         │   ├── financial_screen.dart
         │   ├── reports_screen.dart
         │   └── settings_screen.dart    # Server URL, sync, dark mode, language
@@ -280,6 +281,7 @@ clinic/
         │   ├── patient_service.dart
         │   ├── appointment_service.dart
         │   ├── billing_service.dart
+        │   ├── catalog_service.dart         # Treatment-procedure catalog: list / add / update / soft-delete, syncs to /api/treatment-procedures
         │   └── report_service.dart
         ├── widgets/
         │   ├── stat_card.dart      # Dashboard metric tile
@@ -466,6 +468,8 @@ python3 -m pytest tests/ -v
 **157 tests across 20 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
 The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `followup_balance_test.dart`, and the default widget test (27 tests total). Run with `cd clinic_mobile_app && flutter test`.
+
+Mobile-desktop parity invariants (worth re-checking when touching either side): (1) the Receivables tab in the Financial screen and the desktop's `/api/reports/receivables` both source from the follow-up ledger — `max(Σ price − Σ discount − Σ payment, 0)` per patient — *not* from the `billing_records` table, which under-counts in clinics that record day-to-day collections inside follow-up rows. (2) The mobile follow-up entry sheet exposes the same catalog-prefill behaviour as the desktop: picking a procedure from the dropdown fills the procedure name + the default price/lab expense (only into empty fields, so a doctor's typed numbers aren't clobbered) and stores `procedure_id` alongside the free-text name. (3) The mobile appointments day-list tile is tappable — opens a status picker (scheduled / completed / postponed / pending) plus a delete action, wired to `AppointmentService.updateStatus` and `deleteAppointment`. (4) Currency on every price/total in the mobile UI is `₪` (NIS); accidental USD `$` glyphs are a regression.
 
 Financial logic can also be exercised end-to-end against a running server with the ad-hoc runner under `tools/`:
 

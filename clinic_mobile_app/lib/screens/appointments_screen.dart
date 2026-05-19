@@ -214,8 +214,10 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 4),
                           itemCount: _dayAppointments.length,
-                          itemBuilder: (_, i) =>
-                              _AppointmentTile(appointment: _dayAppointments[i]),
+                          itemBuilder: (_, i) => _AppointmentTile(
+                            appointment: _dayAppointments[i],
+                            onChanged: () => _loadDay(_selectedDay),
+                          ),
                         ),
                       ),
           ),
@@ -237,7 +239,15 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
 
 class _AppointmentTile extends StatelessWidget {
   final Appointment appointment;
-  const _AppointmentTile({required this.appointment});
+  final VoidCallback? onChanged;
+  const _AppointmentTile({required this.appointment, this.onChanged});
+
+  static const _statuses = <String>[
+    'scheduled',
+    'completed',
+    'postponed',
+    'pending',
+  ];
 
   String _safePatientName() {
     final raw = appointment.patientName?.trim();
@@ -251,6 +261,88 @@ class _AppointmentTile extends StatelessWidget {
     return raw;
   }
 
+  Future<void> _showActions(BuildContext context) async {
+    final id = appointment.id;
+    if (id == null) return;
+    final app = context.read<AppState>();
+    final isArabic = app.isArabic;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(
+                  isArabic ? 'حالة الموعد' : 'Appointment status',
+                  style: Theme.of(sheetCtx).textTheme.titleMedium,
+                ),
+              ),
+            ),
+            for (final s in _statuses)
+              ListTile(
+                leading: Icon(
+                  s == appointment.status
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  color: s == appointment.status
+                      ? Theme.of(sheetCtx).colorScheme.primary
+                      : null,
+                ),
+                title: Text(_statusLabel(s, isArabic)),
+                onTap: () => Navigator.pop(sheetCtx, s),
+              ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Color(0xFFD9434E)),
+              title: Text(isArabic ? 'حذف الموعد' : 'Delete appointment',
+                  style: const TextStyle(color: Color(0xFFD9434E))),
+              onTap: () => Navigator.pop(sheetCtx, '__delete__'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    if (!context.mounted) return;
+
+    if (picked == '__delete__') {
+      await app.appointments.deleteAppointment(id);
+      onChanged?.call();
+      return;
+    }
+    if (picked != appointment.status) {
+      try {
+        await app.appointments.updateStatus(id, picked);
+        onChanged?.call();
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(isArabic
+                  ? 'تعذّر تحديث الحالة: $e'
+                  : 'Could not update status: $e')));
+        }
+      }
+    }
+  }
+
+  static String _statusLabel(String s, bool isArabic) {
+    if (isArabic) {
+      switch (s) {
+        case 'scheduled': return 'مجدول';
+        case 'completed': return 'مكتمل';
+        case 'postponed': return 'مؤجل';
+        case 'pending': return 'معلق';
+        default: return s;
+      }
+    }
+    return s[0].toUpperCase() + s.substring(1);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -258,54 +350,64 @@ class _AppointmentTile extends StatelessWidget {
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: scheme.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: scheme.outlineVariant),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            decoration: BoxDecoration(
-              color: scheme.primary.withAlpha(15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Column(
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _showActions(context),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
               children: [
-                Text(DateFormat('h:mm').format(dt),
-                    style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        color: scheme.primary)),
-                Text(DateFormat('a').format(dt),
-                    style: TextStyle(fontSize: 10, color: scheme.primary)),
+                Container(
+                  width: 48,
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withAlpha(15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(DateFormat('h:mm').format(dt),
+                          style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                              color: scheme.primary)),
+                      Text(DateFormat('a').format(dt),
+                          style:
+                              TextStyle(fontSize: 10, color: scheme.primary)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_safePatientName(),
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      if (appointment.treatmentType != null)
+                        Text(appointment.treatmentType!,
+                            style: TextStyle(
+                                color: scheme.onSurfaceVariant, fontSize: 13)),
+                      if (appointment.durationMinutes != null)
+                        Text('${appointment.durationMinutes} min',
+                            style: TextStyle(
+                                color: scheme.onSurfaceVariant, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                StatusBadge(appointment.status),
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _safePatientName(),
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                if (appointment.treatmentType != null)
-                  Text(appointment.treatmentType!,
-                      style: TextStyle(
-                          color: scheme.onSurfaceVariant, fontSize: 13)),
-                if (appointment.durationMinutes != null)
-                  Text('${appointment.durationMinutes} min',
-                      style: TextStyle(
-                          color: scheme.onSurfaceVariant, fontSize: 12)),
-              ],
-            ),
-          ),
-          StatusBadge(appointment.status),
-        ],
+        ),
       ),
     );
   }
@@ -623,7 +725,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                               color: scheme
                                                   .onSurfaceVariant)),
                                       Text(
-                                        '\$${_selectedTreatment!.defaultPrice.toStringAsFixed(2)}',
+                                        '₪${_selectedTreatment!.defaultPrice.toStringAsFixed(2)}',
                                         style: TextStyle(
                                             fontSize: 14,
                                             fontWeight: FontWeight.w700,

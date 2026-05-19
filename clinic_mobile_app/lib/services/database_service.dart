@@ -647,9 +647,28 @@ class DatabaseService {
     return rows.map(TreatmentProcedure.fromDb).toList();
   }
 
+  /// All procedures including soft-deleted (is_active = 0). Used by the
+  /// catalog management screen so the doctor can re-activate a procedure
+  /// they previously deactivated.
+  Future<List<TreatmentProcedure>> getAllProcedures() async {
+    final db = await database;
+    final rows =
+        await db.query('treatment_procedures', orderBy: 'name ASC');
+    return rows.map(TreatmentProcedure.fromDb).toList();
+  }
+
   Future<int> upsertProcedure(TreatmentProcedure p) async {
     final db = await database;
     final data = p.toDb();
+    if (p.id != null) {
+      final exists = await db.query('treatment_procedures',
+          where: 'id = ?', whereArgs: [p.id], limit: 1);
+      if (exists.isNotEmpty) {
+        await db.update('treatment_procedures', data,
+            where: 'id = ?', whereArgs: [p.id]);
+        return p.id!;
+      }
+    }
     return db.insert('treatment_procedures', data,
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -670,21 +689,31 @@ class DatabaseService {
 
   // ── Receivables ───────────────────────────────────────────────────────────
 
+  /// Per-patient outstanding balances. **Canonical source: the follow-up
+  /// ledger**, mirroring the desktop server's `/api/reports/receivables`
+  /// (dental_clinic.py:9421). The previous version queried `billing_records`,
+  /// which is a parallel-but-not-authoritative table — it under-counted
+  /// because most clinics record their day-to-day payments inside follow-up
+  /// rows, not as separate billing records. Outstanding per patient is
+  /// `max(Σ price − Σ discount − Σ payment, 0)` so a patient with credit
+  /// (overpayment) shows nothing here, not a negative entry.
   Future<List<Map<String, dynamic>>> getReceivables() async {
     final db = await database;
     final rows = await db.rawQuery('''
       SELECT
         p.id,
         p.first_name || ' ' || p.last_name AS patient_name,
-        COALESCE(SUM(b.subtotal - b.discount), 0) AS total,
-        COALESCE(SUM(b.paid_amount), 0) AS paid,
-        COALESCE(SUM(b.subtotal - b.discount - b.paid_amount), 0) AS balance,
-        MAX(b.payment_date) AS last_date
+        COALESCE(SUM(COALESCE(f.price, 0) - COALESCE(f.discount, 0)), 0) AS total,
+        COALESCE(SUM(COALESCE(f.payment, 0)), 0) AS paid,
+        COALESCE(SUM(
+          COALESCE(f.price, 0) - COALESCE(f.discount, 0) - COALESCE(f.payment, 0)
+        ), 0) AS balance,
+        MAX(f.followup_date) AS last_date
       FROM patients p
-      LEFT JOIN billing_records b ON b.patient_id = p.id
-      GROUP BY p.id
+      LEFT JOIN followups f ON f.patient_id = p.id
+      GROUP BY p.id, p.first_name, p.last_name
       HAVING balance > 0
-      ORDER BY balance DESC
+      ORDER BY balance DESC, patient_name ASC
     ''');
     return rows.toList();
   }

@@ -7,6 +7,7 @@ import '../services/database_service.dart';
 import '../services/patient_service.dart';
 import '../services/appointment_service.dart';
 import '../services/billing_service.dart';
+import '../services/catalog_service.dart';
 import '../services/report_service.dart';
 import '../services/internet_sync_service.dart';
 import '../services/bluetooth_permissions.dart';
@@ -24,6 +25,7 @@ class AppState extends ChangeNotifier {
   late final PatientService patients;
   late final AppointmentService appointments;
   late final BillingService billing;
+  late final CatalogService catalog;
   late final ReportService reports;
   late final ConnectivitySyncService _connectivity;
   late final InternetSyncService _internet;
@@ -44,6 +46,7 @@ class AppState extends ChangeNotifier {
     patients = PatientService(db, api);
     appointments = AppointmentService(db, api);
     billing = BillingService(db, api);
+    catalog = CatalogService(db, api);
     reports = ReportService(db, api);
     _internet = InternetSyncService(db, api);
     final deviceService = DeviceService();

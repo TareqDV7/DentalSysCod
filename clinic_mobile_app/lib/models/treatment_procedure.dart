@@ -58,6 +58,39 @@ class TreatmentProcedure {
         'updated_at': updatedAt ?? DateTime.now().toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
       };
+
+  /// Server payload. Uses the desktop's column names — `default_lab_expense`
+  /// + `active` — not the local-DB names (`lab_expense` + `is_active`). The
+  /// `fromJson` accepts both for backward compat.
+  Map<String, dynamic> toJson() => {
+        if (id != null) 'id': id,
+        'name': name,
+        'default_price': defaultPrice,
+        'default_lab_expense': labExpense,
+        'requires_lab': requiresLab,
+        'active': isActive,
+      };
+
+  TreatmentProcedure copyWith({
+    int? id,
+    String? name,
+    double? defaultPrice,
+    double? labExpense,
+    bool? requiresLab,
+    bool? isActive,
+    String? updatedAt,
+    bool? isSynced,
+  }) =>
+      TreatmentProcedure(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        defaultPrice: defaultPrice ?? this.defaultPrice,
+        labExpense: labExpense ?? this.labExpense,
+        requiresLab: requiresLab ?? this.requiresLab,
+        isActive: isActive ?? this.isActive,
+        updatedAt: updatedAt ?? this.updatedAt,
+        isSynced: isSynced ?? this.isSynced,
+      );
 }
 
 double _d(dynamic v) {

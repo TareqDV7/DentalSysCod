@@ -8,6 +8,7 @@ import '../utils/app_strings.dart';
 import '../models/patient.dart';
 import '../models/followup.dart';
 import '../models/treatment_plan.dart';
+import '../models/treatment_procedure.dart';
 import '../models/appointment.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/status_badge.dart';
@@ -967,6 +968,8 @@ class _FollowupSheetState extends State<_FollowupSheet> {
   final _notes = TextEditingController();
   bool _saving = false;
   late String _date;
+  List<TreatmentProcedure> _catalog = [];
+  int? _selectedProcedureId;
 
   bool get _isEdit => widget.existing != null;
 
@@ -979,6 +982,7 @@ class _FollowupSheetState extends State<_FollowupSheet> {
           ? DateFormatHelper.formatDateForApi(DateTime.now())
           : e.followupDate;
       _procedure.text = e.treatmentProcedure;
+      _selectedProcedureId = e.procedureId;
       _tooth.text = e.toothNo ?? '';
       _price.text = e.price == 0 ? '' : e.price.toString();
       _discount.text = e.discount == 0 ? '' : e.discount.toString();
@@ -988,6 +992,33 @@ class _FollowupSheetState extends State<_FollowupSheet> {
     } else {
       _date = DateFormatHelper.formatDateForApi(DateTime.now());
     }
+    _loadCatalog();
+  }
+
+  Future<void> _loadCatalog() async {
+    final db = context.read<AppState>().db;
+    final all = await db.getProcedures();
+    if (!mounted) return;
+    setState(() {
+      _catalog = all.where((p) => p.isActive).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+    });
+  }
+
+  /// Apply a catalog pick to the form: always fill the procedure name, only
+  /// autofill price/lab when those fields are still empty so we don't clobber
+  /// numbers the doctor already typed.
+  void _applyProcedurePick(TreatmentProcedure p) {
+    setState(() {
+      _procedure.text = p.name;
+      _selectedProcedureId = p.id;
+      if (_price.text.trim().isEmpty && p.defaultPrice > 0) {
+        _price.text = p.defaultPrice.toStringAsFixed(2);
+      }
+      if (_lab.text.trim().isEmpty && p.requiresLab && p.labExpense > 0) {
+        _lab.text = p.labExpense.toStringAsFixed(2);
+      }
+    });
   }
 
   @override
@@ -1020,7 +1051,7 @@ class _FollowupSheetState extends State<_FollowupSheet> {
       patientId: widget.patientId,
       followupDate: _date,
       treatmentProcedure: _procedure.text.trim(),
-      procedureId: existing?.procedureId,
+      procedureId: _selectedProcedureId ?? existing?.procedureId,
       toothNo: _tooth.text.trim().isEmpty ? null : _tooth.text.trim(),
       price: double.tryParse(_price.text) ?? 0,
       discount: double.tryParse(_discount.text) ?? 0,
@@ -1086,10 +1117,44 @@ class _FollowupSheetState extends State<_FollowupSheet> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  if (_catalog.isNotEmpty)
+                    DropdownButtonFormField<TreatmentProcedure>(
+                      initialValue: _selectedProcedureId == null
+                          ? null
+                          : _catalog
+                              .where((p) => p.id == _selectedProcedureId)
+                              .firstOrNull,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: isArabic
+                            ? 'اختر من الإجراءات'
+                            : 'Pick from catalog',
+                        hintText: isArabic ? 'اختياري' : 'optional',
+                      ),
+                      items: _catalog
+                          .map((p) => DropdownMenuItem(
+                                value: p,
+                                child: Text(p.name,
+                                    overflow: TextOverflow.ellipsis),
+                              ))
+                          .toList(),
+                      onChanged: (p) {
+                        if (p != null) _applyProcedurePick(p);
+                      },
+                    ),
+                  if (_catalog.isNotEmpty) const SizedBox(height: 12),
                   TextField(
                     controller: _procedure,
                     decoration:
                         InputDecoration(labelText: t('procedure_treatment')),
+                    onChanged: (_) {
+                      // User edited the procedure name freeform — unlink it
+                      // from any prior catalog pick so the saved row reflects
+                      // what's actually typed (no stale procedure_id).
+                      if (_selectedProcedureId != null) {
+                        setState(() => _selectedProcedureId = null);
+                      }
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextField(

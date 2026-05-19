@@ -9,6 +9,7 @@ import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/local_storage_service.dart';
+import 'catalog_screen.dart';
 import 'pairing_screen.dart';
 import '../utils/app_strings.dart';
 import '../utils/date_format_helper.dart';
@@ -422,6 +423,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
               ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // ── Procedure catalog ───────────────────────────────────────────
+          SectionHeader(
+              title: state.locale == 'ar'
+                  ? 'كتالوج الإجراءات'
+                  : 'Procedure catalog'),
+          ClinicCard(
+            padding: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.medical_services_outlined),
+              title: Text(state.locale == 'ar'
+                  ? 'إدارة الإجراءات والأسعار'
+                  : 'Manage procedures & prices'),
+              subtitle: Text(
+                  state.locale == 'ar'
+                      ? 'يستخدم في الإقتراحات داخل زيارة المريض'
+                      : 'Used to prefill price/lab in follow-up entries',
+                  style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurfaceVariant,
+                      fontSize: 12)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => const CatalogScreen())),
             ),
           ),
 
