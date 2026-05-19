@@ -171,7 +171,7 @@ class ConnectivitySyncService {
     _btAutoTimer = null;
   }
 
-  Future<void> _btAutoTick() async {
+  Future<void> _btAutoTick({bool force = false}) async {
     if (_status == SyncStatus.syncing) return;
     final mac = await _storage.getBtBondedMac();
     if (mac == null || mac.isEmpty) return;
@@ -184,13 +184,20 @@ class ConnectivitySyncService {
       await _storage.setBtLastError('Bluetooth permission revoked');
       return;
     }
-    // Skip if LAN or cloud just synced — fallback-only mode.
-    final lanOk = await _isLanReachable();
-    if (lanOk) return;
-    final cloudOk = await _isCloudReachable();
-    if (cloudOk) return;
+    if (!force) {
+      // Skip if LAN or cloud just synced — fallback-only mode for the auto-loop.
+      final lanOk = await _isLanReachable();
+      if (lanOk) return;
+      final cloudOk = await _isCloudReachable();
+      if (cloudOk) return;
+    }
     await syncViaBluetooth(mac);
   }
+
+  /// Public entry point that runs one BT sync attempt right now, bypassing
+  /// the LAN/cloud reachability gate. Used by `BackgroundSyncService.forceSync`
+  /// when the user taps "Sync now via Bluetooth".
+  Future<void> forceTick() => _btAutoTick(force: true);
 
   Future<bool> _isLanReachable() async {
     final url = await _storage.getLocalUrl();
