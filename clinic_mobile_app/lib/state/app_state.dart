@@ -12,6 +12,7 @@ import '../services/report_service.dart';
 import '../services/internet_sync_service.dart';
 import '../services/bluetooth_permissions.dart';
 import '../services/bluetooth_sync_service.dart';
+import '../services/background_sync_service.dart';
 import '../services/connectivity_sync_service.dart';
 import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
@@ -30,6 +31,7 @@ class AppState extends ChangeNotifier {
   late final ConnectivitySyncService _connectivity;
   late final InternetSyncService _internet;
   late final BluetoothSyncService _bluetooth;
+  late final BackgroundSyncService _bgSync;
 
   ConnectivitySyncService get sync => _connectivity;
 
@@ -78,6 +80,7 @@ class AppState extends ChangeNotifier {
       api: api,
       cloud: cloud,
     );
+    _bgSync = BackgroundSyncService.production();
   }
 
   String get clinicName => _clinicName;
@@ -120,7 +123,7 @@ class AppState extends ChangeNotifier {
         _btLastError = 'Bluetooth permission denied';
         await _storage.setBtEnabled(false);
         await _storage.setBtLastError(_btLastError!);
-        _connectivity.stopBluetoothAutoLoop();
+        await _bgSync.stop();
         notifyListeners();
         return;
       }
@@ -130,9 +133,9 @@ class AppState extends ChangeNotifier {
     _btEnabled = enabled;
     await _storage.setBtEnabled(enabled);
     if (enabled && _btBondedMac != null && _btBondedMac!.isNotEmpty) {
-      _connectivity.startBluetoothAutoLoop();
+      await _bgSync.start();
     } else {
-      _connectivity.stopBluetoothAutoLoop();
+      await _bgSync.stop();
     }
     notifyListeners();
   }
@@ -141,12 +144,12 @@ class AppState extends ChangeNotifier {
     await _storage.setBtBondedPeer(mac: mac, label: label);
     _btBondedMac = mac;
     _btBondedLabel = label;
-    if (_btEnabled) _connectivity.startBluetoothAutoLoop();
+    if (_btEnabled) await _bgSync.start();
     notifyListeners();
   }
 
   Future<void> unbindBtPeer() async {
-    _connectivity.stopBluetoothAutoLoop();
+    await _bgSync.stop();
     await _storage.clearBtBondedPeer();
     _btBondedMac = null;
     _btBondedLabel = null;
@@ -155,6 +158,8 @@ class AppState extends ChangeNotifier {
 
   /// Force one Bluetooth sync cycle right now, bypassing the LAN/cloud
   /// reachability gate. Use for the explicit "Sync now via Bluetooth" button.
+  /// Routes through the background sync isolate so we don't race with the
+  /// 30s auto-loop running there.
   Future<bool> syncViaBluetoothNow() async {
     final mac = _btBondedMac;
     if (mac == null || mac.isEmpty) {
@@ -170,8 +175,22 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-    final ok = await _connectivity.syncViaBluetooth(mac);
-    await _loadBtState();
+    // Fire force_sync into the sync isolate and wait for the result.
+    final completer = Completer<bool>();
+    late StreamSubscription sub;
+    sub = _bgSync.onSyncFinished.listen((payload) {
+      sub.cancel();
+      completer.complete(payload?['ok'] == true);
+    });
+    _bgSync.forceSync();
+    final ok = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        sub.cancel();
+        return false;
+      },
+    );
+    await _loadBtState(); // pull updated lastSyncAt / lastError from storage
     return ok;
   }
 
@@ -195,7 +214,7 @@ class AppState extends ChangeNotifier {
     // Load BT state and start the auto-fallback loop if a peer is bonded + enabled.
     await _loadBtState();
     if (_btEnabled && _btBondedMac != null && _btBondedMac!.isNotEmpty) {
-      _connectivity.startBluetoothAutoLoop();
+      await _bgSync.start();
     }
   }
 
