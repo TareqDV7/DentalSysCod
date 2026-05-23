@@ -125,14 +125,28 @@ class BluetoothSyncService {
   bool get _canAutoPair => _saveToken != null && _loadDeviceId != null;
 
   /// Open a fresh stream, run `op:bt_pair`, store the returned token.
-  /// Returns the new token on success, or null on failure.
-  Future<String?> _autoPair(String bondedMac) async {
-    if (!_canAutoPair) return null;
+  /// Returns an outcome carrying either the token (on success) or a
+  /// human-readable error message (on failure). The previous version
+  /// collapsed every failure mode to a bare null, which is unfixable from
+  /// the field — the Settings UI had no way to tell a timeout from a
+  /// permission denial from a server-side rejection.
+  Future<_AutoPairOutcome> _autoPair(String bondedMac) async {
+    if (!_canAutoPair) {
+      return _AutoPairOutcome.failure('auto-pair not wired on this build');
+    }
     final BtStream stream;
     try {
       stream = await _open(bondedMac);
-    } catch (_) {
-      return null;
+    } on TimeoutException catch (e) {
+      final detail = e.message ?? '';
+      return _AutoPairOutcome.failure(
+          'BT connect timed out (10s) — is the clinic PC listening? $detail'
+              .trim());
+    } on Exception catch (e) {
+      return _AutoPairOutcome.failure('BT connect failed: $e');
+    } catch (e) {
+      // Some platform channels still throw bare String / Error objects.
+      return _AutoPairOutcome.failure('BT connect failed: $e');
     }
     final deviceId = await _loadDeviceId!();
     final result = await BtSessionClient(stream).runPairing(
@@ -140,9 +154,12 @@ class BluetoothSyncService {
       deviceName: deviceId,
       clientVersion: _clientVersion,
     );
-    if (!result.success || result.deviceToken == null) return null;
+    if (!result.success || result.deviceToken == null) {
+      return _AutoPairOutcome.failure(
+          result.errorMessage ?? 'pair handshake rejected by server');
+    }
     await _saveToken!(result.deviceToken!);
-    return result.deviceToken;
+    return _AutoPairOutcome.success(result.deviceToken!);
   }
 
   Future<BtSessionResult> _runSessionOnce(
@@ -172,23 +189,35 @@ class BluetoothSyncService {
       if (!_canAutoPair) {
         return const BtSessionResult.failure('no device token');
       }
-      token = await _autoPair(bondedMac);
-      if (token == null) {
-        return const BtSessionResult.failure('bt pairing failed');
+      final outcome = await _autoPair(bondedMac);
+      if (outcome.token == null) {
+        return BtSessionResult.failure(
+            outcome.errorMessage ?? 'bt pairing failed');
       }
+      token = outcome.token;
     }
 
-    final result = await _runSessionOnce(bondedMac, token);
+    final result = await _runSessionOnce(bondedMac, token!);
 
     // Self-heal: stored token no longer recognised by the server (DB reset,
     // admin revoked the device). Drop it, re-pair, retry once.
     if (result.unauthorized && _canAutoPair) {
       await _saveToken!('');
       final fresh = await _autoPair(bondedMac);
-      if (fresh == null) return result;
-      return _runSessionOnce(bondedMac, fresh);
+      if (fresh.token == null) return result;
+      return _runSessionOnce(bondedMac, fresh.token!);
     }
 
     return result;
   }
+}
+
+/// Internal result of `_autoPair`. Either `token` is non-null (success) or
+/// `errorMessage` is non-null (failure) — never both, never neither.
+class _AutoPairOutcome {
+  final String? token;
+  final String? errorMessage;
+  const _AutoPairOutcome._(this.token, this.errorMessage);
+  const _AutoPairOutcome.success(String token) : this._(token, null);
+  const _AutoPairOutcome.failure(String message) : this._(null, message);
 }

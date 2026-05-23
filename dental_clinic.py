@@ -12,6 +12,7 @@ import platform
 import sqlite3
 import base64
 import binascii
+import collections
 import hashlib
 import hmac
 import threading
@@ -3023,6 +3024,46 @@ HTML_TEMPLATE = '''
             font: inherit;
             width: 100%;
         }
+        .bt-listener-line.bt-listener-on { color: #0d6f64; }
+        .bt-listener-line.bt-listener-off { color: #9c2e36; }
+        .bt-diagnostics > summary {
+            cursor: pointer;
+            color: var(--muted);
+            font-size: 0.85rem;
+            padding: 6px 0;
+            user-select: none;
+        }
+        .bt-diagnostics[open] > summary { color: var(--text); }
+        .bt-diagnostics-body { padding-top: 8px; }
+        .bt-diagnostics-tablewrap { overflow-x: auto; }
+        .bt-diagnostics-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+        .bt-diagnostics-table th,
+        .bt-diagnostics-table td {
+            padding: 6px 8px;
+            border-bottom: 1px solid var(--line);
+            text-align: start;
+            vertical-align: top;
+        }
+        .bt-diagnostics-table th {
+            font-weight: 600;
+            color: var(--muted);
+            background: var(--bg);
+        }
+        .bt-diagnostics-table td.bt-detail {
+            max-width: 240px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--muted);
+        }
+        .bt-outcome-ok { color: #0d6f64; font-weight: 600; }
+        .bt-outcome-error,
+        .bt-outcome-unauthorized { color: #9c2e36; font-weight: 600; }
+        .bt-outcome-rejected { color: #6b7280; font-weight: 600; }
         .screen-shell {
             display: grid;
             gap: 16px;
@@ -3977,6 +4018,65 @@ HTML_TEMPLATE = '''
                             <span data-en="Enable Bluetooth Sync" data-ar="تفعيل المزامنة عبر بلوتوث">Enable Bluetooth Sync</span>
                         </label>
                     </div>
+
+                    <!-- Diagnostic section: live listener indicator + paired phones + connection log.
+                         Populated by _renderBtDiagnostics() after /api/bt/status returns. -->
+                    <div id="bt-listener-line" class="bt-listener-line" style="font-size:0.85em;color:var(--muted);margin:6px 0 10px;">
+                        <span data-en="Listener: —" data-ar="المستمع: —">Listener: —</span>
+                    </div>
+
+                    <details class="bt-diagnostics" id="bt-paired-details" style="margin-top:8px;">
+                        <summary>
+                            <span id="bt-paired-summary" data-en="Paired phones (0)" data-ar="الهواتف المقترنة (0)">Paired phones (0)</span>
+                        </summary>
+                        <div class="bt-diagnostics-body">
+                            <div id="bt-paired-empty" style="display:none;color:var(--muted);font-size:0.85em;padding:6px 0;"
+                                 data-en="No phones paired yet. After the first successful sync, devices will appear here."
+                                 data-ar="لا توجد هواتف مقترنة بعد. ستظهر الأجهزة هنا بعد أول مزامنة ناجحة.">
+                                No phones paired yet. After the first successful sync, devices will appear here.
+                            </div>
+                            <div class="bt-diagnostics-tablewrap">
+                                <table class="bt-diagnostics-table" id="bt-paired-table" style="display:none;">
+                                    <thead>
+                                        <tr>
+                                            <th data-en="Name" data-ar="الاسم">Name</th>
+                                            <th data-en="First paired" data-ar="أول اقتران">First paired</th>
+                                            <th data-en="Last seen" data-ar="آخر ظهور">Last seen</th>
+                                            <th data-en="Active" data-ar="نشط">Active</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="bt-paired-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="bt-diagnostics" id="bt-attempts-details" style="margin-top:6px;">
+                        <summary>
+                            <span data-en="Recent connection log" data-ar="سجل المحاولات الأخيرة">Recent connection log</span>
+                        </summary>
+                        <div class="bt-diagnostics-body">
+                            <div id="bt-attempts-empty" style="display:none;color:var(--muted);font-size:0.85em;padding:6px 0;"
+                                 data-en="No connection attempts yet. When a phone tries to sync, the result will appear here."
+                                 data-ar="لا توجد محاولات اتصال بعد. عند محاولة هاتف للمزامنة، ستظهر النتيجة هنا.">
+                                No connection attempts yet. When a phone tries to sync, the result will appear here.
+                            </div>
+                            <div class="bt-diagnostics-tablewrap">
+                                <table class="bt-diagnostics-table" id="bt-attempts-table" style="display:none;">
+                                    <thead>
+                                        <tr>
+                                            <th data-en="Time" data-ar="الوقت">Time</th>
+                                            <th data-en="Device" data-ar="الجهاز">Device</th>
+                                            <th data-en="Op" data-ar="العملية">Op</th>
+                                            <th data-en="Outcome" data-ar="النتيجة">Outcome</th>
+                                            <th data-en="Detail" data-ar="التفاصيل">Detail</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="bt-attempts-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </details>
 
                     <details class="bt-advanced">
                         <summary data-en="Advanced — pick COM port manually" data-ar="إعدادات متقدّمة — اختيار منفذ COM يدويًا">Advanced — pick COM port manually</summary>
@@ -7052,6 +7152,107 @@ HTML_TEMPLATE = '''
           txt.textContent = line;
         }
 
+        function _renderBtDiagnostics(s) {
+          // Populate the three diagnostic sections (listener line, paired phones,
+          // recent attempts) from the same /api/bt/status payload. Pure DOM
+          // work — no fetch — so it stays cheap and reusable.
+          const ar = _ar();
+
+          // 1. Listener indicator line.
+          const lineEl = document.getElementById('bt-listener-line');
+          if (lineEl) {
+            lineEl.classList.remove('bt-listener-on', 'bt-listener-off');
+            const span = lineEl.querySelector('span');
+            if (s.server_listening) {
+              lineEl.classList.add('bt-listener-on');
+              const port = s.com_port || '?';
+              if (span) {
+                span.textContent = (ar ? 'يستمع على ' : 'Listening on ') + port + ' ✓';
+              }
+            } else {
+              lineEl.classList.add('bt-listener-off');
+              if (span) {
+                span.textContent = ar ? 'لا يستمع (المنفذ غير مفتوح) ✗'
+                                       : 'No listener (port not open) ✗';
+              }
+            }
+          }
+
+          // 2. Paired phones table.
+          const paired = Array.isArray(s.paired_devices) ? s.paired_devices : [];
+          const summaryEl = document.getElementById('bt-paired-summary');
+          if (summaryEl) {
+            summaryEl.textContent = (ar ? 'الهواتف المقترنة (' : 'Paired phones (') + paired.length + ')';
+          }
+          const pairedTable = document.getElementById('bt-paired-table');
+          const pairedBody  = document.getElementById('bt-paired-body');
+          const pairedEmpty = document.getElementById('bt-paired-empty');
+          if (pairedBody) {
+            pairedBody.innerHTML = '';
+            if (paired.length === 0) {
+              if (pairedTable) pairedTable.style.display = 'none';
+              if (pairedEmpty) pairedEmpty.style.display = '';
+            } else {
+              if (pairedTable) pairedTable.style.display = '';
+              if (pairedEmpty) pairedEmpty.style.display = 'none';
+              for (const d of paired) {
+                const tr = document.createElement('tr');
+                const cells = [
+                  d.device_name || d.device_id || '—',
+                  d.paired_at || '—',
+                  d.last_seen_at || '—',
+                  d.is_active ? (ar ? 'نعم' : 'Yes') : (ar ? 'لا' : 'No'),
+                ];
+                for (const text of cells) {
+                  const td = document.createElement('td');
+                  td.textContent = text;
+                  tr.appendChild(td);
+                }
+                pairedBody.appendChild(tr);
+              }
+            }
+          }
+
+          // 3. Recent connection attempts.
+          const attempts = Array.isArray(s.recent_attempts) ? s.recent_attempts : [];
+          const attTable = document.getElementById('bt-attempts-table');
+          const attBody  = document.getElementById('bt-attempts-body');
+          const attEmpty = document.getElementById('bt-attempts-empty');
+          if (attBody) {
+            attBody.innerHTML = '';
+            if (attempts.length === 0) {
+              if (attTable) attTable.style.display = 'none';
+              if (attEmpty) attEmpty.style.display = '';
+            } else {
+              if (attTable) attTable.style.display = '';
+              if (attEmpty) attEmpty.style.display = 'none';
+              for (const a of attempts) {
+                const tr = document.createElement('tr');
+                const tdTime = document.createElement('td');
+                tdTime.textContent = a.ts || '—';
+                const tdDev = document.createElement('td');
+                tdDev.textContent = a.device_name || a.device_id || '—';
+                const tdOp  = document.createElement('td');
+                tdOp.textContent = a.op || '—';
+                const tdOut = document.createElement('td');
+                tdOut.textContent = a.outcome || '—';
+                const outcomeClass = 'bt-outcome-' + (a.outcome || 'unknown');
+                tdOut.classList.add(outcomeClass);
+                const tdDet = document.createElement('td');
+                tdDet.classList.add('bt-detail');
+                tdDet.textContent = a.detail || '';
+                if (a.detail) tdDet.title = a.detail;
+                tr.appendChild(tdTime);
+                tr.appendChild(tdDev);
+                tr.appendChild(tdOp);
+                tr.appendChild(tdOut);
+                tr.appendChild(tdDet);
+                attBody.appendChild(tr);
+              }
+            }
+          }
+        }
+
         async function loadBluetoothSyncSettings() {
           try {
             const r = await fetch('/api/bt/status', {credentials: 'same-origin'});
@@ -7084,6 +7285,7 @@ HTML_TEMPLATE = '''
               }
             }
             _renderBtStatusPill(s);
+            _renderBtDiagnostics(s);
           } catch (_) {
             document.getElementById('bt-sync-card').style.display = 'none';
           }
@@ -10757,8 +10959,33 @@ def bt_status():
     com_port = read_app_setting(cur, 'bt_sync_com_port', '') or ''
     last_sync_at = read_app_setting(cur, 'bt_last_sync_at', '') or ''
     last_error = read_app_setting(cur, 'bt_last_error', '') or ''
+    # Paired phones — the Settings UI lists these so the user can see which
+    # phones have a stored device_token. Newest-first, capped at 20 to keep
+    # the response tiny even in a clinic with many self-pairs.
+    try:
+        cur.execute(
+            'SELECT device_id, device_name, paired_at, last_seen_at, is_active '
+            'FROM paired_devices ORDER BY last_seen_at DESC LIMIT 20'
+        )
+        paired_rows = cur.fetchall()
+    except sqlite3.Error:
+        paired_rows = []
     conn.close()
+    paired = [
+        {
+            'device_id': row['device_id'],
+            'device_name': row['device_name'],
+            'paired_at': row['paired_at'] or '',
+            'last_seen_at': row['last_seen_at'] or '',
+            'is_active': bool(int(row['is_active'] or 0)),
+        }
+        for row in paired_rows
+    ]
     available = _bt_list_serial_ports()
+    # Snapshot the deque under a list() to avoid emitting half-mutated entries
+    # if the worker thread appends mid-serialization. Last 10 only.
+    recent = list(_bt_recent_attempts)[-10:]
+    recent.reverse()  # Newest-first for the UI.
     return jsonify({
         'enabled': enabled,
         'com_port': com_port,
@@ -10769,6 +10996,12 @@ def bt_status():
         # Enable without picking anything. The JS UI uses this for the
         # "Smart pick" UX so the user doesn't need to know about COM ports.
         'recommended_port': available[0]['device'] if available else '',
+        'paired_devices': paired,
+        'recent_attempts': recent,
+        # True while the daemon thread currently holds the COM port open.
+        # Single-bool read of a module-level flag (atomic in CPython under
+        # the GIL); good enough for a diagnostic indicator.
+        'server_listening': bool(_bt_server_listening),
     })
 
 
@@ -11502,30 +11735,55 @@ def _bt_pair_new_device(cursor, device_id, device_name):
 
 def _bt_handle_request(cursor, req, authed):
     """Dispatch one BT request. Returns (response_dict, new_authed_flag).
-    Pure function — no I/O, no threading."""
+    Pure function — no I/O, no threading.
+
+    Also drops a diagnostic breadcrumb into _bt_recent_attempts so the
+    Settings UI can show recent connection attempts even when nothing
+    persisted to bt_last_sync_at (e.g. auth failures)."""
     op = req.get('op')
     if op == 'hello':
         device = _bt_lookup_device_by_token(cursor, req.get('device_token'))
         if device is None:
+            _bt_record_attempt('hello', outcome='unauthorized',
+                               detail='invalid or missing device_token')
             return {'error': 'unauthorized'}, False
+        _bt_record_attempt('hello', device_id=device.get('device_id'),
+                           device_name=device.get('device_name'), outcome='ok')
         return {'ok': True, 'server_version': BT_PROTOCOL_VERSION}, True
 
     if op == 'bt_pair':
         device_id = str(req.get('device_id') or '').strip()
         if not device_id:
+            _bt_record_attempt('bt_pair', outcome='rejected',
+                               detail='device_id required')
             return {'error': 'device_id required'}, False
         device_name = str(req.get('device_name') or '').strip() or device_id
-        token = _bt_pair_new_device(cursor, device_id, device_name)
+        try:
+            token = _bt_pair_new_device(cursor, device_id, device_name)
+        except Exception as exc:  # noqa: BLE001 — log & re-raise for the session loop
+            _bt_record_attempt('bt_pair', device_id=device_id,
+                               device_name=device_name, outcome='error',
+                               detail=repr(exc))
+            raise
+        _bt_record_attempt('bt_pair', device_id=device_id,
+                           device_name=device_name, outcome='ok')
         return {'ok': True, 'device_token': token,
                 'server_version': BT_PROTOCOL_VERSION}, True
 
     if not authed:
+        _bt_record_attempt(op or 'unknown', outcome='unauthorized',
+                           detail='request before hello succeeded')
         return {'error': 'unauthorized'}, authed
 
     if op == 'sync_export':
-        since_raw = req.get('since')
-        since_dt = parse_timestamp_for_sync(since_raw) if since_raw else None
-        tables, tombstones, _total = _collect_sync_export(cursor, since_dt)
+        try:
+            since_raw = req.get('since')
+            since_dt = parse_timestamp_for_sync(since_raw) if since_raw else None
+            tables, tombstones, _total = _collect_sync_export(cursor, since_dt)
+        except Exception as exc:  # noqa: BLE001
+            _bt_record_attempt('sync_export', outcome='error', detail=repr(exc))
+            raise
+        _bt_record_attempt('sync_export', outcome='ok')
         return {
             'ok': True,
             'tables': tables,
@@ -11534,9 +11792,16 @@ def _bt_handle_request(cursor, req, authed):
         }, authed
 
     if op == 'sync_import':
-        applied, skipped, _tombs_applied, _by_table = _apply_sync_import(cursor, req)
+        try:
+            applied, skipped, _tombs_applied, _by_table = _apply_sync_import(cursor, req)
+        except Exception as exc:  # noqa: BLE001
+            _bt_record_attempt('sync_import', outcome='error', detail=repr(exc))
+            raise
+        _bt_record_attempt('sync_import', outcome='ok',
+                           detail=f'applied={applied} skipped={skipped}')
         return {'ok': True, 'applied': applied, 'skipped': skipped}, authed
 
+    _bt_record_attempt(op or 'unknown', outcome='rejected', detail='unknown op')
     return {'error': 'unknown op'}, authed
 
 
@@ -11586,6 +11851,39 @@ _BT_LOOP_SLEEP = 30.0
 _BT_LOOP_ERROR_SLEEP = 15.0
 _BT_LOOP_RECONNECT_SLEEP = 60.0  # Wait between reconnect attempts after a session ends.
 
+# In-memory ring buffer of recent BT connection attempts. Deliberately not
+# persisted — these are diagnostic breadcrumbs for the Settings UI; restart
+# drops them. maxlen=20 caps the memory footprint and exposes the last 10 to
+# the UI via /api/bt/status. Single-bool/append operations on a deque are
+# thread-safe in CPython under the GIL, so we don't need an explicit lock.
+_bt_recent_attempts = collections.deque(maxlen=20)
+
+# Module-level flag: True while the daemon thread holds the COM port open in
+# its current loop iteration. Read by /api/bt/status to drive the "Listening"
+# indicator in the Settings card. A single bool write/read is atomic in
+# CPython under the GIL — no lock needed.
+_bt_server_listening = False
+
+
+def _bt_record_attempt(op, device_id=None, device_name=None, outcome='ok', detail=''):
+    """Append one diagnostic breadcrumb to _bt_recent_attempts. O(1).
+    Called from the request dispatcher after each op completes (success or
+    failure). Intentionally does NOT touch SQLite — these are throw-away
+    breadcrumbs, not audit log entries."""
+    try:
+        ts = _naive_utc_now().isoformat()
+    except Exception:
+        ts = ''
+    entry = {
+        'ts': ts,
+        'op': op or '',
+        'device_id': device_id or '',
+        'device_name': device_name or '',
+        'outcome': outcome or '',
+        'detail': (detail or '')[:160],
+    }
+    _bt_recent_attempts.append(entry)
+
 
 def _bt_open_port(port, baudrate=115200, timeout=1.0):
     """Open a pyserial port. Indirection so tests can swap this."""
@@ -11596,8 +11894,12 @@ def _bt_open_port(port, baudrate=115200, timeout=1.0):
 def bt_sync_server(stop_event=None):
     """Daemon loop: re-read settings every cycle, accept one peer at a time
     on the configured COM port. Skipped on the cloud node and in debug mode
-    (the parent process gates startup)."""
+    (the parent process gates startup).
+
+    Maintains the module-level _bt_server_listening flag so /api/bt/status
+    can show whether the daemon currently has the port open."""
     import serial as _pyserial
+    global _bt_server_listening
     while stop_event is None or not stop_event.is_set():
         try:
             conn = get_db_connection()
@@ -11609,18 +11911,28 @@ def bt_sync_server(stop_event=None):
         except sqlite3.Error:
             enabled, port = False, ''
         if not enabled or not port:
+            _bt_server_listening = False
             _bt_sleep(_BT_LOOP_SLEEP, stop_event)
             continue
         try:
             ser = _bt_open_port(port)
-            with ser:
-                _bt_serve_session(ser, ser)
+            # Port opened successfully — flip the listening flag while we
+            # hold it. The `with` block guarantees release; the `finally`
+            # below flips the flag back to False even on exception paths.
+            _bt_server_listening = True
+            try:
+                with ser:
+                    _bt_serve_session(ser, ser)
+            finally:
+                _bt_server_listening = False
             _bt_record_success()
             _bt_sleep(_BT_LOOP_RECONNECT_SLEEP, stop_event)
         except _pyserial.SerialException as exc:
+            _bt_server_listening = False
             _bt_record_error(f'serial: {exc}')
             _bt_sleep(_BT_LOOP_ERROR_SLEEP, stop_event)
         except Exception as exc:  # noqa: BLE001
+            _bt_server_listening = False
             _bt_record_error(f'{type(exc).__name__}: {exc}')
             _bt_sleep(_BT_LOOP_ERROR_SLEEP, stop_event)
 

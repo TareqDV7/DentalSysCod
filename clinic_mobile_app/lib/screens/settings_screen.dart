@@ -381,27 +381,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           if (hasError) ...[
                             const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFDE7E9),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: const Color(0xFFD9434E)),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Icon(Icons.error_outline,
-                                      color: Color(0xFF9C2E36), size: 18),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(app.btLastError!,
-                                        style: const TextStyle(
-                                            color: Color(0xFF9C2E36),
-                                            fontSize: 13)),
-                                  ),
-                                ],
-                              ),
+                            _BtErrorCard(
+                              message: app.btLastError!,
+                              isArabic: app.locale == 'ar',
                             ),
                           ] else ...[
                             const SizedBox(height: 8),
@@ -711,6 +693,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
       snack('Paired with ${picked.name ?? picked.address}',
           'تم الاقتران مع ${picked.name ?? picked.address}');
     }
+  }
+}
+
+/// Red banner shown under the Bluetooth peer row when `app.btLastError`
+/// is set. The technical message is wrapped in [SelectableText] so the
+/// doctor can long-press → copy to share with support; connection-style
+/// failures get a one-line hint pointing at the clinic PC's COM port pill.
+class _BtErrorCard extends StatelessWidget {
+  final String message;
+  final bool isArabic;
+  const _BtErrorCard({required this.message, required this.isArabic});
+
+  bool get _looksLikeConnectFailure {
+    final m = message.toLowerCase();
+    return m.contains('bt connect timed out') ||
+        m.contains('connect failed') ||
+        m.contains('bt connect failed');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = _looksLikeConnectFailure
+        ? (isArabic
+            ? 'تلميح: في كمبيوتر العيادة، افتح الإعدادات → مزامنة بلوتوث وتأكد أن مؤشّر منفذ COM أخضر.'
+            : 'Tip: on the clinic PC, open Settings → Bluetooth Sync, check the COM port pill is green.')
+        : null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFDE7E9),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFD9434E)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_outline,
+              color: Color(0xFF9C2E36), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  message,
+                  style: const TextStyle(
+                    color: Color(0xFF9C2E36),
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                ),
+                if (hint != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    hint,
+                    style: const TextStyle(
+                      color: Color(0xFF9C2E36),
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
