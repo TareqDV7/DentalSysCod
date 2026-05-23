@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-05-23
+
+- **Mobile Bluetooth sync — stability redesign.** Repeated crashes on Android 13/14 were rooted in the foreground-service stack (`flutter_background_service` + Android FGS rules): any failure in that chain killed the process with an uncatchable `RemoteServiceException` / `ForegroundServiceDidNotStartInTimeException` that no Dart `try/catch` could intercept. The fix removes the foreground-service path entirely: the 30 s BT auto-loop now runs in the main isolate and is bound to the Android activity lifecycle — it ticks while the app is on screen (or in the recent-apps cache) and pauses when the activity is `paused` / `detached`. Manual "Sync now via Bluetooth" and the BT auto-pair handshake are unchanged. **Lost capability**: silent walk-by sync when the app has been swiped from recents or the phone has rebooted — the doctor opens the app once when arriving at the clinic and sync resumes automatically. Removed dependency: `flutter_background_service` (with its platform packages). Removed permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`.
+
 ## 2026-05-22
 
 - Billing → Payment Record: picking or searching a patient now shows that patient's **combined payment history** — the billing payment records merged with the per-entry payments recorded on the follow-up sheet — sorted oldest-first with a *Total Collected* footer. Backed by a new endpoint `/api/patients/<id>/payment-history`.

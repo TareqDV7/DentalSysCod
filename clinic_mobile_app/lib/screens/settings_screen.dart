@@ -619,35 +619,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _pickBondedPeer(BuildContext context, AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    void snack(String en, String ar) {
+      messenger.showSnackBar(
+          SnackBar(content: Text(app.locale == 'ar' ? ar : en)));
+    }
+
     // Android 12+ runtime perms — getBondedDevices() returns empty without
     // BLUETOOTH_CONNECT granted, which is indistinguishable from "no devices
     // paired" to the user.
     final granted = await BluetoothPermissions.ensureGranted();
     if (!granted) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-          app.locale == 'ar'
-              ? 'يلزم منح إذن بلوتوث من إعدادات أندرويد'
-              : 'Bluetooth permission denied — grant it in Android settings')));
+      snack(
+          'Bluetooth permission denied — grant it in Android settings',
+          'يلزم منح إذن بلوتوث من إعدادات أندرويد');
       return;
     }
+
+    // The adapter must be ON. Without this check, getBondedDevices() can
+    // either return an empty list (looks like "no devices") or throw a
+    // PlatformException that ends the picker mid-flow.
+    try {
+      final isOn = await FlutterBluetoothSerial.instance.isEnabled ?? false;
+      if (!isOn) {
+        // Best-effort: ask the OS to enable it. If the user declines, bail
+        // with a clear message instead of pushing on into an empty list.
+        final enabled =
+            await FlutterBluetoothSerial.instance.requestEnable() ?? false;
+        if (!enabled) {
+          if (!context.mounted) return;
+          snack('Turn Bluetooth on, then try again',
+              'فعّل البلوتوث ثم حاول مرّة أخرى');
+          return;
+        }
+      }
+    } catch (_) {
+      // Adapter state probe itself failed — fall through and let the
+      // device list query report a clearer error.
+    }
+
     final List<BluetoothDevice> devices;
     try {
       devices = await FlutterBluetoothSerial.instance.getBondedDevices();
-    } catch (_) {
+    } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-          app.locale == 'ar'
-              ? 'تعذّر الوصول إلى بلوتوث'
-              : 'Could not access Bluetooth')));
+      snack('Could not access Bluetooth: $e',
+          'تعذّر الوصول إلى بلوتوث: $e');
       return;
     }
     if (!context.mounted) return;
     if (devices.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-          app.locale == 'ar'
-              ? 'لا توجد أجهزة مقترنة — اقترن أولًا من إعدادات بلوتوث'
-              : 'No bonded devices — pair in Android Bluetooth settings first')));
+      snack(
+          'No bonded devices — pair in Android Bluetooth settings first',
+          'لا توجد أجهزة مقترنة — اقترن أولًا من إعدادات بلوتوث');
       return;
     }
     final picked = await showModalBottomSheet<BluetoothDevice>(
@@ -667,8 +692,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
-    if (picked != null) {
-      await app.bindBtPeer(mac: picked.address, label: picked.name ?? picked.address);
+    if (picked == null) return;
+    try {
+      await app.bindBtPeer(
+          mac: picked.address, label: picked.name ?? picked.address);
+    } catch (e) {
+      // bindBtPeer is defensive about its background-sync start, but a
+      // storage write or platform channel can still throw — surface it
+      // instead of letting the unhandled exception look like a crash.
+      if (!context.mounted) return;
+      snack('Pairing failed: $e', 'فشل الاقتران: $e');
+      return;
+    }
+    if (!context.mounted) return;
+    if (app.btLastError != null && app.btLastError!.isNotEmpty) {
+      snack(app.btLastError!, app.btLastError!);
+    } else {
+      snack('Paired with ${picked.name ?? picked.address}',
+          'تم الاقتران مع ${picked.name ?? picked.address}');
     }
   }
 }

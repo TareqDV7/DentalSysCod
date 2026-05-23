@@ -12,7 +12,6 @@ import '../services/report_service.dart';
 import '../services/internet_sync_service.dart';
 import '../services/bluetooth_permissions.dart';
 import '../services/bluetooth_sync_service.dart';
-import '../services/background_sync_service.dart';
 import '../services/connectivity_sync_service.dart';
 import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
@@ -31,7 +30,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   late final ConnectivitySyncService _connectivity;
   late final InternetSyncService _internet;
   late final BluetoothSyncService _bluetooth;
-  late final BackgroundSyncService _bgSync;
 
   ConnectivitySyncService get sync => _connectivity;
 
@@ -80,7 +78,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       api: api,
       cloud: cloud,
     );
-    _bgSync = BackgroundSyncService.production();
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -113,6 +110,27 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  /// True when the BT auto-loop should be running: BT enabled, peer bonded,
+  /// app currently in the foreground/visible-process lifecycle. The loop
+  /// pauses on `paused`/`detached` so a backgrounded process doesn't drain
+  /// battery or fight Android's BT stack while the user isn't looking.
+  bool _btAutoLoopRunning = false;
+  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
+
+  void _refreshBtAutoLoop() {
+    final shouldRun = _btEnabled &&
+        _btBondedMac != null &&
+        _btBondedMac!.isNotEmpty &&
+        _lifecycle == AppLifecycleState.resumed;
+    if (shouldRun && !_btAutoLoopRunning) {
+      _connectivity.startBluetoothAutoLoop();
+      _btAutoLoopRunning = true;
+    } else if (!shouldRun && _btAutoLoopRunning) {
+      _connectivity.stopBluetoothAutoLoop();
+      _btAutoLoopRunning = false;
+    }
+  }
+
   Future<void> setBtEnabled(bool enabled) async {
     if (enabled) {
       // Android 12+ runtime perms — without these, every BT call fails
@@ -124,7 +142,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         _btLastError = 'Bluetooth permission denied';
         await _storage.setBtEnabled(false);
         await _storage.setBtLastError(_btLastError!);
-        await _bgSync.stop();
+        _refreshBtAutoLoop();
         notifyListeners();
         return;
       }
@@ -133,11 +151,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     _btEnabled = enabled;
     await _storage.setBtEnabled(enabled);
-    if (enabled && _btBondedMac != null && _btBondedMac!.isNotEmpty) {
-      await _bgSync.start();
-    } else {
-      await _bgSync.stop();
-    }
+    _refreshBtAutoLoop();
     notifyListeners();
   }
 
@@ -145,22 +159,20 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     await _storage.setBtBondedPeer(mac: mac, label: label);
     _btBondedMac = mac;
     _btBondedLabel = label;
-    if (_btEnabled) await _bgSync.start();
+    _refreshBtAutoLoop();
     notifyListeners();
   }
 
   Future<void> unbindBtPeer() async {
-    await _bgSync.stop();
     await _storage.clearBtBondedPeer();
     _btBondedMac = null;
     _btBondedLabel = null;
+    _refreshBtAutoLoop();
     notifyListeners();
   }
 
   /// Force one Bluetooth sync cycle right now, bypassing the LAN/cloud
-  /// reachability gate. Use for the explicit "Sync now via Bluetooth" button.
-  /// Routes through the background sync isolate so we don't race with the
-  /// 30s auto-loop running there.
+  /// reachability gate. Used by the explicit "Sync now via Bluetooth" button.
   Future<bool> syncViaBluetoothNow() async {
     final mac = _btBondedMac;
     if (mac == null || mac.isEmpty) {
@@ -176,22 +188,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       return false;
     }
-    // Fire force_sync into the sync isolate and wait for the result.
-    final completer = Completer<bool>();
-    late StreamSubscription sub;
-    sub = _bgSync.onSyncFinished.listen((payload) {
-      sub.cancel();
-      completer.complete(payload?['ok'] == true);
-    });
-    _bgSync.forceSync();
-    final ok = await completer.future.timeout(
-      const Duration(seconds: 30),
-      onTimeout: () {
-        sub.cancel();
-        return false;
-      },
-    );
-    await _loadBtState(); // pull updated lastSyncAt / lastError from storage
+    final ok = await _connectivity.syncViaBluetooth(mac);
+    await _loadBtState();
     return ok;
   }
 
@@ -212,11 +210,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     unawaited(sync.syncNow().catchError((error) {
       debugPrint('Initial sync failed: $error');
     }));
-    // Load BT state and start the auto-fallback loop if a peer is bonded + enabled.
     await _loadBtState();
-    if (_btEnabled && _btBondedMac != null && _btBondedMac!.isNotEmpty) {
-      await _bgSync.start();
-    }
+    _refreshBtAutoLoop();
   }
 
   void setLocale(String locale) {
@@ -276,16 +271,19 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycle = state;
     if (state == AppLifecycleState.resumed) {
-      // The sync isolate may have updated bt_last_sync_at / bt_last_error
-      // while we were backgrounded. Pull fresh values into UI state.
+      // Background or foreground BT ticks may have updated bt_last_sync_at /
+      // bt_last_error in storage. Pull fresh values into UI state.
       unawaited(_loadBtState());
     }
+    _refreshBtAutoLoop();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _connectivity.stopBluetoothAutoLoop();
     _connectivity.dispose();
     super.dispose();
   }

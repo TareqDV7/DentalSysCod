@@ -194,11 +194,6 @@ class ConnectivitySyncService {
     await syncViaBluetooth(mac);
   }
 
-  /// Public entry point that runs one BT sync attempt right now, bypassing
-  /// the LAN/cloud reachability gate. Used by `BackgroundSyncService.forceSync`
-  /// when the user taps "Sync now via Bluetooth".
-  Future<void> forceTick() => _btAutoTick(force: true);
-
   Future<bool> _isLanReachable() async {
     final url = await _storage.getLocalUrl();
     final token = await _storage.getDeviceToken();

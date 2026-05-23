@@ -9,7 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 /// here resolve to granted no-ops.
 class BluetoothPermissions {
   /// Prompts the user (if not already granted). MUST be called from a
-  /// foreground activity context — never from a background isolate.
+  /// foreground activity context.
   static Future<bool> ensureGranted() async {
     final results = await [
       Permission.bluetoothConnect,
@@ -18,8 +18,8 @@ class BluetoothPermissions {
     return results.values.every((s) => s.isGranted);
   }
 
-  /// Non-prompting check — safe to call from a background tick. Returns
-  /// false if either permission is missing or permanently denied.
+  /// Non-prompting check — safe to call from anywhere. Returns false if
+  /// either permission is missing or permanently denied.
   static Future<bool> areGranted() async {
     final connect = await Permission.bluetoothConnect.status;
     final scan = await Permission.bluetoothScan.status;
