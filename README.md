@@ -178,10 +178,12 @@ class AppBranding {
 - **Receivables report**: amount still owed per patient, with discounts subtracted from what is owed
 - **Patient statement / invoice**: built straight from the patient's follow-up sheet — one row per entry (date, procedure, price, **discount**, payment, running balance), with totals = subtotal, discount, total to pay (price − discount), paid, and what's left. The printable invoice (EN/AR) carries the same breakdown
 - Billing / payment records with discount and balance due; payment method is a **Cash / Card / Transfer dropdown**. Every patient picker (payments, statement, appointments) has a **search box** above it that filters the list by name or phone, so it stays usable with a large patient roster
+- **Per-patient payment history** — picking (or searching) a patient in the Billing → Payment Record tab swaps the all-records table for that patient's *combined* payment history: every payment they've made, merged from both the follow-up sheet's per-entry `payment` column **and** the billing payment records, sorted oldest-first with a "Total Collected" footer. *Show all records* clears the filter. Backed by `GET /api/patients/<id>/payment-history`
 
 > The dashboard's "Today's Revenue" and "Today's Visits" cards count *today's* follow-up payments and entries (visits are recorded on the follow-up sheet, not the legacy `visits` table). `Clinic profit = price − discount − lab expense`; lab expense is also auto-recorded as a postponed expense, so don't add the two together.
 
 ### Header & UI
+- The web portal runs **full-window** — the top bar sits flush against the top of the browser window and the app fills the whole viewport, instead of floating as a centred rounded card. On wide monitors the header and sidebar span edge-to-edge while the working area stays in a centred ~1500px column, so it reads as premium rather than just stretched
 - Modern glass-morphism header with gradient background, sheen overlay, and accent bottom line
 - Doctor name badge is clickable — opens an inline popover to edit the EN and AR name live, saved to DB
 - Theme toggle (light / dark mode) persisted to localStorage
@@ -213,7 +215,8 @@ clinic/
 ├── requirements.txt          # Flask, Flask-CORS, pyserial, waitress
 ├── serial_generator.py       # CLI tool to generate and batch-export license serials
 ├── pytest.ini                # pytest config
-├── DentalClinicApp.spec      # PyInstaller build spec
+├── DentaCare.spec            # PyInstaller build spec (outputs dist/DentaCare.exe)
+├── rebuild.bat               # One-click clean rebuild of the Windows executable
 ├── DEPLOY_CLOUD.md           # Cloud-node deployment runbook
 ├── LICENSE                   # Proprietary — all rights reserved
 ├── cloud/                    # Cloud-node deploy stack
@@ -221,7 +224,7 @@ clinic/
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 157 tests across 20 suites
+├── tests/                    # 164 tests across 21 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -239,6 +242,7 @@ clinic/
 │   ├── test_date_utils.py
 │   ├── test_expression_preservation.py  # "20+20" verbatim on sheet/invoice
 │   ├── test_followup_balance.py     # Recomputed Amount to Pay running balance
+│   ├── test_payment_history.py      # Per-patient combined payment history (follow-up + billing)
 │   ├── test_healthz.py              # /healthz probe (status, mode, db_writable, uptime)
 │   ├── test_sync_resilience.py      # Bad row doesn't kill batch; mobile fixes verified
 │   └── test_sync_tombstones.py      # Sync delta / tombstone propagation
@@ -332,6 +336,7 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 | GET / POST | `/api/patients/<id>/followups` | Follow-up notes (with discount) |
 | DELETE / PUT | `/api/patients/<id>/followups/<fid>` | Manage follow-up |
 | GET | `/api/patients/<id>/invoice-summary` | Billing summary for patient |
+| GET | `/api/patients/<id>/payment-history` | Combined payment history — follow-up sheet payments + billing records, oldest-first |
 
 ### Appointments
 
@@ -468,7 +473,7 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**157 tests across 20 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**164 tests across 21 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, the per-patient combined payment history (follow-up sheet payments merged with billing records, ordering, totals, per-patient scoping, exclusion of zero-value and deleted entries), patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
 The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `followup_balance_test.dart`, and the default widget test (27 tests total). Run with `cd clinic_mobile_app && flutter test`.
 
@@ -491,9 +496,11 @@ Covers 10 blocks: summary math, weekly range math, Saturday edge case, receivabl
 ## Packaging (Windows executable)
 
 ```bash
-pyinstaller DentalClinicApp.spec
+pyinstaller DentaCare.spec
 # Output: dist/DentaCare.exe
 ```
+
+Or run `rebuild.bat` (Windows): it wipes the old `build/` and `dist/`, installs PyInstaller, verifies the source, builds via `DentaCare.spec`, and copies the result to `deployment/DentaCare.exe`.
 
 The `.spec` file bundles `dental_clinic.py` and `DentaCare.PNG` into a single portable `.exe` — no Python installation required on the target machine. The SQLite database, `uploads/` and `backups/` are created at runtime next to the executable. The `hiddenimports` list includes `waitress`, `markupsafe`, `werkzeug.security` (auth / production server), and `serial` + `serial.tools.list_ports` (Bluetooth-SPP sync — the daemon thread imports `pyserial` lazily but PyInstaller needs them declared up front); keep them there if you regenerate the spec. When frozen, the app defaults to production mode (waitress + automatic backups).
 

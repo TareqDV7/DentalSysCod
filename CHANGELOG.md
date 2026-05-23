@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-05-22
+
+- Billing → Payment Record: picking or searching a patient now shows that patient's **combined payment history** — the billing payment records merged with the per-entry payments recorded on the follow-up sheet — sorted oldest-first with a *Total Collected* footer. Backed by a new endpoint `/api/patients/<id>/payment-history`.
+- Web portal now fills the browser window: the top bar sits flush at the top and the app spans full width, with the working area held in a centered ~1500px column so it still reads as premium (previously a rounded card floating with a 22px gutter — the "window in a window" look).
+- Project cleanup: removed regeneratable build artifacts (`build/`, `dist/`, Python caches) and stale duplicate deliverables (the old-name `DentalClinicApp.exe`/`.rar` and superseded `.rar` archives), plus a stray `-w` junk file. The May-11 `deployment/dental_clinic.db` was archived into `backups/` before removal.
+- Fixed `rebuild.bat`, which had been broken: it built through the spec (which outputs `DentaCare.exe`) but then checked for and copied `DentalClinicApp.exe`, so it failed on every run. Renamed `DentalClinicApp.spec` → `DentaCare.spec` to match its output.
+- Rebuilt `deployment/DentaCare.exe` from current source (PyInstaller 6.19.0 / Python 3.14.4); smoke-tested the packaged app — `/healthz` and `/login` both returned 200. Test suite: **164 tests across 21 suites, all passing**.
+
 ## 2026-05-12
 
 - Patient statement / invoice now reflects the follow-up sheet exactly: one row per follow-up entry with date, procedure, price, **discount**, payment, and running balance; totals corrected to subtotal, discount, total to pay (= price − discount), paid, and left (the discount was previously ignored, so "Total to Pay" and "Left" were overstated). The printable EN/AR invoice carries the same breakdown.

@@ -1588,7 +1588,7 @@ HTML_TEMPLATE = '''
                 radial-gradient(1000px 500px at -10% 0%, #cff3ec 0%, transparent 58%),
                 linear-gradient(160deg, var(--bg-1), var(--bg-2));
             min-height: 100vh;
-            padding: 22px;
+            padding: 0;
         }
 
         body[data-theme="dark"] {
@@ -1605,22 +1605,23 @@ HTML_TEMPLATE = '''
                 linear-gradient(160deg, var(--bg-1), var(--bg-2));
         }
 
+        /* Full-window shell: the app fills the browser window edge-to-edge
+           (top bar flush to the top), instead of floating as a centered
+           card. Content stays in a comfortable column — see .tab-content. */
         .container {
-            max-width: 1460px;
-            margin: 0 auto;
+            min-height: 100vh;
+            margin: 0;
             display: flex;
             flex-direction: column;
             background: rgba(255, 255, 255, 0.88);
-            border: 1px solid rgba(255, 255, 255, 0.85);
+            border: none;
             backdrop-filter: blur(8px);
-            border-radius: 24px;
-            box-shadow: var(--shadow);
+            border-radius: 0;
             overflow: hidden;
         }
 
         body[data-theme="dark"] .container {
             background: rgba(12, 19, 33, 0.92);
-            border-color: rgba(255, 255, 255, 0.06);
         }
 
         /* ── Header ── */
@@ -2205,7 +2206,10 @@ HTML_TEMPLATE = '''
         }
 
         .content { flex: 1; min-width: 0; padding: 28px; }
-        .tab-content { display: none; }
+        /* Chrome (header + sidebar) goes full-width; the working area stays
+           in a centered, readable column so a wide monitor looks premium,
+           not just stretched. */
+        .tab-content { display: none; max-width: 1500px; margin: 0 auto; }
         .tab-content.active { display: block; animation: fadeIn 0.25s ease; }
 
         @keyframes fadeIn {
@@ -3814,7 +3818,29 @@ HTML_TEMPLATE = '''
                 </form>
                 </div>
                 </details>
-                <div class="table-container" style="margin-top:12px;">
+                <div class="table-container" id="billing-history-container" style="margin-top:12px;display:none;">
+                    <div class="section-card-header" style="margin-bottom:12px;">
+                        <div>
+                            <h3 id="billing-history-title" style="margin:0;" data-i18n="payment_history">Payment History</h3>
+                            <p style="margin:3px 0 0;color:var(--muted);font-size:0.86em;" data-i18n="payment_history_meta">Every payment recorded for this patient — from the follow-up sheet and from payment records.</p>
+                        </div>
+                        <button class="btn btn-secondary" type="button" onclick="clearBillingPatientFilter()" data-i18n="show_all_records">Show all records</button>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th data-i18n="date">Date</th>
+                                <th data-i18n="source">Source</th>
+                                <th data-i18n="description">Description</th>
+                                <th data-i18n="payment_method">Payment Method</th>
+                                <th data-i18n="amount_paid">Amount Paid</th>
+                            </tr>
+                        </thead>
+                        <tbody id="billing-history-body"></tbody>
+                        <tfoot id="billing-history-foot"></tfoot>
+                    </table>
+                </div>
+                <div class="table-container" id="billing-all-container" style="margin-top:12px;">
                     <table>
                         <thead>
                             <tr>
@@ -4350,6 +4376,15 @@ HTML_TEMPLATE = '''
                 statement_tab: '📄 Statement',
                 record_payment: 'Record Payment',
                 payment_management: 'Payment Record',
+                payment_history: 'Payment History',
+                payment_history_meta: 'Every payment recorded for this patient — from the follow-up sheet and from payment records.',
+                source: 'Source',
+                amount_paid: 'Amount Paid',
+                show_all_records: 'Show all records',
+                from_followup: 'Follow-up sheet',
+                from_payment_record: 'Payment record',
+                total_collected: 'Total Collected',
+                no_payments_recorded: 'No payments recorded for this patient yet.',
                 patient_statement: 'Patient Statement',
                 list_tab: '📋 List',
                 calendar_tab: '📆 Calendar',
@@ -4697,6 +4732,15 @@ HTML_TEMPLATE = '''
                 statement_tab: '📄 كشف الحساب',
                 record_payment: 'تسجيل دفعة',
                 payment_management: 'تسجيل دفعة',
+                payment_history: 'سجل المدفوعات',
+                payment_history_meta: 'كل دفعة مسجلة لهذا المريض — من ورقة المتابعة ومن سجلات الدفعات.',
+                source: 'المصدر',
+                amount_paid: 'المبلغ المدفوع',
+                show_all_records: 'عرض كل السجلات',
+                from_followup: 'ورقة المتابعة',
+                from_payment_record: 'سجل دفعة',
+                total_collected: 'إجمالي المحصّل',
+                no_payments_recorded: 'لا توجد مدفوعات مسجلة لهذا المريض بعد.',
                 patient_statement: 'كشف حساب المريض',
                 list_tab: '📋 القائمة',
                 calendar_tab: '📆 التقويم',
@@ -6354,7 +6398,7 @@ HTML_TEMPLATE = '''
             const billSel = document.getElementById('billing-patient-select');
             if (billSel && !billSel.dataset.creditHintWired) {
                 billSel.dataset.creditHintWired = '1';
-                billSel.addEventListener('change', refreshBillingCreditHint);
+                billSel.addEventListener('change', onBillingPatientChange);
             }
             refreshBillingCreditHint();
 
@@ -6362,6 +6406,8 @@ HTML_TEMPLATE = '''
             billingCache = Array.isArray(items) ? items : [];
             const tbody = document.getElementById('billing-body');
             if (!tbody) return;
+
+            applyBillingPatientView();
 
             if (!billingCache.length) {
                 tbody.innerHTML = renderStateRow(t('no_data', 'No data'), {
@@ -6389,6 +6435,101 @@ HTML_TEMPLATE = '''
                     </td>
                 </tr>
             `).join('');
+        }
+
+        // ── Payment Record: per-patient payment history ──
+        // Picking a patient swaps the all-records table for that patient's
+        // combined payment history (follow-up sheet payments + payment records).
+        function applyBillingPatientView() {
+            const sel = document.getElementById('billing-patient-select');
+            const pid = sel ? sel.value : '';
+            const histC = document.getElementById('billing-history-container');
+            const allC = document.getElementById('billing-all-container');
+            if (pid) {
+                if (allC) allC.style.display = 'none';
+                if (histC) histC.style.display = '';
+                loadBillingPatientHistory(pid);
+            } else {
+                if (histC) histC.style.display = 'none';
+                if (allC) allC.style.display = '';
+            }
+        }
+
+        function onBillingPatientChange() {
+            refreshBillingCreditHint();
+            applyBillingPatientView();
+        }
+
+        function clearBillingPatientFilter() {
+            const sel = document.getElementById('billing-patient-select');
+            if (sel) sel.value = '';
+            onBillingPatientChange();
+        }
+
+        async function loadBillingPatientHistory(patientId) {
+            const body = document.getElementById('billing-history-body');
+            const foot = document.getElementById('billing-history-foot');
+            const title = document.getElementById('billing-history-title');
+            if (!body) return;
+            body.innerHTML = `<tr><td colspan="5">${t('loading', 'Loading…')}</td></tr>`;
+            if (foot) foot.innerHTML = '';
+
+            let payload;
+            try {
+                payload = await fetch(`/api/patients/${patientId}/payment-history`).then(r => r.json());
+            } catch (_) {
+                body.innerHTML = `<tr><td colspan="5">${t('no_data', 'No data')}</td></tr>`;
+                return;
+            }
+            const events = (payload && payload.events) || [];
+            const totals = (payload && payload.totals) || {};
+
+            if (title) {
+                const pname = payload && payload.patient ? (payload.patient.name || '') : '';
+                title.textContent = pname
+                    ? `${t('payment_history', 'Payment History')} — ${pname}`
+                    : t('payment_history', 'Payment History');
+            }
+
+            if (!events.length) {
+                body.innerHTML = `<tr><td colspan="5">${t('no_payments_recorded', 'No payments recorded for this patient yet.')}</td></tr>`;
+                if (foot) foot.innerHTML = '';
+                return;
+            }
+
+            body.innerHTML = events.map(ev => {
+                const isFollowup = ev.source === 'followup';
+                const srcLabel = isFollowup
+                    ? t('from_followup', 'Follow-up sheet')
+                    : t('from_payment_record', 'Payment record');
+                const srcBadge = `<span class="badge ${isFollowup ? 'badge-muted' : 'badge-secondary'}">${srcLabel}</span>`;
+                let desc = ev.description || '—';
+                if (isFollowup && ev.tooth_no) desc += ` <small style="opacity:0.7;">#${ev.tooth_no}</small>`;
+                const creditNote = parseCurrency(ev.credit_used) > 0
+                    ? ` <small style="opacity:0.7;">(+₪${parseCurrency(ev.credit_used).toFixed(2)} ${t('credit', 'credit')})</small>`
+                    : '';
+                return `
+                    <tr>
+                        <td>${formatDateDisplay(ev.date) || '—'}</td>
+                        <td>${srcBadge}</td>
+                        <td>${desc}</td>
+                        <td>${isFollowup ? '—' : (ev.method || '—')}</td>
+                        <td>${fmtAmount(ev.amount, ev.amount_expr)}${creditNote}</td>
+                    </tr>`;
+            }).join('');
+
+            if (foot) {
+                const totalPaid = parseCurrency(totals.total_paid);
+                const totalCredit = parseCurrency(totals.total_credit_used);
+                const creditFoot = totalCredit > 0
+                    ? ` <small style="opacity:0.7;">(+₪${totalCredit.toFixed(2)} ${t('credit', 'credit')})</small>`
+                    : '';
+                foot.innerHTML = `
+                    <tr>
+                        <td colspan="4" style="text-align:right;font-weight:700;">${t('total_collected', 'Total Collected')}</td>
+                        <td style="font-weight:700;">₪ ${totalPaid.toFixed(2)}${creditFoot}</td>
+                    </tr>`;
+            }
         }
 
         async function deleteBillingRecord(id) {
@@ -9560,6 +9701,96 @@ def patient_invoice_summary(patient_id):
         'range': {
             'start_date': start_date,
             'end_date': end_date
+        }
+    })
+
+@app.route('/api/patients/<int:patient_id>/payment-history')
+def patient_payment_history(patient_id):
+    """Every payment recorded for one patient, from both sources:
+    the per-entry `payment` column on the follow-up sheet, and the
+    `billing` payment records. Sorted oldest-first so the staff member
+    sees the full collection history when they pick a patient in the
+    Billing → Payment Record tab."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT id, first_name, last_name, phone FROM patients WHERE id = ?', (patient_id,))
+    patient = cursor.fetchone()
+    if not patient:
+        conn.close()
+        return jsonify({'error': 'Patient not found'}), 404
+
+    events = []
+
+    # Follow-up sheet — one event per entry that carried a payment.
+    cursor.execute('''
+        SELECT id, followup_date, treatment_procedure, tooth_no, payment, payment_expr
+        FROM patient_followups
+        WHERE patient_id = ? AND COALESCE(is_deleted, 0) = 0 AND COALESCE(payment, 0) > 0
+        ORDER BY followup_date ASC, id ASC
+    ''', (patient_id,))
+    for row in cursor.fetchall():
+        events.append({
+            'source': 'followup',
+            'ref_id': row['id'],
+            'date': row['followup_date'],
+            'description': row['treatment_procedure'] or '',
+            'tooth_no': row['tooth_no'],
+            'amount': float(row['payment'] or 0),
+            'amount_expr': row['payment_expr'],
+            'credit_used': 0.0,
+            'method': None,
+            'payment_status': None,
+        })
+
+    # Billing payment records — only those that actually moved money
+    # (a cash payment or applied credit). Mirrors `/api/billing` (no
+    # is_deleted filter — billing rows are hard-deleted).
+    cursor.execute('''
+        SELECT id, invoice_number, payment_date, created_at, paid_amount,
+               paid_amount_expr, credit_used, payment_method, payment_status
+        FROM billing
+        WHERE patient_id = ?
+        ORDER BY id ASC
+    ''', (patient_id,))
+    for row in cursor.fetchall():
+        paid = float(row['paid_amount'] or 0)
+        credit = float(row['credit_used'] or 0)
+        if paid <= 0 and credit <= 0:
+            continue
+        created = row['created_at'] or ''
+        events.append({
+            'source': 'billing',
+            'ref_id': row['id'],
+            'date': row['payment_date'] or (created[:10] if created else None),
+            'description': row['invoice_number'] or '',
+            'tooth_no': None,
+            'amount': paid,
+            'amount_expr': row['paid_amount_expr'],
+            'credit_used': credit,
+            'method': row['payment_method'],
+            'payment_status': row['payment_status'],
+        })
+
+    # Oldest first; rows without a date sort to the front.
+    events.sort(key=lambda e: (e['date'] or ''))
+
+    total_paid = round(sum(e['amount'] for e in events), 2)
+    total_credit = round(sum(e['credit_used'] for e in events), 2)
+
+    conn.close()
+    return jsonify({
+        'patient': {
+            'id': patient['id'],
+            'name': f"{patient['first_name']} {patient['last_name']}".strip(),
+            'phone': patient['phone']
+        },
+        'events': events,
+        'totals': {
+            'total_paid': total_paid,
+            'total_credit_used': total_credit,
+            'count': len(events)
         }
     })
 
