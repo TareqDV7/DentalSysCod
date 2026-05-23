@@ -93,8 +93,8 @@ The Dental Clinic licensing system combines **external serial generation** with 
 ```
 clinic/
 ├── serial_generator.py                    ← External tool (run separately)
-├── SERIAL_GENERATOR_README.md            ← User guide
-├── LICENSE_INTEGRATION_GUIDE.md           ← Backend integration steps
+├── docs/SERIAL_GENERATOR_README.md        ← User guide
+├── docs/LICENSE_INTEGRATION_GUIDE.md      ← Backend integration steps
 ├── example_devices.txt                    ← Sample device list
 ├── batch_serials.csv                      ← Generated serials (example)
 │
@@ -330,11 +330,11 @@ If backend signing key is ever compromised:
 | File | Purpose | Validation |
 |------|---------|-----------|
 | `serial_generator.py` | Standalone serial tool | py_compile check |
-| `SERIAL_GENERATOR_README.md` | User documentation | Manual review |
-| `LICENSE_INTEGRATION_GUIDE.md` | Backend integration | Manual review |
+| `docs/SERIAL_GENERATOR_README.md` | User documentation | Manual review |
+| `docs/LICENSE_INTEGRATION_GUIDE.md` | Backend integration | Manual review |
 | `dental_clinic.py` | Backend with token functions | py_compile check |
 | `clinic_mobile_app/` | Flutter app | flutter analyze |
-| `DentalClinicApp.exe` | Desktop binary | SHA256 checksum |
+| `DentaCare.exe` | Desktop binary | SHA256 checksum |
 
 ## References
 

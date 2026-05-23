@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-05-23 (later)
+
+- Refreshed `deployment/DentaCare.exe` and `deployment/mobile/android/clinic-mobile.apk` from current source so both shipped artifacts match `main` (EXE smoke-tested via `/healthz` → 200). APK shrunk to 53.75 MB (was 54 MB) after dropping the `flutter_background_service` dependency tree.
+- **Repo layout cleanup.** Moved seven long-form docs out of the repo root into `docs/`: `USER_GUIDE.md`, `DEPLOY_INSTRUCTIONS.txt`, `MOBILE_APP_SETUP.txt`, `SECURITY_ARCHITECTURE.md`, `SERIAL_GENERATOR_README.md`, `SERIAL_GENERATOR_QUICKREF.md`, `LICENSE_INTEGRATION_GUIDE.md`. Root now keeps only the docs you actually want a contributor to see on landing (`README.md`, `CHANGELOG.md`, `LICENSE`, `DEPLOY_CLOUD.md`) plus source / config / launchers. Updated the cross-references inside `docs/SECURITY_ARCHITECTURE.md` (file-tree + Files & Checksums table). README file-tree updated. Tests still 164 passing.
+- Removed stale untracked artifacts at the repo root: `SESSION_SUMMARY.md`, `cleanup.ps1`, `__pycache__/`, `.pytest_cache/`, and the PyInstaller `build/` / `dist/` intermediates — all regeneratable or one-off scratch, none of them tracked in git.
+
 ## 2026-05-23
 
 - **Mobile Bluetooth sync — stability redesign.** Repeated crashes on Android 13/14 were rooted in the foreground-service stack (`flutter_background_service` + Android FGS rules): any failure in that chain killed the process with an uncatchable `RemoteServiceException` / `ForegroundServiceDidNotStartInTimeException` that no Dart `try/catch` could intercept. The fix removes the foreground-service path entirely: the 30 s BT auto-loop now runs in the main isolate and is bound to the Android activity lifecycle — it ticks while the app is on screen (or in the recent-apps cache) and pauses when the activity is `paused` / `detached`. Manual "Sync now via Bluetooth" and the BT auto-pair handshake are unchanged. **Lost capability**: silent walk-by sync when the app has been swiped from recents or the phone has rebooted — the doctor opens the app once when arriving at the clinic and sync resumes automatically. Removed dependency: `flutter_background_service` (with its platform packages). Removed permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`.

@@ -217,8 +217,18 @@ clinic/
 ├── pytest.ini                # pytest config
 ├── DentaCare.spec            # PyInstaller build spec (outputs dist/DentaCare.exe)
 ├── rebuild.bat               # One-click clean rebuild of the Windows executable
+├── start.bat                 # Launcher: bypasses Windows Defender CFA on Explorer double-click
 ├── DEPLOY_CLOUD.md           # Cloud-node deployment runbook
 ├── LICENSE                   # Proprietary — all rights reserved
+├── docs/                     # Long-form docs (user guide, deploy, security, serial generator, mobile setup)
+│   ├── USER_GUIDE.md
+│   ├── DEPLOY_INSTRUCTIONS.txt
+│   ├── MOBILE_APP_SETUP.txt
+│   ├── SECURITY_ARCHITECTURE.md
+│   ├── SERIAL_GENERATOR_README.md       # Serial-generator user guide
+│   ├── SERIAL_GENERATOR_QUICKREF.md     # Serial-generator cheat sheet
+│   ├── LICENSE_INTEGRATION_GUIDE.md     # Backend license-token integration
+│   └── superpowers/                     # Design specs + plans for major features
 ├── cloud/                    # Cloud-node deploy stack
 │   ├── Dockerfile            #   the app image (CLINIC_CLOUD_MODE=1)
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
