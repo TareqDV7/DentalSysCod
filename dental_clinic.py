@@ -12125,7 +12125,16 @@ if __name__ == '__main__':
     except Exception:
         pass
 
-    threading.Thread(target=open_browser, kwargs={'port': port}, daemon=True).start()
+    # Skip browser auto-open for the headless service. The pywebview window
+    # launcher (DentaCare.exe) is the customer-facing UI in packaged mode;
+    # opening a browser tab too would be redundant. CLINIC_HEADLESS=1 is set
+    # by NSSM in the service registration; CLOUD_MODE always implies headless.
+    headless = (
+        os.environ.get('CLINIC_HEADLESS', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+        or CLOUD_MODE
+    )
+    if not headless:
+        threading.Thread(target=open_browser, kwargs={'port': port}, daemon=True).start()
 
     # Automatic database backups (production runs only — in debug the reloader
     # would spawn the worker twice, and source checkouts have git anyway).
