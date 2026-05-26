@@ -4,13 +4,13 @@ Boots the pywebview window pointed at the local Flask service. Handles:
   - single-instance enforcement (named mutex)
   - waiting for the service to be ready
   - showing an offline page if the service never responds
+  - tray icon with Open / Restart engine / Open logs / Quit menu
+  - close-to-hide (X button hides; Quit from tray actually exits)
   - window state persistence (size, position)
 
 This file is what `DentaCare.exe` runs when the customer clicks the
 Start Menu icon. The service is a separate process (DentaCareService.exe)
-supervised by NSSM.
-
-Task B7 will add the tray icon + close-to-hide behavior on top of this."""
+supervised by NSSM."""
 
 import os
 import subprocess
@@ -19,6 +19,8 @@ import threading
 from pathlib import Path
 
 import webview
+from PIL import Image
+import pystray
 
 from window.data_dir import resolve_data_dir
 from window.health_check import wait_for_service
@@ -41,19 +43,111 @@ class WindowApi:
     """Exposed to the offline.html page via pywebview's JS bridge."""
 
     def restart_service(self):
-        """Try to start the service; surface errors via the window itself."""
         try:
-            subprocess.run(
-                ['sc', 'start', 'DentaCare'],
-                capture_output=True, check=False, timeout=10,
-            )
+            subprocess.run(['sc', 'start', 'DentaCare'],
+                           capture_output=True, check=False, timeout=10)
         except Exception:
             pass
 
 
+def _resolve_initial_url() -> str:
+    if wait_for_service(HEALTHZ_URL, timeout=BOOT_GRACE_SECONDS):
+        return SERVICE_URL
+    return (ASSETS_DIR / 'offline.html').as_uri()
+
+
+def _open_log_folder():
+    logs = resolve_data_dir() / 'logs'
+    logs.mkdir(parents=True, exist_ok=True)
+    try:
+        os.startfile(str(logs))
+    except (AttributeError, OSError):
+        pass
+
+
+class App:
+    """Holds the pywebview window + tray icon and the wiring between them."""
+
+    def __init__(self):
+        self.window = None
+        self.tray_icon = None
+        self._quit_requested = False
+        self._state = load_window_state(WINDOW_STATE_PATH)
+
+    def _save_state(self):
+        try:
+            save_window_state(
+                WindowState(
+                    width=int(self.window.width or self._state.width),
+                    height=int(self.window.height or self._state.height),
+                    x=int(self.window.x) if self.window.x is not None else None,
+                    y=int(self.window.y) if self.window.y is not None else None,
+                ),
+                WINDOW_STATE_PATH,
+            )
+        except Exception:
+            pass
+
+    def _on_window_closing(self):
+        """Intercept the X button: hide instead of close, unless Quit was chosen."""
+        self._save_state()
+        if not self._quit_requested:
+            self.window.hide()
+            return False  # cancel the close
+        return True
+
+    def _tray_open(self, icon, item):
+        self.window.show()
+
+    def _tray_restart(self, icon, item):
+        WindowApi().restart_service()
+
+    def _tray_open_logs(self, icon, item):
+        _open_log_folder()
+
+    def _tray_quit(self, icon, item):
+        self._quit_requested = True
+        icon.stop()
+        try:
+            self.window.destroy()
+        except Exception:
+            pass
+
+    def _build_tray_menu(self):
+        return pystray.Menu(
+            pystray.MenuItem('Open', self._tray_open, default=True),
+            pystray.MenuItem('Restart engine', self._tray_restart),
+            pystray.MenuItem('Open log folder', self._tray_open_logs),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem('Quit completely', self._tray_quit),
+        )
+
+    def _run_tray(self):
+        image = Image.open(ASSETS_DIR / 'icon.png')
+        self.tray_icon = pystray.Icon('DentaCare', image, 'DentaCare', self._build_tray_menu())
+        self.tray_icon.run()
+
+    def run(self):
+        self.window = webview.create_window(
+            title='DentaCare',
+            url=_resolve_initial_url(),
+            width=self._state.width,
+            height=self._state.height,
+            x=self._state.x,
+            y=self._state.y,
+            resizable=True,
+            min_size=(900, 600),
+            js_api=WindowApi(),
+        )
+        self.window.events.closing += self._on_window_closing
+
+        # Tray must run on a background thread so it doesn't block pywebview.
+        threading.Thread(target=self._run_tray, daemon=True).start()
+
+        webview.start()
+
+
 def _bring_existing_window_to_front():
-    """Best-effort: find the existing DentaCare window and bring it forward.
-    Called when SingleInstanceGuard reports we're not the first instance."""
     if sys.platform != 'win32':
         return
     try:
@@ -72,57 +166,15 @@ def _bring_existing_window_to_front():
         pass
 
 
-def _resolve_initial_url() -> str:
-    """If the service is healthy, point at the real UI. Otherwise show the
-    offline page (and the in-page JS will redirect to the real UI when
-    /healthz comes back)."""
-    if wait_for_service(HEALTHZ_URL, timeout=BOOT_GRACE_SECONDS):
-        return SERVICE_URL
-    offline_path = ASSETS_DIR / 'offline.html'
-    return offline_path.as_uri()
-
-
 def main():
     guard = SingleInstanceGuard()
     if not guard.is_first_instance:
         _bring_existing_window_to_front()
         return 0
-
-    state = load_window_state(WINDOW_STATE_PATH)
-    api = WindowApi()
-    initial_url = _resolve_initial_url()
-
-    window = webview.create_window(
-        title='DentaCare',
-        url=initial_url,
-        width=state.width,
-        height=state.height,
-        x=state.x,
-        y=state.y,
-        resizable=True,
-        min_size=(900, 600),
-        js_api=api,
-    )
-
-    def on_closing():
-        # Save window size/position on close. pywebview gives us the latest
-        # values via window.x/y/width/height at the moment the user clicks X.
-        try:
-            save_window_state(
-                WindowState(
-                    width=int(window.width or state.width),
-                    height=int(window.height or state.height),
-                    x=int(window.x) if window.x is not None else None,
-                    y=int(window.y) if window.y is not None else None,
-                ),
-                WINDOW_STATE_PATH,
-            )
-        except Exception:
-            pass
-
-    window.events.closing += on_closing
-    webview.start()
-    guard.release()
+    try:
+        App().run()
+    finally:
+        guard.release()
     return 0
 
 
