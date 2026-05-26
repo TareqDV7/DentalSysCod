@@ -1,58 +1,65 @@
 @echo off
-title Rebuilding DentaCare...
-echo.
-echo ============================================
-echo  DentaCare - Clean Rebuild
-echo ============================================
-echo.
+REM Rebuild DentaCare from scratch.
+REM Produces dist\DentaCareService.exe (headless Flask service),
+REM dist\DentaCare.exe (pywebview window launcher), and a ready-to-package
+REM staging folder at dist\staging\ that the Inno Setup installer consumes.
+
+setlocal
 
 cd /d "%~dp0"
 
-echo Source file: %~dp0dental_clinic.py
-echo Spec file:   %~dp0DentaCare.spec
-echo.
+echo === Cleaning previous build ===
+if exist build  rmdir /s /q build
+if exist dist   rmdir /s /q dist
 
-echo [1/5] Removing old build cache...
-if exist "build" rmdir /s /q "build"
-if exist "dist" rmdir /s /q "dist"
-if exist "__pycache__" rmdir /s /q "__pycache__"
-echo Done.
-echo.
+echo === Installing PyInstaller ===
+python -m pip install --upgrade pyinstaller --quiet
 
-echo [2/5] Installing PyInstaller...
-python -m pip install pyinstaller --quiet
-echo Done.
-echo.
-
-echo [3/5] Verifying source file has latest changes...
-findstr /c:"stat-card-teal" "%~dp0dental_clinic.py" >nul
+echo === Verifying source compiles ===
+python -m py_compile dental_clinic.py dentacare_window.py
 if errorlevel 1 (
-    echo ERROR: dental_clinic.py does not have the latest UI changes.
-    echo Make sure you are running this from C:\Users\MSI\Desktop\clinic\
-    pause
-    exit /b 1
-)
-echo Source file verified OK.
-echo.
-
-echo [4/5] Building executable...
-python -m PyInstaller "%~dp0DentaCare.spec" --noconfirm
-echo.
-
-if not exist "%~dp0dist\DentaCare.exe" (
-    echo ERROR: Build failed. See output above.
-    pause
+    echo ERROR: source failed py_compile
     exit /b 1
 )
 
-echo [5/5] Copying to deployment folder...
-copy /Y "%~dp0dist\DentaCare.exe" "%~dp0deployment\DentaCare.exe"
-echo Build timestamp:
-dir "%~dp0deployment\DentaCare.exe" | findstr "DentaCare"
+echo === Building both binaries ===
+python -m PyInstaller DentaCare.spec --noconfirm --clean
+if errorlevel 1 (
+    echo ERROR: PyInstaller build failed
+    exit /b 1
+)
+
+if not exist dist\DentaCare.exe (
+    echo ERROR: dist\DentaCare.exe missing after build.
+    exit /b 1
+)
+if not exist dist\DentaCareService.exe (
+    echo ERROR: dist\DentaCareService.exe missing after build.
+    exit /b 1
+)
+
+echo === Staging installer payload ===
+mkdir dist\staging
+copy /y dist\DentaCare.exe          dist\staging\
+copy /y dist\DentaCareService.exe   dist\staging\
+copy /y DentaCare.PNG               dist\staging\
+copy /y installer\nssm.exe          dist\staging\
+if exist installer\provision_bt.ps1 (
+    copy /y installer\provision_bt.ps1 dist\staging\
+)
+if exist installer\MicrosoftEdgeWebview2Setup.exe (
+    copy /y installer\MicrosoftEdgeWebview2Setup.exe dist\staging\
+)
+
+echo === Copying to deployment ===
+if not exist deployment mkdir deployment
+copy /y dist\DentaCare.exe          deployment\
+copy /y dist\DentaCareService.exe   deployment\
+
 echo.
-echo ============================================
-echo  Build complete!
-echo  Open deployment\DentaCare.exe to test
-echo ============================================
+echo Build complete:
+echo   dist\DentaCare.exe          (window launcher)
+echo   dist\DentaCareService.exe   (headless service)
+echo   dist\staging\               (installer payload for Inno Setup)
 echo.
-pause
+endlocal
