@@ -11810,6 +11810,11 @@ def _bt_serve_session(stream_in, stream_out, db_path=None):
     when the peer disconnects or sends a malformed frame. Closes on the
     first unauthorized response (auth failure) or fatal protocol error.
 
+    Returns True if at least one frame was dispatched (real peer
+    interaction), False if the session ended at EOF before any frame was
+    read. The daemon uses this to suppress a misleading "Last sync"
+    timestamp on an idle read-timeout cycle that nothing actually used.
+
     Opens its own short-lived SQLite connection so the caller (the BT
     server thread) doesn't have to manage one. `db_path` defaults to
     DB_NAME — exposed for tests."""
@@ -11817,28 +11822,30 @@ def _bt_serve_session(stream_in, stream_out, db_path=None):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     authed = False
+    processed_any = False
     try:
         while True:
             try:
                 req = decode_bt_frame(stream_in)
             except EOFError:
-                return
+                return processed_any
             except ValueError:
                 try:
                     stream_out.write(encode_bt_frame({'error': 'malformed frame'}))
                     stream_out.flush()
                 except Exception:
                     pass
-                return
+                return processed_any
             resp, authed = _bt_handle_request(cursor, req, authed)
             try:
                 stream_out.write(encode_bt_frame(resp))
                 stream_out.flush()
             except Exception:
-                return
+                return processed_any
+            processed_any = True
             conn.commit()
             if 'error' in resp and resp['error'] == 'unauthorized':
-                return
+                return processed_any
     finally:
         try:
             conn.close()
@@ -11849,7 +11856,7 @@ def _bt_serve_session(stream_in, stream_out, db_path=None):
 # How long the BT worker idles when disabled or after an error.
 _BT_LOOP_SLEEP = 30.0
 _BT_LOOP_ERROR_SLEEP = 15.0
-_BT_LOOP_RECONNECT_SLEEP = 60.0  # Wait between reconnect attempts after a session ends.
+_BT_LOOP_RECONNECT_SLEEP = 1.0  # Brief pause after a session ends before reopening the port.
 
 # In-memory ring buffer of recent BT connection attempts. Deliberately not
 # persisted — these are diagnostic breadcrumbs for the Settings UI; restart
@@ -11885,8 +11892,15 @@ def _bt_record_attempt(op, device_id=None, device_name=None, outcome='ok', detai
     _bt_recent_attempts.append(entry)
 
 
-def _bt_open_port(port, baudrate=115200, timeout=1.0):
-    """Open a pyserial port. Indirection so tests can swap this."""
+def _bt_open_port(port, baudrate=115200, timeout=30.0):
+    """Open a pyserial port. Indirection so tests can swap this.
+
+    `timeout` is the per-read budget. It must be long enough that an idle
+    listener doesn't EOF before a phone has a chance to connect and write its
+    first frame — a 1s budget produces a ~1s open window per loop iteration on
+    Windows, which a roaming phone almost never lands in. 30s is comfortably
+    long for SPP handshake latency while still letting the loop check
+    stop_event between iterations."""
     import serial as _pyserial
     return _pyserial.Serial(port, baudrate=baudrate, timeout=timeout)
 
@@ -11922,10 +11936,15 @@ def bt_sync_server(stop_event=None):
             _bt_server_listening = True
             try:
                 with ser:
-                    _bt_serve_session(ser, ser)
+                    processed = _bt_serve_session(ser, ser)
             finally:
                 _bt_server_listening = False
-            _bt_record_success()
+            # Only stamp "Last sync" when a real peer interaction happened.
+            # An idle read-timeout cycle returns False; recording it would
+            # paint a misleading green "synced just now" while nothing
+            # actually exchanged data.
+            if processed:
+                _bt_record_success()
             _bt_sleep(_BT_LOOP_RECONNECT_SLEEP, stop_event)
         except _pyserial.SerialException as exc:
             _bt_server_listening = False
