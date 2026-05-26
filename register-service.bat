@@ -1,7 +1,16 @@
 @echo off
-REM Register DentaCare as a Windows service via NSSM. Must be run as admin.
+REM Register DentaCare as a Windows service via NSSM. Self-elevates via UAC,
+REM so a double-click works.
 REM Assumes the staging folder from rebuild.bat lives at dist\staging\.
 REM Used in Phase C smoke tests before the Inno Setup installer exists.
+
+REM Self-elevate if not already admin.
+net session >nul 2>&1
+if errorlevel 1 (
+    echo Requesting administrator privileges...
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b
+)
 
 setlocal
 
@@ -12,13 +21,7 @@ set DATA_DIR=%PROGRAMDATA%\DentaCare
 if not exist "%STAGING_DIR%\DentaCareService.exe" (
     echo ERROR: %STAGING_DIR%\DentaCareService.exe not found.
     echo Run rebuild.bat first.
-    exit /b 1
-)
-
-REM Check for admin privileges via a write to System32.
-net session >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: must run from an elevated command prompt.
+    pause
     exit /b 1
 )
 
@@ -53,4 +56,6 @@ echo === Starting service ===
 echo.
 echo Done. Verify at: http://127.0.0.1:5000/healthz
 echo Logs:           %DATA_DIR%\logs\
+echo.
+pause
 endlocal
