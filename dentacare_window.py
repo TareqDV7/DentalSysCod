@@ -16,6 +16,9 @@ import os
 import subprocess
 import sys
 import threading
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import webview
@@ -50,10 +53,21 @@ class WindowApi:
             pass
 
 
-def _resolve_initial_url() -> str:
+def _resolve_initial_url() -> tuple[str, bool]:
+    """Return (url, booted_on_offline). booted_on_offline=True means the
+    caller should spawn a background poll to swap to SERVICE_URL once the
+    service comes up."""
     if wait_for_service(HEALTHZ_URL, timeout=BOOT_GRACE_SECONDS):
-        return SERVICE_URL
-    return (ASSETS_DIR / 'offline.html').as_uri()
+        return SERVICE_URL, False
+    return (ASSETS_DIR / 'offline.html').as_uri(), True
+
+
+def _service_is_healthy() -> bool:
+    try:
+        with urllib.request.urlopen(HEALTHZ_URL, timeout=1.0) as r:
+            return r.status == 200
+    except (urllib.error.URLError, ConnectionError, OSError, TimeoutError):
+        return False
 
 
 def _open_log_folder():
@@ -127,10 +141,24 @@ class App:
         self.tray_icon = pystray.Icon('DentaCare', image, 'DentaCare', self._build_tray_menu())
         self.tray_icon.run()
 
+    def _recover_when_service_ready(self):
+        # The offline page is loaded from file://, and modern WebView2 blocks
+        # cross-scheme fetches from file:// to http://, so the in-page JS poll
+        # can't reliably recover. Drive recovery from Python instead.
+        while not self._quit_requested:
+            if _service_is_healthy():
+                try:
+                    self.window.load_url(SERVICE_URL)
+                except Exception:
+                    pass
+                return
+            time.sleep(2.0)
+
     def run(self):
+        initial_url, booted_on_offline = _resolve_initial_url()
         self.window = webview.create_window(
             title='DentaCare',
-            url=_resolve_initial_url(),
+            url=initial_url,
             width=self._state.width,
             height=self._state.height,
             x=self._state.x,
@@ -143,6 +171,8 @@ class App:
 
         # Tray must run on a background thread so it doesn't block pywebview.
         threading.Thread(target=self._run_tray, daemon=True).start()
+        if booted_on_offline:
+            threading.Thread(target=self._recover_when_service_ready, daemon=True).start()
 
         webview.start()
 
