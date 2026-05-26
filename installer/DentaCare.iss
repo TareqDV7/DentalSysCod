@@ -111,6 +111,53 @@ begin
   );
 end;
 
+procedure CopyLegacyDatabase;
+var
+  CandidatePaths: array of string;
+  i: Integer;
+  SrcPath, DstPath: string;
+  RespCode: Integer;
+begin
+  // Common legacy locations where the portable .exe stored its DB:
+  //   - Desktop folder of the user who ran the installer
+  //   - Documents
+  //   - C:\DentaCare (some users move the folder to root)
+  SetArrayLength(CandidatePaths, 3);
+  CandidatePaths[0] := ExpandConstant('{userdesktop}\dental_clinic.db');
+  CandidatePaths[1] := ExpandConstant('{userdocs}\dental_clinic.db');
+  CandidatePaths[2] := 'C:\DentaCare\dental_clinic.db';
+
+  DstPath := ExpandConstant('{commonappdata}\DentaCare\dental_clinic.db');
+
+  if FileExists(DstPath) then exit;  // Already migrated or fresh install.
+
+  for i := 0 to GetArrayLength(CandidatePaths) - 1 do begin
+    SrcPath := CandidatePaths[i];
+    if FileExists(SrcPath) then begin
+      RespCode := MsgBox(
+        'Existing DentaCare database found:' + #13#10 + #13#10 +
+        SrcPath + #13#10 + #13#10 +
+        'Copy it to the new location so your patient data carries over?' + #13#10 +
+        '(Original will be left in place as a backup.)',
+        mbConfirmation, MB_YESNO or MB_DEFBUTTON1);
+      if RespCode = IDYES then begin
+        FileCopy(SrcPath, DstPath, False);
+      end;
+      exit;  // Stop at first found, regardless of choice.
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // ssPostInstall runs after files are copied but before [Run] steps. We
+  // migrate the DB here so the service starts with the customer's data
+  // already in the new location.
+  if CurStep = ssPostInstall then begin
+    CopyLegacyDatabase;
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Response: Integer;
