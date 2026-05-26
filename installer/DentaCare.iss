@@ -92,8 +92,8 @@ Filename: "{app}\nssm.exe"; Parameters: "start DentaCare"; Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch DentaCare"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{app}\nssm.exe"; Parameters: "stop DentaCare";           Flags: runhidden
-Filename: "{app}\nssm.exe"; Parameters: "remove DentaCare confirm"; Flags: runhidden
+Filename: "{app}\nssm.exe"; Parameters: "stop DentaCare";           Flags: runhidden; RunOnceId: "stopDentaCareService"
+Filename: "{app}\nssm.exe"; Parameters: "remove DentaCare confirm"; Flags: runhidden; RunOnceId: "removeDentaCareService"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -141,7 +141,7 @@ begin
         '(Original will be left in place as a backup.)',
         mbConfirmation, MB_YESNO or MB_DEFBUTTON1);
       if RespCode = IDYES then begin
-        FileCopy(SrcPath, DstPath, False);
+        CopyFile(SrcPath, DstPath, False);
       end;
       exit;  // Stop at first found, regardless of choice.
     end;
