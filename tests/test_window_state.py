@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from window.window_state import load_window_state, save_window_state, WindowState
+from window.window_state import (
+    is_hidden_geometry,
+    load_window_state,
+    save_window_state,
+    WindowState,
+)
 
 
 def test_save_then_load_roundtrip(tmp_path):
@@ -56,3 +61,34 @@ def test_save_does_not_raise_on_permission_error(tmp_path, monkeypatch):
     monkeypatch.setattr('builtins.open', bad_open)
     # Should not raise.
     save_window_state(WindowState(x=0, y=0, width=100, height=100), tmp_path / 'x.json')
+
+
+def test_is_hidden_geometry_flags_windows_hidden_sentinel():
+    # Windows parks hidden top-level windows at -32000,-32000 with a tiny size.
+    assert is_hidden_geometry(-32000, -32000, 160, 28) is True
+
+
+def test_is_hidden_geometry_flags_only_off_screen_x():
+    assert is_hidden_geometry(-32000, 100, 1280, 800) is True
+
+
+def test_is_hidden_geometry_flags_only_off_screen_y():
+    assert is_hidden_geometry(100, -32000, 1280, 800) is True
+
+
+def test_is_hidden_geometry_flags_implausibly_small_size():
+    # No off-screen coord but dimensions too small to be a real window.
+    assert is_hidden_geometry(100, 100, 200, 100) is True
+
+
+def test_is_hidden_geometry_accepts_normal_windows():
+    assert is_hidden_geometry(0, 0, 1280, 800) is False
+    assert is_hidden_geometry(100, 200, 1600, 900) is False
+    # None coords (WM-chosen) with normal size are also fine.
+    assert is_hidden_geometry(None, None, 1280, 800) is False
+
+
+def test_is_hidden_geometry_accepts_negative_but_on_screen_coords():
+    # A window pulled slightly off the left edge is still legitimately placed;
+    # only the -32000 sentinel range counts as hidden.
+    assert is_hidden_geometry(-200, 100, 1280, 800) is False

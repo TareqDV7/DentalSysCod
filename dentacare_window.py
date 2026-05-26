@@ -28,7 +28,12 @@ import pystray
 from window.data_dir import resolve_data_dir
 from window.health_check import wait_for_service
 from window.single_instance import SingleInstanceGuard
-from window.window_state import WindowState, load_window_state, save_window_state
+from window.window_state import (
+    WindowState,
+    is_hidden_geometry,
+    load_window_state,
+    save_window_state,
+)
 
 
 SERVICE_URL = 'http://127.0.0.1:5000'
@@ -90,15 +95,13 @@ class App:
 
     def _save_state(self):
         try:
-            save_window_state(
-                WindowState(
-                    width=int(self.window.width or self._state.width),
-                    height=int(self.window.height or self._state.height),
-                    x=int(self.window.x) if self.window.x is not None else None,
-                    y=int(self.window.y) if self.window.y is not None else None,
-                ),
-                WINDOW_STATE_PATH,
-            )
+            w = int(self.window.width or 0)
+            h = int(self.window.height or 0)
+            x = int(self.window.x) if self.window.x is not None else None
+            y = int(self.window.y) if self.window.y is not None else None
+            if is_hidden_geometry(x, y, w, h):
+                return
+            save_window_state(WindowState(width=w, height=h, x=x, y=y), WINDOW_STATE_PATH)
         except Exception:
             pass
 

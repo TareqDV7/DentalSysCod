@@ -15,6 +15,26 @@ from typing import Optional
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 800
 
+# Windows parks hidden top-level windows at coords like (-32000, -32000) and
+# may report a tiny dummy size. Treat anything that crosses these thresholds
+# as "the window is currently hidden, ignore its geometry."
+_HIDDEN_COORD_THRESHOLD = -10000
+_MIN_REAL_WIDTH = 400
+_MIN_REAL_HEIGHT = 300
+
+
+def is_hidden_geometry(x, y, width, height) -> bool:
+    """Return True if the given window geometry looks like a hidden/minimized
+    Windows window (off-screen sentinel coords or implausibly small size).
+    Callers use this to skip persisting bogus state right before close."""
+    if x is not None and x < _HIDDEN_COORD_THRESHOLD:
+        return True
+    if y is not None and y < _HIDDEN_COORD_THRESHOLD:
+        return True
+    if width < _MIN_REAL_WIDTH or height < _MIN_REAL_HEIGHT:
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class WindowState:
