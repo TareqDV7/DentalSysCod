@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-05-27
+
+- **Standalone Windows desktop app — `DentaCare-Setup.exe` installer (v1.1.0).** Converts DentaCare from a portable browser-served Flask app into a real Windows desktop application. Customers now download one `DentaCare-Setup.exe`, double-click, and after the wizard finishes they get a service that auto-starts on boot plus a Start-Menu window. The clinic data dir moves from the user's Desktop to `C:\ProgramData\DentaCare\` (so Defender Controlled Folder Access no longer blocks it — see [Windows CFA gotcha in earlier work]), and existing portable installs are detected during install and the legacy `dental_clinic.db` is offered for one-click migration. Source-mode dev workflow (`python dental_clinic.py`) is unchanged.
+  - **Two-binary split.** `DentaCareService.exe` is the headless Flask service (gated on `CLINIC_HEADLESS=1`, no browser auto-open). `DentaCare.exe` is a pywebview launcher with a native Windows window, tray icon, close-to-hide, single-instance guard via named mutex, offline-recovery page when the service is unreachable, and persistent window geometry. Both built from the same `DentaCare.spec` PyInstaller spec.
+  - **NSSM-supervised service.** Installer registers `DentaCare` as an auto-start service running as `LocalSystem` with log rotation at 10 MB. Crashes restart automatically (verified §4.2). Service stdout/stderr land in `C:\ProgramData\DentaCare\logs\`.
+  - **Inno Setup 6 installer.** `installer\DentaCare.iss` produces a ~57 MB `DentaCare-Setup.exe` that installs WebView2 Evergreen if missing, provisions a Bluetooth Incoming SPP COM port via `installer\provision_bt.ps1` (falls back to opening the Bluetooth COM Ports dialog), registers the service, migrates legacy DBs, and on uninstall preserves `C:\ProgramData\DentaCare\` behind a default-No prompt.
+  - **Smoke-test fixes shipped during validation:**
+    - `667f55c` Offline-page recovery is now driven from Python (the in-page JS poll couldn't recover because WebView2 blocks `fetch()` from a `file://` page to an `http://` origin). The launcher polls health from Python and reloads the window directly.
+    - `a844f0c` `register-service.bat` / `unregister-service.bat` self-elevate via UAC and pause on exit so customers can read errors instead of the cmd window vanishing.
+    - `c5913ba` `window-state.json` no longer persists the Windows hidden-window sentinel (`-32000, -32000, 160×28`) — close-to-hide used to leave that geometry on disk and the next launch would open invisible. New `is_hidden_geometry()` helper with 6 unit tests.
+    - `d0b60b8` Inno Setup compile is warning-clean (`RunOnceId` for the BT provisioning step, `FileCopy` → `CopyFile` for the legacy DB migration).
+  - **Tests**: 193 passing across 26 suites (was 187 — added `test_window_state.py` for `is_hidden_geometry()`).
+
 ## 2026-05-24
 
 - **Bluetooth sync diagnostics — fix opaque "bt pairing failed" error.** First-hardware test of the BT-SPP fallback (paired Android phone ↔ Windows clinic PC) surfaced two diagnostic gaps that made the failure impossible to triage: the phone showed a generic *"bt pairing failed"* snackbar no matter what actually broke, and the desktop Settings → Bluetooth Sync card showed nothing about which phones were paired, which had connected, or whether the daemon was even listening. Both sides now surface real information.
