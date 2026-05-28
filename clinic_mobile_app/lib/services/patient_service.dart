@@ -132,18 +132,38 @@ class PatientService {
   Future<List<Followup>> getPatientFollowups(int patientId) =>
       _db.getPatientFollowups(patientId);
 
-  Future<int> addFollowup(Followup f) {
-    return _db.upsertFollowup(
+  Future<int> addFollowup(Followup f) async {
+    final id = await _db.upsertFollowup(
         f.copyWith(updatedAt: DateTime.now().toIso8601String(), isSynced: false));
+    await _syncLabExpense(id, f);
+    return id;
   }
 
-  Future<int> updateFollowup(Followup f) {
-    return _db.upsertFollowup(
+  Future<int> updateFollowup(Followup f) async {
+    final id = await _db.upsertFollowup(
         f.copyWith(updatedAt: DateTime.now().toIso8601String(), isSynced: false));
+    await _syncLabExpense(id, f);
+    return id;
   }
 
-  Future<void> deleteFollowup({required int patientId, required int id}) =>
-      _db.deleteFollowup(id: id, patientId: patientId);
+  Future<void> deleteFollowup({required int patientId, required int id}) async {
+    await _db.deleteFollowupLabExpense(id);
+    await _db.deleteFollowup(id: id, patientId: patientId);
+  }
+
+  /// Materialise / update / remove the postponed lab expense that mirrors a
+  /// follow-up's lab cost (desktop parity). Runs only on user writes, so a
+  /// follow-up synced from another device doesn't spawn a duplicate.
+  Future<void> _syncLabExpense(int followupId, Followup f) async {
+    final patient = await _db.getPatient(f.patientId);
+    await _db.syncFollowupLabExpense(
+      followupId: followupId,
+      labExpense: f.labExpense,
+      category: f.treatmentProcedure,
+      expenseDate: f.followupDate,
+      patientName: patient?.fullName,
+    );
+  }
 }
 
 extension _VisitExt on Visit {

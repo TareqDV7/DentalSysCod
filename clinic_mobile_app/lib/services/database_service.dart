@@ -22,7 +22,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 4, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 5, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -65,6 +65,12 @@ class DatabaseService {
       await db.execute(_idxPlansPatient);
       await db.execute(_createHolidays);
       await db.execute(_idxHolidaysDate);
+    }
+    if (oldVersion < 5) {
+      // Link auto-created lab expenses back to their follow-up (mirrors the
+      // server's expenses.source_type / reference_id).
+      await db.execute('ALTER TABLE expenses ADD COLUMN source_type TEXT');
+      await db.execute('ALTER TABLE expenses ADD COLUMN reference_id INTEGER');
     }
   }
 
@@ -197,6 +203,8 @@ class DatabaseService {
         status TEXT DEFAULT 'paid',
         vendor TEXT,
         notes TEXT,
+        source_type TEXT,
+        reference_id INTEGER,
         updated_at TEXT,
         is_synced INTEGER DEFAULT 0
       )
@@ -503,6 +511,71 @@ class DatabaseService {
     final db = await database;
     await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
     await recordTombstone('expenses', id);
+  }
+
+  /// Keep the auto-created lab expense for a follow-up in step with its lab
+  /// cost — mirrors the desktop's follow-up handler. Called only from the
+  /// user-action path (PatientService), never from the sync-merge path, so a
+  /// follow-up arriving over sync (which brings its own already-materialised
+  /// expense row) doesn't get a duplicate. Keyed on
+  /// (source_type='followup', reference_id=followupId):
+  ///   lab>0  → upsert a 'postponed' expense in place (stable id, marked unsynced)
+  ///   lab<=0 → delete the linked expense (+ tombstone) if one exists
+  Future<void> syncFollowupLabExpense({
+    required int followupId,
+    required double labExpense,
+    required String category,
+    String? expenseDate,
+    String? patientName,
+  }) async {
+    final db = await database;
+    final existing = await db.query('expenses',
+        where: "source_type = 'followup' AND reference_id = ?",
+        whereArgs: [followupId],
+        limit: 1);
+
+    if (labExpense <= 0) {
+      for (final row in existing) {
+        await deleteExpense(row['id'] as int);
+      }
+      return;
+    }
+
+    final now = DateTime.now().toIso8601String();
+    final data = {
+      'category': category.isEmpty ? 'Lab' : category,
+      'amount': labExpense,
+      'expense_date': expenseDate,
+      'status': 'postponed',
+      'vendor': patientName,
+      'notes': patientName == null
+          ? 'Auto from follow-up'
+          : 'Auto from follow-up: $patientName - $category',
+      'source_type': 'followup',
+      'reference_id': followupId,
+      'updated_at': now,
+      'is_synced': 0,
+    };
+    if (existing.isNotEmpty) {
+      await db.update('expenses', data,
+          where: 'id = ?', whereArgs: [existing.first['id']]);
+    } else {
+      await db.insert('expenses', data,
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+  }
+
+  /// Drop the auto-created lab expense(s) linked to a follow-up (used when the
+  /// follow-up itself is deleted).
+  Future<void> deleteFollowupLabExpense(int followupId) async {
+    final db = await database;
+    final rows = await db.query('expenses',
+        columns: ['id'],
+        where: "source_type = 'followup' AND reference_id = ?",
+        whereArgs: [followupId]);
+    for (final row in rows) {
+      await deleteExpense(row['id'] as int);
+    }
   }
 
   // ── Follow-ups ────────────────────────────────────────────────────────────
