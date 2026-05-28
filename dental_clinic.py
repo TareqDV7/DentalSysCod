@@ -10103,9 +10103,31 @@ def medical_images():
         INSERT INTO medical_images (patient_id, file_name, file_path, notes)
         VALUES (?, ?, ?, ?)
     ''', (patient_id, file.filename, str(file_path), notes))
+    new_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    # Return the new id so clients (e.g. the mobile app) can reconcile the
+    # uploaded row against the catalog they fetch back via GET.
+    return jsonify({'success': True, 'id': new_id})
+
+
+@app.route('/api/medical-images/<int:image_id>/file')
+def medical_image_file(image_id):
+    """Stream the stored bytes for one medical image so non-browser clients
+    (the mobile app) can download and cache it. The desktop UI embeds images
+    inline, but the mobile app needs the raw file to view/sync. file_path is
+    written by our own upload handler, so it is not request-controlled."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT file_path, file_name FROM medical_images WHERE id = ?', (image_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Image not found'}), 404
+    file_path = row[0]
+    if not file_path or not Path(file_path).exists():
+        return jsonify({'error': 'File missing'}), 404
+    return send_file(file_path, download_name=row[1] or Path(file_path).name)
 
 @app.route('/api/support', methods=['GET', 'POST'])
 def support_messages():
