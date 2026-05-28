@@ -715,6 +715,8 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
   final _subtotal = TextEditingController();
   final _discount = TextEditingController(text: '0');
   final _paid = TextEditingController();
+  final _credit = TextEditingController(text: '0');
+  double _availableCredit = 0;
   String _method = 'Cash';
   bool _saving = false;
 
@@ -751,12 +753,18 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
       final subtotal = AmountExpr.parse(_subtotal.text);
       final discount = AmountExpr.parse(_discount.text);
       final paid = AmountExpr.parse(_paid.text);
+      // Credit applied can't exceed what's available.
+      final creditUsed = _availableCredit <= 0
+          ? 0.0
+          : (AmountExpr.evaluate(_credit.text) ?? 0)
+              .clamp(0.0, _availableCredit);
       await widget.onSaved(BillingRecord(
         patientId: _patient!.id!,
         patientName: _patient!.fullName,
         subtotal: subtotal.value,
         discount: discount.value,
         paidAmount: paid.value,
+        creditUsed: creditUsed.toDouble(),
         subtotalExpr: subtotal.expr,
         discountExpr: discount.expr,
         paidAmountExpr: paid.expr,
@@ -771,9 +779,14 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
     }
   }
 
+  Future<void> _loadCredit(Patient p) async {
+    final c = await context.read<AppState>().db.getPatientCreditBalance(p.id!);
+    if (mounted) setState(() => _availableCredit = c);
+  }
+
   @override
   void dispose() {
-    for (final c in [_subtotal, _discount, _paid]) {
+    for (final c in [_subtotal, _discount, _paid, _credit]) {
       c.dispose();
     }
     super.dispose();
@@ -825,7 +838,13 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
                         .map((p) => DropdownMenuItem(
                             value: p, child: Text(p.fullName)))
                         .toList(),
-                    onChanged: (p) => setState(() => _patient = p),
+                    onChanged: (p) {
+                      setState(() {
+                        _patient = p;
+                        _availableCredit = 0;
+                      });
+                      if (p != null) _loadCredit(p);
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -845,6 +864,17 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
                       decoration: const InputDecoration(
                           labelText: 'Amount Paid (₪)', prefixText: '₪ '),
                       keyboardType: TextInputType.text),
+                  if (_availableCredit > 0) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                        controller: _credit,
+                        decoration: InputDecoration(
+                            labelText: 'Use Credit (₪)',
+                            prefixText: '₪ ',
+                            helperText:
+                                'Available: ₪${_availableCredit.toStringAsFixed(2)}'),
+                        keyboardType: TextInputType.text),
+                  ],
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     initialValue: _method,

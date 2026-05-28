@@ -5,6 +5,7 @@ class BillingRecord {
   final double subtotal;
   final double discount;
   final double paidAmount;
+  final double creditUsed;
   final String? paymentMethod;
   final String? paymentDate;
   // Verbatim arithmetic the user typed ("20+20"), kept for display. null = plain.
@@ -21,6 +22,7 @@ class BillingRecord {
     required this.subtotal,
     this.discount = 0,
     required this.paidAmount,
+    this.creditUsed = 0,
     this.paymentMethod,
     this.paymentDate,
     this.subtotalExpr,
@@ -31,7 +33,7 @@ class BillingRecord {
   });
 
   double get total => subtotal - discount;
-  double get balanceDue => total - paidAmount;
+  double get balanceDue => total - paidAmount - creditUsed;
 
   String get statusLabel {
     if (balanceDue <= 0) return 'Paid';
@@ -46,6 +48,7 @@ class BillingRecord {
         subtotal: _d(j['subtotal'] ?? j['amount'] ?? 0),
         discount: _d(j['discount'] ?? 0),
         paidAmount: _d(j['paid_amount'] ?? 0),
+        creditUsed: _d(j['credit_used'] ?? 0),
         paymentMethod: j['payment_method'],
         paymentDate: j['payment_date'],
         subtotalExpr: j['subtotal_expr']?.toString(),
@@ -62,6 +65,7 @@ class BillingRecord {
         subtotal: _d(row['subtotal'] ?? 0),
         discount: _d(row['discount'] ?? 0),
         paidAmount: _d(row['paid_amount'] ?? 0),
+        creditUsed: _d(row['credit_used'] ?? 0),
         paymentMethod: row['payment_method'],
         paymentDate: row['payment_date'],
         subtotalExpr: row['subtotal_expr'] as String?,
@@ -78,6 +82,7 @@ class BillingRecord {
         'subtotal': subtotal,
         'discount': discount,
         'paid_amount': paidAmount,
+        'credit_used': creditUsed,
         'payment_method': paymentMethod,
         'payment_date': paymentDate,
         'subtotal_expr': subtotalExpr,
@@ -93,6 +98,7 @@ class BillingRecord {
         'subtotal': subtotal,
         'discount': discount,
         'paid_amount': paidAmount,
+        'credit_used': creditUsed,
         if (paymentMethod != null) 'payment_method': paymentMethod,
         if (paymentDate != null) 'payment_date': paymentDate,
       };

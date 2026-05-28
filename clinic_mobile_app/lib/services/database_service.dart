@@ -23,7 +23,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 6, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 7, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -50,6 +50,23 @@ class DatabaseService {
       deleted_at TEXT NOT NULL,
       is_synced INTEGER DEFAULT 0,
       UNIQUE(table_name, row_id)
+    )
+  ''';
+
+  // Manual credit adjustments + credit-used debits, signed so SUM(amount) is
+  // the running manual balance. Local-only: the server does NOT sync this table
+  // (it's absent from the desktop's SYNC_TABLES), so manual adjustments stay on
+  // the node they were entered on — same limitation the desktop has. The
+  // overpayment part of credit is derived from follow-ups, which DO sync.
+  static const String _createCreditTransactions = '''
+    CREATE TABLE IF NOT EXISTS patient_credit_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      patient_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      type TEXT NOT NULL,
+      note TEXT DEFAULT '',
+      invoice_id INTEGER,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   ''';
 
@@ -87,6 +104,11 @@ class DatabaseService {
       for (final c in const ['subtotal_expr', 'discount_expr', 'paid_amount_expr']) {
         await _addColumnIfMissing(db, 'billing_records', c, 'TEXT');
       }
+    }
+    if (oldVersion < 7) {
+      await _addColumnIfMissing(
+          db, 'billing_records', 'credit_used', 'REAL DEFAULT 0');
+      await db.execute(_createCreditTransactions);
     }
   }
 
@@ -218,6 +240,7 @@ class DatabaseService {
         subtotal REAL NOT NULL,
         discount REAL DEFAULT 0,
         paid_amount REAL NOT NULL,
+        credit_used REAL DEFAULT 0,
         payment_method TEXT,
         payment_date TEXT,
         subtotal_expr TEXT,
@@ -271,6 +294,7 @@ class DatabaseService {
     await db.execute(_idxPlansPatient);
     await db.execute(_createHolidays);
     await db.execute(_idxHolidaysDate);
+    await db.execute(_createCreditTransactions);
   }
 
   // ── Patients ──────────────────────────────────────────────────────────────
@@ -646,6 +670,75 @@ class DatabaseService {
     for (final row in rows) {
       await deleteExpense(row['id'] as int);
     }
+  }
+
+  // ── Patient credit ────────────────────────────────────────────────────────
+
+  /// The patient's credit balance — money the clinic holds *for* the patient.
+  /// Mirrors the desktop's get_patient_credit_balance: follow-up overpayment
+  /// (`Σ payment − Σ(price − discount)`) plus signed manual transactions,
+  /// clamped at zero.
+  Future<double> getPatientCreditBalance(int patientId) async {
+    final db = await database;
+    final f = (await db.rawQuery(
+      'SELECT COALESCE(SUM(price),0) p, COALESCE(SUM(discount),0) d, '
+      'COALESCE(SUM(payment),0) pay FROM followups WHERE patient_id = ?',
+      [patientId],
+    )).first;
+    final overpaid = (f['pay'] as num).toDouble() -
+        ((f['p'] as num).toDouble() - (f['d'] as num).toDouble());
+    final t = (await db.rawQuery(
+      'SELECT COALESCE(SUM(amount),0) s FROM patient_credit_transactions '
+      'WHERE patient_id = ?',
+      [patientId],
+    )).first;
+    final manual = (t['s'] as num).toDouble();
+    final bal = overpaid + manual;
+    return bal <= 0 ? 0 : (bal * 100).round() / 100;
+  }
+
+  Future<List<Map<String, dynamic>>> getCreditTransactions(
+      int patientId) async {
+    final db = await database;
+    return db.query('patient_credit_transactions',
+        where: 'patient_id = ?', whereArgs: [patientId], orderBy: 'id DESC');
+  }
+
+  /// Record a manual credit adjustment (signed: + adds, − uses).
+  Future<void> addCreditAdjustment(
+      int patientId, double amount, String note) async {
+    final db = await database;
+    await db.insert('patient_credit_transactions', {
+      'patient_id': patientId,
+      'amount': amount,
+      'type': amount >= 0 ? 'credit' : 'debit',
+      'note': note.trim().isEmpty ? 'Manual adjustment' : note.trim(),
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// Record the debit created when credit is applied to a billing record.
+  Future<void> recordCreditUsed(
+      int patientId, int? invoiceId, double creditUsed) async {
+    if (creditUsed <= 0) return;
+    final db = await database;
+    await db.insert('patient_credit_transactions', {
+      'patient_id': patientId,
+      'amount': -creditUsed,
+      'type': 'debit',
+      'note': invoiceId == null
+          ? 'Applied to invoice'
+          : 'Applied to invoice $invoiceId',
+      'invoice_id': invoiceId,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// Reverse any credit debit tied to a billing record (used on delete).
+  Future<void> clearCreditForInvoice(int invoiceId) async {
+    final db = await database;
+    await db.delete('patient_credit_transactions',
+        where: 'invoice_id = ?', whereArgs: [invoiceId]);
   }
 
   // ── Follow-ups ────────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   List<Followup> _followups = [];
   List<Appointment> _appointments = [];
   List<TreatmentPlan> _plans = [];
+  double _credit = 0;
   bool _loading = true;
   bool _editing = false;
   late Patient _patient;
@@ -60,14 +61,71 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     final followups = await state.patients.getPatientFollowups(_patient.id!);
     final appts = await state.appointments.getPatientAppointments(_patient.id!);
     final plans = await state.db.getPatientTreatmentPlans(_patient.id!);
+    final credit = await state.db.getPatientCreditBalance(_patient.id!);
     if (mounted) {
       setState(() {
         _followups = followups;
         _appointments = appts;
         _plans = plans;
+        _credit = credit;
         _loading = false;
       });
     }
+  }
+
+  Future<void> _adjustCredit() async {
+    final db = context.read<AppState>().db;
+    final amountCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+    var add = true;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: const Text('Adjust credit'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: true, label: Text('Add credit')),
+                  ButtonSegment(value: false, label: Text('Use credit')),
+                ],
+                selected: {add},
+                onSelectionChanged: (s) => setLocal(() => add = s.first),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: amountCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                    labelText: 'Amount (₪)', prefixText: '₪ '),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: noteCtrl,
+                decoration: const InputDecoration(labelText: 'Note (optional)'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Save')),
+          ],
+        ),
+      ),
+    );
+    if (saved != true) return;
+    final magnitude = double.tryParse(amountCtrl.text.trim()) ?? 0;
+    if (magnitude <= 0) return;
+    final signed = add ? magnitude : -magnitude;
+    await db.addCreditAdjustment(_patient.id!, signed, noteCtrl.text);
+    if (mounted) _load();
   }
 
   void _addPlan() {
@@ -229,6 +287,11 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
         actions: [
           if (!_editing)
             IconButton(
+                tooltip: 'Adjust credit',
+                onPressed: _adjustCredit,
+                icon: const Icon(Icons.account_balance_wallet_outlined)),
+          if (!_editing)
+            IconButton(
                 tooltip: t('payment_history'),
                 onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                     builder: (_) =>
@@ -345,6 +408,18 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                                 style: TextStyle(
                                     fontSize: 11,
                                     color: scheme.onSurfaceVariant)),
+                            if (_credit > 0) ...[
+                              const SizedBox(height: 4),
+                              Text('₪${fmt.format(_credit)}',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      color: Color(0xFF1F9A5F),
+                                      fontSize: 13)),
+                              Text('credit',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: scheme.onSurfaceVariant)),
+                            ],
                           ],
                         ),
                       ],

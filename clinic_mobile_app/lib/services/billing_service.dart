@@ -22,12 +22,20 @@ class BillingService {
       subtotal: b.subtotal,
       discount: b.discount,
       paidAmount: b.paidAmount,
+      creditUsed: b.creditUsed,
       paymentMethod: b.paymentMethod,
       paymentDate: b.paymentDate ?? now.substring(0, 10),
+      subtotalExpr: b.subtotalExpr,
+      discountExpr: b.discountExpr,
+      paidAmountExpr: b.paidAmountExpr,
       updatedAt: now,
       isSynced: false,
     );
     final localId = await _db.upsertBillingRecord(local);
+    // Applying credit draws down the patient's balance via a debit transaction.
+    if (b.creditUsed > 0) {
+      await _db.recordCreditUsed(b.patientId, localId, b.creditUsed);
+    }
 
     try {
       final res = await _api.post('/api/billing', body: local.toJson());
