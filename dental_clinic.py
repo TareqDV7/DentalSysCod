@@ -11838,6 +11838,19 @@ def _bt_serve_session(stream_in, stream_out, db_path=None):
             conn.commit()
             if 'error' in resp and resp['error'] == 'unauthorized':
                 return processed_any
+            # Terminal ops: the mobile client closes its BT connection right
+            # after these (sync_import ends a sync round-trip; bt_pair is a
+            # one-shot handshake on its own connection). Return now instead of
+            # looping back into a blocking read — a Windows BT-SPP COM port
+            # doesn't surface the peer's disconnect as a prompt EOF, so the
+            # daemon would otherwise sit on the dead session for the full read
+            # budget (~30s), during which the still-open port won't accept the
+            # phone's next incoming connection (it fails with a connect error
+            # every cycle after the first). Returning lets the daemon close +
+            # reopen the port (~1s) and be listening again before the phone's
+            # next 30s tick.
+            if req.get('op') in ('sync_import', 'bt_pair'):
+                return processed_any
     finally:
         try:
             conn.close()
