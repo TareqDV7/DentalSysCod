@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -6,6 +7,7 @@ import '../state/app_state.dart';
 import '../models/appointment.dart';
 import '../models/patient.dart';
 import '../models/treatment_procedure.dart';
+import '../models/followup.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
@@ -297,6 +299,16 @@ class _AppointmentTile extends StatelessWidget {
               ),
             const Divider(height: 1),
             ListTile(
+              leading: const Icon(Icons.medical_services_outlined),
+              title: Text(
+                  isArabic ? 'تحويل إلى زيارة' : 'Convert to follow-up'),
+              subtitle: Text(isArabic
+                  ? 'إنشاء سجل متابعة ووضع علامة مكتمل'
+                  : 'Creates a follow-up entry and marks completed'),
+              onTap: () => Navigator.pop(sheetCtx, '__convert__'),
+            ),
+            const Divider(height: 1),
+            ListTile(
               leading: const Icon(Icons.delete_outline, color: Color(0xFFD9434E)),
               title: Text(isArabic ? 'حذف الموعد' : 'Delete appointment',
                   style: const TextStyle(color: Color(0xFFD9434E))),
@@ -313,6 +325,36 @@ class _AppointmentTile extends StatelessWidget {
     if (picked == '__delete__') {
       await app.appointments.deleteAppointment(id);
       onChanged?.call();
+      return;
+    }
+
+    if (picked == '__convert__') {
+      try {
+        await app.patients.addFollowup(Followup(
+          patientId: appointment.patientId,
+          followupDate: DateFormatHelper.formatDateForApi(appointment.dateTime),
+          treatmentProcedure: (appointment.treatmentType == null ||
+                  appointment.treatmentType!.trim().isEmpty)
+              ? (isArabic ? 'زيارة' : 'Visit')
+              : appointment.treatmentType!,
+        ));
+        await app.appointments.updateStatus(id, 'completed');
+        unawaited(app.sync.syncNow());
+        onChanged?.call();
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(isArabic
+                  ? 'تم إنشاء سجل المتابعة'
+                  : 'Follow-up created from appointment')));
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(isArabic
+                  ? 'تعذّر التحويل: $e'
+                  : 'Could not convert: $e')));
+        }
+      }
       return;
     }
     if (picked != appointment.status) {
