@@ -129,18 +129,10 @@ def _add_no_cache_headers(response):
         response.headers['Expires'] = '0'
     return response
 
-# Where the database / uploads / backups live.
-#  - CLINIC_DATA_DIR overrides everything (used by the Docker / cloud deployment
-#    to point at a mounted volume).
-#  - frozen exe  -> next to the executable
-#  - dev / source -> next to this script
-_DATA_DIR_ENV = os.environ.get('CLINIC_DATA_DIR', '').strip()
-if _DATA_DIR_ENV:
-    _DATA_DIR = Path(_DATA_DIR_ENV)
-elif getattr(sys, 'frozen', False):
-    _DATA_DIR = Path(sys.executable).parent
-else:
-    _DATA_DIR = Path(__file__).parent
+# Where the database / uploads / backups live. See window/data_dir.py for the
+# resolution rules (env var > frozen-exe ProgramData > source script dir).
+from window.data_dir import resolve_data_dir
+_DATA_DIR = resolve_data_dir()
 _BUNDLE_DIR = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -12133,7 +12125,16 @@ if __name__ == '__main__':
     except Exception:
         pass
 
-    threading.Thread(target=open_browser, kwargs={'port': port}, daemon=True).start()
+    # Skip browser auto-open for the headless service. The pywebview window
+    # launcher (DentaCare.exe) is the customer-facing UI in packaged mode;
+    # opening a browser tab too would be redundant. CLINIC_HEADLESS=1 is set
+    # by NSSM in the service registration; CLOUD_MODE always implies headless.
+    headless = (
+        os.environ.get('CLINIC_HEADLESS', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+        or CLOUD_MODE
+    )
+    if not headless:
+        threading.Thread(target=open_browser, kwargs={'port': port}, daemon=True).start()
 
     # Automatic database backups (production runs only — in debug the reloader
     # would spawn the worker twice, and source checkouts have git anyway).

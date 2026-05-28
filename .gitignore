@@ -30,6 +30,11 @@ Thumbs.db
 *.exe
 *.msi
 
+# ...except these vendor binaries (pinned versions, MIT-licensed, redistributed
+# alongside the installer to remove setup friction for downstream packagers)
+!installer/nssm.exe
+!installer/MicrosoftEdgeWebview2Setup.exe
+
 # Uploads
 uploads/*
 !uploads/.gitkeep
@@ -54,7 +59,6 @@ scan_*.py
 verify_arabic.py
 verify_enc.py
 cleanup.ps1
-rebuild.bat
 *.diff
 *.rar
 

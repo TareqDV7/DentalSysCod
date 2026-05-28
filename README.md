@@ -35,8 +35,12 @@ A self-contained dental clinic management platform with a Flask web portal and a
 
 ### Desktop server
 
+**Customers:** Download `DentaCare-Setup.exe` from the releases page, double-click, follow the wizard. After install, DentaCare runs as a Windows service (`DentaCare` in `services.msc`) in the background; click the Start Menu icon to open the window. The service auto-starts on Windows boot, so mobile sync stays alive even when the window is closed.
+
+**Developers (running from source):**
+
 ```bash
-# Windows — double-click start.bat in Explorer, or from a terminal:
+# Windows
 py dental_clinic.py
 .\start.bat
 
@@ -44,9 +48,11 @@ py dental_clinic.py
 python3 dental_clinic.py
 ```
 
-Dependencies (`Flask`, `Flask-CORS`, `waitress`) are installed automatically on first run. The browser opens at `http://localhost:5000` automatically — which lands on the sign-in page.
+Dependencies (`Flask`, `Flask-CORS`, `waitress`, plus `pywebview` + `pystray` + `Pillow` for the window app) are installed via `pip install -r requirements.txt`. Source mode opens the system default browser at `http://localhost:5000` with Werkzeug's auto-reloader active.
 
-> **Windows note** — if double-clicking `dental_clinic.py` raises the OS dialog *"The application was unable to start correctly (0xc0000022)"*, that's Defender's **Controlled Folder Access** rejecting an interactive launch when the project lives under a protected folder (`%userprofile%\Desktop` is one by default). `start.bat` goes through `cmd → python.exe` instead of the `.py` shell association, which Defender lets through. The alternative is to whitelist Python in an **admin** PowerShell once: `Add-MpPreference -ControlledFolderAccessAllowedApplications '<path-to-python.exe>'`.
+Set `CLINIC_HEADLESS=1` to skip the browser auto-open (useful when testing the window app: in a second terminal, `python dentacare_window.py` opens the pywebview window against the running service).
+
+> **Windows note** — if double-clicking `dental_clinic.py` raises the OS dialog *"The application was unable to start correctly (0xc0000022)"*, that's Defender's **Controlled Folder Access** rejecting an interactive launch when the project lives under a protected folder (`%userprofile%\Desktop` is one by default). `start.bat` goes through `cmd → python.exe` instead of the `.py` shell association, which Defender lets through. The alternative is to whitelist Python in an **admin** PowerShell once: `Add-MpPreference -ControlledFolderAccessAllowedApplications '<path-to-python.exe>'`. This gotcha doesn't affect customers using the installer — the installer drops files into `Program Files\DentaCare\`, which CFA implicitly trusts.
 
 **First login:** the web portal requires a staff sign-in. On first run a default account is created — username `admin`, password `admin` — and the console prints a reminder to change it. Either set `CLINIC_ADMIN_PASSWORD` before the first run, or change the password afterwards from **Settings → Account → Change Password**.
 
@@ -506,16 +512,37 @@ Covers 10 blocks: summary math, weekly range math, Saturday edge case, receivabl
 
 ---
 
-## Packaging (Windows executable)
+## Packaging (Windows installer)
 
 ```bash
-pyinstaller DentaCare.spec
-# Output: dist/DentaCare.exe
+# Build both binaries + stage the installer payload.
+rebuild.bat
+
+# Compile the Inno Setup installer (requires Inno Setup 6 installed).
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\DentaCare.iss
+# Output: installer\Output\DentaCare-Setup.exe
 ```
 
-Or run `rebuild.bat` (Windows): it wipes the old `build/` and `dist/`, installs PyInstaller, verifies the source, builds via `DentaCare.spec`, and copies the result to `deployment/DentaCare.exe`.
+`rebuild.bat` produces:
 
-The `.spec` file bundles `dental_clinic.py` and `DentaCare.PNG` into a single portable `.exe` — no Python installation required on the target machine. The SQLite database, `uploads/` and `backups/` are created at runtime next to the executable. The `hiddenimports` list includes `waitress`, `markupsafe`, `werkzeug.security` (auth / production server), and `serial` + `serial.tools.list_ports` (Bluetooth-SPP sync — the daemon thread imports `pyserial` lazily but PyInstaller needs them declared up front); keep them there if you regenerate the spec. When frozen, the app defaults to production mode (waitress + automatic backups).
+- `dist\DentaCare.exe` — windowed launcher (pywebview wrapping the Flask UI in a native Windows window)
+- `dist\DentaCareService.exe` — headless Flask service (run by NSSM as a Windows service)
+- `dist\staging\` — installer payload (binaries + `nssm.exe` + `MicrosoftEdgeWebview2Setup.exe` + `provision_bt.ps1` + `DentaCare.PNG`)
+
+The `DentaCare.spec` PyInstaller spec produces both `.exe`s in a single invocation. `hiddenimports` covers `waitress`, `markupsafe`, `werkzeug.security` (auth / production server), `serial` + `serial.tools.list_ports` (Bluetooth-SPP sync), plus `webview` + `pystray` + `PIL` + `clr_loader` (window app only).
+
+The Inno Setup installer (`installer\DentaCare.iss`):
+
+- Installs binaries to `C:\Program Files\DentaCare\`
+- Creates the data folder at `C:\ProgramData\DentaCare\{uploads,backups,logs}\` with `LocalSystem` write access
+- Detects and migrates a legacy portable `dental_clinic.db` if found on the user's Desktop, in Documents, or at `C:\DentaCare\` (default-Yes copy prompt; original left as a safety backup)
+- Installs the WebView2 runtime via the bundled Evergreen Bootstrapper if it isn't already present
+- Runs `installer\provision_bt.ps1` to set up the Incoming SPP COM port (idempotent — no-ops if one already exists; opens the Bluetooth COM Ports dialog if not)
+- Registers DentaCare as an auto-start Windows service via NSSM (`LocalSystem`, log rotation at 10 MB)
+- Adds Start Menu shortcuts; optional Desktop shortcut; optional auto-launch of the window at logon
+- Uninstaller preserves `C:\ProgramData\DentaCare\` by default (default-No prompt before deleting clinic data)
+
+The dev workflow (`python dental_clinic.py` from source → browser at `localhost:5000` with auto-reloader) is untouched. `sys.frozen` detection in `dental_clinic.py:132-145` routes the packaged exe to `%ProgramData%\DentaCare\` while keeping source mode writing next to the script.
 
 ---
 
