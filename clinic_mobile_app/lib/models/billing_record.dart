@@ -7,6 +7,10 @@ class BillingRecord {
   final double paidAmount;
   final String? paymentMethod;
   final String? paymentDate;
+  // Verbatim arithmetic the user typed ("20+20"), kept for display. null = plain.
+  final String? subtotalExpr;
+  final String? discountExpr;
+  final String? paidAmountExpr;
   final String? updatedAt;
   final bool isSynced;
 
@@ -19,6 +23,9 @@ class BillingRecord {
     required this.paidAmount,
     this.paymentMethod,
     this.paymentDate,
+    this.subtotalExpr,
+    this.discountExpr,
+    this.paidAmountExpr,
     this.updatedAt,
     this.isSynced = false,
   });
@@ -41,6 +48,9 @@ class BillingRecord {
         paidAmount: _d(j['paid_amount'] ?? 0),
         paymentMethod: j['payment_method'],
         paymentDate: j['payment_date'],
+        subtotalExpr: j['subtotal_expr']?.toString(),
+        discountExpr: j['discount_expr']?.toString(),
+        paidAmountExpr: j['paid_amount_expr']?.toString(),
         updatedAt: j['updated_at'],
         isSynced: true,
       );
@@ -54,6 +64,9 @@ class BillingRecord {
         paidAmount: _d(row['paid_amount'] ?? 0),
         paymentMethod: row['payment_method'],
         paymentDate: row['payment_date'],
+        subtotalExpr: row['subtotal_expr'] as String?,
+        discountExpr: row['discount_expr'] as String?,
+        paidAmountExpr: row['paid_amount_expr'] as String?,
         updatedAt: row['updated_at'],
         isSynced: (row['is_synced'] ?? 0) == 1,
       );
@@ -67,6 +80,9 @@ class BillingRecord {
         'paid_amount': paidAmount,
         'payment_method': paymentMethod,
         'payment_date': paymentDate,
+        'subtotal_expr': subtotalExpr,
+        'discount_expr': discountExpr,
+        'paid_amount_expr': paidAmountExpr,
         'updated_at': updatedAt ?? DateTime.now().toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
       };

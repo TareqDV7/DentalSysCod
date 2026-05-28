@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../state/app_state.dart';
 import '../utils/date_format_helper.dart';
 import '../utils/app_strings.dart';
+import '../utils/amount_expr.dart';
 import '../models/patient.dart';
 import '../models/followup.dart';
 import '../models/treatment_plan.dart';
@@ -984,10 +985,14 @@ class _FollowupSheetState extends State<_FollowupSheet> {
       _procedure.text = e.treatmentProcedure;
       _selectedProcedureId = e.procedureId;
       _tooth.text = e.toothNo ?? '';
-      _price.text = e.price == 0 ? '' : e.price.toString();
-      _discount.text = e.discount == 0 ? '' : e.discount.toString();
-      _lab.text = e.labExpense == 0 ? '' : e.labExpense.toString();
-      _payment.text = e.payment == 0 ? '' : e.payment.toString();
+      // Prefer the stored expression ("20+20") so editing shows what was typed.
+      _price.text = e.priceExpr ?? (e.price == 0 ? '' : e.price.toString());
+      _discount.text =
+          e.discountExpr ?? (e.discount == 0 ? '' : e.discount.toString());
+      _lab.text =
+          e.labExpenseExpr ?? (e.labExpense == 0 ? '' : e.labExpense.toString());
+      _payment.text =
+          e.paymentExpr ?? (e.payment == 0 ? '' : e.payment.toString());
       _notes.text = e.notes ?? '';
     } else {
       _date = DateFormatHelper.formatDateForApi(DateTime.now());
@@ -1046,6 +1051,12 @@ class _FollowupSheetState extends State<_FollowupSheet> {
     if (_procedure.text.trim().isEmpty) return;
     setState(() => _saving = true);
     final existing = widget.existing;
+    // Money fields accept arithmetic ("20+20"): keep the value for maths and the
+    // expression verbatim for the sheet/statement.
+    final price = AmountExpr.parse(_price.text);
+    final discount = AmountExpr.parse(_discount.text);
+    final lab = AmountExpr.parse(_lab.text);
+    final payment = AmountExpr.parse(_payment.text);
     final f = Followup(
       id: existing?.id,
       patientId: widget.patientId,
@@ -1053,10 +1064,14 @@ class _FollowupSheetState extends State<_FollowupSheet> {
       treatmentProcedure: _procedure.text.trim(),
       procedureId: _selectedProcedureId ?? existing?.procedureId,
       toothNo: _tooth.text.trim().isEmpty ? null : _tooth.text.trim(),
-      price: double.tryParse(_price.text) ?? 0,
-      discount: double.tryParse(_discount.text) ?? 0,
-      labExpense: double.tryParse(_lab.text) ?? 0,
-      payment: double.tryParse(_payment.text) ?? 0,
+      price: price.value,
+      discount: discount.value,
+      labExpense: lab.value,
+      payment: payment.value,
+      priceExpr: price.expr,
+      discountExpr: discount.expr,
+      labExpenseExpr: lab.expr,
+      paymentExpr: payment.expr,
       remainingAmount: existing?.remainingAmount ?? 0,
       notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
     );
@@ -1170,8 +1185,7 @@ class _FollowupSheetState extends State<_FollowupSheet> {
                         decoration: InputDecoration(
                             labelText: '${t('price')} (₪)',
                             prefixText: '₪ '),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
+                        keyboardType: TextInputType.text,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -1181,8 +1195,7 @@ class _FollowupSheetState extends State<_FollowupSheet> {
                         decoration: InputDecoration(
                             labelText: '${t('discount')} (₪)',
                             prefixText: '₪ '),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
+                        keyboardType: TextInputType.text,
                       ),
                     ),
                   ]),
@@ -1194,8 +1207,7 @@ class _FollowupSheetState extends State<_FollowupSheet> {
                         decoration: InputDecoration(
                             labelText: '${t('lab_expense')} (₪)',
                             prefixText: '₪ '),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
+                        keyboardType: TextInputType.text,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -1205,8 +1217,7 @@ class _FollowupSheetState extends State<_FollowupSheet> {
                         decoration: InputDecoration(
                             labelText: '${t('payment_received')} (₪)',
                             prefixText: '₪ '),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
+                        keyboardType: TextInputType.text,
                       ),
                     ),
                   ]),

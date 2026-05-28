@@ -5,6 +5,7 @@ import '../state/app_state.dart';
 import '../models/billing_record.dart';
 import '../models/expense.dart';
 import '../models/patient.dart';
+import '../utils/amount_expr.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
@@ -747,12 +748,18 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
     if (_patient == null) return;
     setState(() => _saving = true);
     try {
+      final subtotal = AmountExpr.parse(_subtotal.text);
+      final discount = AmountExpr.parse(_discount.text);
+      final paid = AmountExpr.parse(_paid.text);
       await widget.onSaved(BillingRecord(
         patientId: _patient!.id!,
         patientName: _patient!.fullName,
-        subtotal: double.tryParse(_subtotal.text) ?? 0,
-        discount: double.tryParse(_discount.text) ?? 0,
-        paidAmount: double.tryParse(_paid.text) ?? 0,
+        subtotal: subtotal.value,
+        discount: discount.value,
+        paidAmount: paid.value,
+        subtotalExpr: subtotal.expr,
+        discountExpr: discount.expr,
+        paidAmountExpr: paid.expr,
         paymentMethod: _method,
         paymentDate: DateTime.now().toIso8601String().substring(0, 10),
       ));
@@ -825,19 +832,19 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
                       controller: _subtotal,
                       decoration: const InputDecoration(
                           labelText: 'Amount (₪)', prefixText: '₪ '),
-                      keyboardType: TextInputType.number),
+                      keyboardType: TextInputType.text),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _discount,
                       decoration: const InputDecoration(
                           labelText: 'Discount (₪)', prefixText: '₪ '),
-                      keyboardType: TextInputType.number),
+                      keyboardType: TextInputType.text),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _paid,
                       decoration: const InputDecoration(
                           labelText: 'Amount Paid (₪)', prefixText: '₪ '),
-                      keyboardType: TextInputType.number),
+                      keyboardType: TextInputType.text),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     initialValue: _method,

@@ -15,6 +15,12 @@ class Followup {
   final double payment;
   final double remainingAmount;
   final String? notes;
+  // Verbatim arithmetic the user typed for each money field ("20+20"), kept so
+  // the sheet/statement can show the expression. null = a plain number.
+  final String? priceExpr;
+  final String? discountExpr;
+  final String? labExpenseExpr;
+  final String? paymentExpr;
   final String? updatedAt;
   final bool isSynced;
 
@@ -32,6 +38,10 @@ class Followup {
     this.payment = 0,
     this.remainingAmount = 0,
     this.notes,
+    this.priceExpr,
+    this.discountExpr,
+    this.labExpenseExpr,
+    this.paymentExpr,
     this.updatedAt,
     this.isSynced = false,
   });
@@ -54,6 +64,10 @@ class Followup {
         payment: _num(j['payment']),
         remainingAmount: _num(j['remaining_amount']),
         notes: j['notes']?.toString(),
+        priceExpr: j['price_expr']?.toString(),
+        discountExpr: j['discount_expr']?.toString(),
+        labExpenseExpr: j['lab_expense_expr']?.toString(),
+        paymentExpr: j['payment_expr']?.toString(),
         updatedAt: j['updated_at']?.toString(),
         isSynced: true,
       );
@@ -72,6 +86,10 @@ class Followup {
         payment: _num(row['payment']),
         remainingAmount: _num(row['remaining_amount']),
         notes: row['notes'] as String?,
+        priceExpr: row['price_expr'] as String?,
+        discountExpr: row['discount_expr'] as String?,
+        labExpenseExpr: row['lab_expense_expr'] as String?,
+        paymentExpr: row['payment_expr'] as String?,
         updatedAt: row['updated_at'] as String?,
         isSynced: (row['is_synced'] ?? 0) == 1,
       );
@@ -91,6 +109,10 @@ class Followup {
         'remaining_amount': remainingAmount,
         'clinic_profit': clinicProfit,
         'notes': notes,
+        'price_expr': priceExpr,
+        'discount_expr': discountExpr,
+        'lab_expense_expr': labExpenseExpr,
+        'payment_expr': paymentExpr,
         'updated_at': updatedAt ?? DateTime.now().toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
       };
@@ -108,6 +130,10 @@ class Followup {
     double? payment,
     double? remainingAmount,
     String? notes,
+    String? priceExpr,
+    String? discountExpr,
+    String? labExpenseExpr,
+    String? paymentExpr,
     String? updatedAt,
     bool? isSynced,
   }) =>
@@ -125,6 +151,10 @@ class Followup {
         payment: payment ?? this.payment,
         remainingAmount: remainingAmount ?? this.remainingAmount,
         notes: notes ?? this.notes,
+        priceExpr: priceExpr ?? this.priceExpr,
+        discountExpr: discountExpr ?? this.discountExpr,
+        labExpenseExpr: labExpenseExpr ?? this.labExpenseExpr,
+        paymentExpr: paymentExpr ?? this.paymentExpr,
         updatedAt: updatedAt ?? this.updatedAt,
         isSynced: isSynced ?? this.isSynced,
       );

@@ -22,7 +22,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 5, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 6, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -71,6 +71,32 @@ class DatabaseService {
       // server's expenses.source_type / reference_id).
       await db.execute('ALTER TABLE expenses ADD COLUMN source_type TEXT');
       await db.execute('ALTER TABLE expenses ADD COLUMN reference_id INTEGER');
+    }
+    if (oldVersion < 6) {
+      // Verbatim money-field expressions ("20+20"). Guarded because `followups`
+      // may have just been created with these columns by the <3 path above.
+      for (final c in const [
+        'price_expr',
+        'discount_expr',
+        'lab_expense_expr',
+        'payment_expr'
+      ]) {
+        await _addColumnIfMissing(db, 'followups', c, 'TEXT');
+      }
+      for (final c in const ['subtotal_expr', 'discount_expr', 'paid_amount_expr']) {
+        await _addColumnIfMissing(db, 'billing_records', c, 'TEXT');
+      }
+    }
+  }
+
+  /// ALTER TABLE ADD COLUMN, but a no-op if the column is already there
+  /// (sqlite has no ADD COLUMN IF NOT EXISTS, and migration paths can overlap).
+  Future<void> _addColumnIfMissing(
+      Database db, String table, String column, String type) async {
+    final cols = await db.rawQuery('PRAGMA table_info($table)');
+    final present = cols.any((c) => c['name'] == column);
+    if (!present) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
     }
   }
 
@@ -123,6 +149,10 @@ class DatabaseService {
       remaining_amount REAL DEFAULT 0,
       clinic_profit REAL DEFAULT 0,
       notes TEXT,
+      price_expr TEXT,
+      discount_expr TEXT,
+      lab_expense_expr TEXT,
+      payment_expr TEXT,
       updated_at TEXT,
       is_synced INTEGER DEFAULT 0
     )
@@ -189,6 +219,9 @@ class DatabaseService {
         paid_amount REAL NOT NULL,
         payment_method TEXT,
         payment_date TEXT,
+        subtotal_expr TEXT,
+        discount_expr TEXT,
+        paid_amount_expr TEXT,
         updated_at TEXT,
         is_synced INTEGER DEFAULT 0
       )
