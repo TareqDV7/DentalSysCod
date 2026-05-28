@@ -263,7 +263,43 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
+    final patients = context.read<AppState>().patients;
+    final firstName = _first.text.trim();
+    final lastName = _last.text.trim();
+    final phone = _phone.text.trim();
     setState(() => _saving = true);
+
+    final dups = await patients.findDuplicates(
+        firstName: firstName, lastName: lastName, phone: phone);
+    if (dups.isNotEmpty) {
+      if (!mounted) return;
+      final existing = dups.first;
+      final samePhone = phone.isNotEmpty && (existing.phone?.trim() == phone);
+      final reason = samePhone
+          ? 'phone ${existing.phone}'
+          : 'name "${existing.fullName}"';
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Possible duplicate'),
+          content: Text(
+              'A patient with the same $reason already exists. Save anyway?'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Save anyway')),
+          ],
+        ),
+      );
+      if (proceed != true) {
+        if (mounted) setState(() => _saving = false);
+        return;
+      }
+    }
+
     try {
       await widget.onSaved(Patient(
         firstName: _first.text.trim(),

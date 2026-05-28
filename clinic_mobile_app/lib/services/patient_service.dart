@@ -15,6 +15,21 @@ class PatientService {
 
   Future<Patient?> getPatient(int id) => _db.getPatient(id);
 
+  /// Existing patients that collide on name or phone — for a non-blocking
+  /// "already exists" warning before saving a new patient.
+  Future<List<Patient>> findDuplicates({
+    required String firstName,
+    required String lastName,
+    String? phone,
+    int? excludeId,
+  }) =>
+      _db.findDuplicatePatients(
+        firstName: firstName,
+        lastName: lastName,
+        phone: phone,
+        excludeId: excludeId,
+      );
+
   Future<Patient> addPatient(Patient p) async {
     final now = DateTime.now().toIso8601String();
     final local = p.copyWith(updatedAt: now, isSynced: false);

@@ -256,6 +256,34 @@ class DatabaseService {
     return rows.isEmpty ? null : Patient.fromDb(rows.first);
   }
 
+  /// Patients that collide with the given identity on full name (case-
+  /// insensitive) or a non-empty phone — mirrors the desktop's
+  /// /api/patients/check-duplicate warning. [excludeId] skips the row being
+  /// edited. Empty list means no collision.
+  Future<List<Patient>> findDuplicatePatients({
+    required String firstName,
+    required String lastName,
+    String? phone,
+    int? excludeId,
+  }) async {
+    final db = await database;
+    final fullLower = '$firstName $lastName'.trim().toLowerCase();
+    final phoneTrim = (phone ?? '').trim();
+    final clauses = <String>['LOWER(TRIM(first_name || " " || last_name)) = ?'];
+    final args = <Object?>[fullLower];
+    if (phoneTrim.isNotEmpty) {
+      clauses.add('(phone IS NOT NULL AND TRIM(phone) = ?)');
+      args.add(phoneTrim);
+    }
+    var where = '(${clauses.join(' OR ')})';
+    if (excludeId != null) {
+      where = '$where AND id != ?';
+      args.add(excludeId);
+    }
+    final rows = await db.query('patients', where: where, whereArgs: args);
+    return rows.map(Patient.fromDb).toList();
+  }
+
   Future<int> upsertPatient(Patient p) async {
     final db = await database;
     final data = p.toDb();
