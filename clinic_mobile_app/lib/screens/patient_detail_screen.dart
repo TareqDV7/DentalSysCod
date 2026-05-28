@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../utils/date_format_helper.dart';
 import '../utils/app_strings.dart';
 import '../utils/amount_expr.dart';
+import '../utils/patient_statement_pdf.dart';
 import '../models/patient.dart';
 import '../models/followup.dart';
 import '../models/treatment_plan.dart';
@@ -126,6 +127,22 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     final signed = add ? magnitude : -magnitude;
     await db.addCreditAdjustment(_patient.id!, signed, noteCtrl.text);
     if (mounted) _load();
+  }
+
+  Future<void> _printStatement() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final isArabic = context.read<AppState>().isArabic;
+    String t(String key) => AppStrings.t(key, isArabic: isArabic);
+    try {
+      await PatientStatementPdf.printOrShare(
+        patient: _patient,
+        followups: _followups,
+        label: t,
+        isArabic: isArabic,
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    }
   }
 
   void _addPlan() {
@@ -285,6 +302,11 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
       appBar: AppBar(
         title: Text(_patient.fullName),
         actions: [
+          if (!_editing)
+            IconButton(
+                tooltip: t('print_statement'),
+                onPressed: _printStatement,
+                icon: const Icon(Icons.picture_as_pdf_outlined)),
           if (!_editing)
             IconButton(
                 tooltip: 'Adjust credit',

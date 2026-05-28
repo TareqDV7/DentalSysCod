@@ -53,6 +53,14 @@ class AppStrings {
       'holiday_name': 'الاسم (اختياري)',
       'delete_holiday_confirm': 'حذف هذه العطلة؟',
       'payment_history': 'سجل الدفعات',
+      'statement': 'كشف الحساب',
+      'print_statement': 'طباعة كشف الحساب',
+      'description': 'الوصف',
+      'subtotal': 'الإجمالي قبل الخصم',
+      'total_to_pay': 'الإجمالي المطلوب',
+      'left': 'المتبقي',
+      'no_data': 'لا توجد بيانات',
+      'patient': 'المريض',
     },
     'en': {
       'cancel': 'Cancel',
@@ -107,6 +115,14 @@ class AppStrings {
       'holiday_name': 'Name (optional)',
       'delete_holiday_confirm': 'Delete this holiday?',
       'payment_history': 'Payment history',
+      'statement': 'Statement',
+      'print_statement': 'Print / share statement',
+      'description': 'Description',
+      'subtotal': 'Subtotal',
+      'total_to_pay': 'Total to Pay',
+      'left': 'Left',
+      'no_data': 'No data',
+      'patient': 'Patient',
     }
   };
 
