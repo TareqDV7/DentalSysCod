@@ -52,6 +52,7 @@ class AppStrings {
       'no_holidays': 'لا توجد عطلات',
       'holiday_name': 'الاسم (اختياري)',
       'delete_holiday_confirm': 'حذف هذه العطلة؟',
+      'payment_history': 'سجل الدفعات',
     },
     'en': {
       'cancel': 'Cancel',
@@ -105,6 +106,7 @@ class AppStrings {
       'no_holidays': 'No holidays scheduled',
       'holiday_name': 'Name (optional)',
       'delete_holiday_confirm': 'Delete this holiday?',
+      'payment_history': 'Payment history',
     }
   };
 

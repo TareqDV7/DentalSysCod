@@ -9,6 +9,7 @@ import '../models/followup.dart';
 import '../models/holiday.dart';
 import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
+import '../models/payment_history_entry.dart';
 
 class DatabaseService {
   static DatabaseService? _instance;
@@ -596,6 +597,42 @@ class DatabaseService {
       await db.insert('expenses', data,
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
+  }
+
+  /// A patient's combined payment history — follow-up sheet payments merged
+  /// with billing-record payments, oldest-first. Mirrors the desktop's
+  /// `/api/patients/{id}/payment-history`. (Dates are stored ISO `YYYY-MM-DD`,
+  /// so a lexicographic sort is chronological.)
+  Future<List<PaymentHistoryEntry>> getPatientPaymentHistory(
+      int patientId) async {
+    final db = await database;
+    final out = <PaymentHistoryEntry>[];
+
+    final fups = await db.query('followups',
+        where: 'patient_id = ? AND payment > 0', whereArgs: [patientId]);
+    for (final r in fups) {
+      out.add(PaymentHistoryEntry(
+        date: (r['followup_date'] ?? '').toString(),
+        source: 'followup',
+        description: (r['treatment_procedure'] ?? '').toString(),
+        amount: (r['payment'] as num?)?.toDouble() ?? 0,
+      ));
+    }
+
+    final bills = await db.query('billing_records',
+        where: 'patient_id = ? AND paid_amount > 0', whereArgs: [patientId]);
+    for (final r in bills) {
+      out.add(PaymentHistoryEntry(
+        date: (r['payment_date'] ?? '').toString(),
+        source: 'billing',
+        description: 'Billing record',
+        amount: (r['paid_amount'] as num?)?.toDouble() ?? 0,
+        method: r['payment_method'] as String?,
+      ));
+    }
+
+    out.sort((a, b) => a.date.compareTo(b.date));
+    return out;
   }
 
   /// Drop the auto-created lab expense(s) linked to a follow-up (used when the

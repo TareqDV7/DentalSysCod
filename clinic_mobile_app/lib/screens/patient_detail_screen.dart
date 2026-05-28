@@ -12,6 +12,7 @@ import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
 import '../models/appointment.dart';
 import '../widgets/clinic_card.dart';
+import 'patient_payment_history_screen.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
@@ -226,6 +227,13 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
       appBar: AppBar(
         title: Text(_patient.fullName),
         actions: [
+          if (!_editing)
+            IconButton(
+                tooltip: t('payment_history'),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) =>
+                        PatientPaymentHistoryScreen(patient: _patient))),
+                icon: const Icon(Icons.receipt_long_outlined)),
           if (!_editing)
             IconButton(
                 onPressed: () => setState(() => _editing = true),
