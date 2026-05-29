@@ -9,6 +9,7 @@ import '../services/appointment_service.dart';
 import '../services/billing_service.dart';
 import '../services/catalog_service.dart';
 import '../services/report_service.dart';
+import '../services/medical_image_service.dart';
 import '../services/internet_sync_service.dart';
 import '../services/bluetooth_permissions.dart';
 import '../services/bluetooth_sync_service.dart';
@@ -27,6 +28,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   late final BillingService billing;
   late final CatalogService catalog;
   late final ReportService reports;
+  late final MedicalImageService medicalImages;
   late final ConnectivitySyncService _connectivity;
   late final InternetSyncService _internet;
   late final BluetoothSyncService _bluetooth;
@@ -48,6 +50,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     billing = BillingService(db, api);
     catalog = CatalogService(db, api);
     reports = ReportService(db, api);
+    medicalImages = MedicalImageService(db, api);
     _internet = InternetSyncService(db, api);
     final deviceService = DeviceService();
     _bluetooth = BluetoothSyncService.production(

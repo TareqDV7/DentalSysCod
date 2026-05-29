@@ -10,6 +10,7 @@ import '../models/holiday.dart';
 import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
 import '../models/payment_history_entry.dart';
+import '../models/medical_image.dart';
 
 class DatabaseService {
   static DatabaseService? _instance;
@@ -23,7 +24,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 7, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 8, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -70,6 +71,26 @@ class DatabaseService {
     )
   ''';
 
+  // Patient X-rays / photos. Local-only in the text-JSON sync sense; the bytes
+  // are cached at local_path and reconciled against the server's
+  // medical_images catalog over LAN via /api/medical-images. server_id is the
+  // desktop row id (null until this device's upload is accepted).
+  static const String _createMedicalImages = '''
+    CREATE TABLE IF NOT EXISTS medical_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER,
+      patient_id INTEGER NOT NULL,
+      file_name TEXT NOT NULL,
+      local_path TEXT,
+      uploaded_at TEXT,
+      notes TEXT,
+      is_synced INTEGER DEFAULT 0
+    )
+  ''';
+
+  static const String _idxMedicalImagesPatient =
+      'CREATE INDEX IF NOT EXISTS idx_medical_images_patient ON medical_images(patient_id)';
+
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await db.execute(_createTombstones);
@@ -109,6 +130,10 @@ class DatabaseService {
       await _addColumnIfMissing(
           db, 'billing_records', 'credit_used', 'REAL DEFAULT 0');
       await db.execute(_createCreditTransactions);
+    }
+    if (oldVersion < 8) {
+      await db.execute(_createMedicalImages);
+      await db.execute(_idxMedicalImagesPatient);
     }
   }
 
@@ -295,6 +320,8 @@ class DatabaseService {
     await db.execute(_createHolidays);
     await db.execute(_idxHolidaysDate);
     await db.execute(_createCreditTransactions);
+    await db.execute(_createMedicalImages);
+    await db.execute(_idxMedicalImagesPatient);
   }
 
   // ── Patients ──────────────────────────────────────────────────────────────
@@ -739,6 +766,39 @@ class DatabaseService {
     final db = await database;
     await db.delete('patient_credit_transactions',
         where: 'invoice_id = ?', whereArgs: [invoiceId]);
+  }
+
+  // ── Medical images ──────────────────────────────────────────────────────
+
+  Future<List<MedicalImage>> getMedicalImages(int patientId) async {
+    final db = await database;
+    final rows = await db.query('medical_images',
+        where: 'patient_id = ?',
+        whereArgs: [patientId],
+        orderBy: 'COALESCE(uploaded_at, "") DESC, id DESC');
+    return rows.map(MedicalImage.fromDb).toList();
+  }
+
+  Future<int> upsertMedicalImage(MedicalImage img) async {
+    final db = await database;
+    return db.insert('medical_images', img.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> deleteMedicalImage(int id) async {
+    final db = await database;
+    await db.delete('medical_images', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// The set of server ids already present locally for a patient — used to
+  /// decide which server-catalog rows still need downloading.
+  Future<Set<int>> medicalImageServerIds(int patientId) async {
+    final db = await database;
+    final rows = await db.query('medical_images',
+        columns: ['server_id'],
+        where: 'patient_id = ? AND server_id IS NOT NULL',
+        whereArgs: [patientId]);
+    return rows.map((r) => r['server_id'] as int).toSet();
   }
 
   // ── Follow-ups ────────────────────────────────────────────────────────────

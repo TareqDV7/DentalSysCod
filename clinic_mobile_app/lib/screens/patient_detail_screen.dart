@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 import '../state/app_state.dart';
 import '../utils/date_format_helper.dart';
 import '../utils/app_strings.dart';
@@ -12,6 +14,7 @@ import '../models/followup.dart';
 import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
 import '../models/appointment.dart';
+import '../models/medical_image.dart';
 import '../widgets/clinic_card.dart';
 import 'patient_payment_history_screen.dart';
 import '../widgets/status_badge.dart';
@@ -32,9 +35,11 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   List<Followup> _followups = [];
   List<Appointment> _appointments = [];
   List<TreatmentPlan> _plans = [];
+  List<MedicalImage> _images = [];
   double _credit = 0;
   bool _loading = true;
   bool _editing = false;
+  bool _syncingImages = false;
   late Patient _patient;
 
   late final _firstCtrl = TextEditingController(text: widget.patient.firstName);
@@ -46,12 +51,21 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   void initState() {
     super.initState();
     _patient = widget.patient;
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
+    _tabs.addListener(_onTabChanged);
     _load();
+  }
+
+  /// When the Images tab settles, kick a LAN-gated sync (no-op off Wi-Fi) so
+  /// uploads/downloads happen lazily without burdening the other tabs.
+  void _onTabChanged() {
+    if (_tabs.indexIsChanging) return;
+    if (_tabs.index == 3) _syncImages();
   }
 
   @override
   void dispose() {
+    _tabs.removeListener(_onTabChanged);
     _tabs.dispose();
     for (final c in [_firstCtrl, _lastCtrl, _phoneCtrl, _historyCtrl]) { c.dispose(); }
     super.dispose();
@@ -63,15 +77,121 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     final appts = await state.appointments.getPatientAppointments(_patient.id!);
     final plans = await state.db.getPatientTreatmentPlans(_patient.id!);
     final credit = await state.db.getPatientCreditBalance(_patient.id!);
+    final images = await state.medicalImages.getForPatient(_patient.id!);
     if (mounted) {
       setState(() {
         _followups = followups;
         _appointments = appts;
         _plans = plans;
         _credit = credit;
+        _images = images;
         _loading = false;
       });
     }
+  }
+
+  Future<void> _reloadImages() async {
+    final images =
+        await context.read<AppState>().medicalImages.getForPatient(_patient.id!);
+    if (mounted) setState(() => _images = images);
+  }
+
+  /// Push pending uploads + pull any server images this device lacks, then
+  /// refresh the grid. LAN-gated inside the service, so this is a safe no-op
+  /// on cloud/Bluetooth links.
+  Future<void> _syncImages() async {
+    if (_syncingImages) return;
+    _syncingImages = true;
+    try {
+      await context.read<AppState>().medicalImages.sync(_patient.id!);
+      await _reloadImages();
+    } catch (_) {
+      /* leave whatever is cached; pending rows show an amber badge */
+    } finally {
+      _syncingImages = false;
+    }
+  }
+
+  Future<void> _addImage() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final state = context.read<AppState>();
+    final isArabic = state.isArabic;
+    String t(String key) => AppStrings.t(key, isArabic: isArabic);
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: Text(t('take_photo')),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: Text(t('pick_from_gallery')),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    try {
+      final picked = await ImagePicker().pickImage(source: source, imageQuality: 85);
+      if (picked == null) return;
+      await state.medicalImages.addFromFile(_patient.id!, picked.path);
+      await _reloadImages();
+      // Best-effort immediate sync if we're on LAN; otherwise stays pending.
+      unawaited(_syncImages());
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  Future<void> _deleteImage(MedicalImage img, String Function(String) t) async {
+    final service = context.read<AppState>().medicalImages;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('confirm_delete')),
+        content: Text(t('delete_image_confirm')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t('cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t('delete'),
+                  style: const TextStyle(color: Color(0xFFD9434E)))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await service.delete(img);
+    await _reloadImages();
+  }
+
+  void _openImage(MedicalImage img) {
+    final path = img.localPath;
+    if (path == null) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: Text(img.fileName, overflow: TextOverflow.ellipsis),
+        ),
+        body: Center(
+          child: InteractiveViewer(
+            maxScale: 5,
+            child: Image.file(File(path), fit: BoxFit.contain),
+          ),
+        ),
+      ),
+    ));
   }
 
   Future<void> _adjustCredit() async {
@@ -454,10 +574,13 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
             indicatorColor: scheme.primary,
             labelColor: scheme.primary,
             unselectedLabelColor: scheme.onSurfaceVariant,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
             tabs: [
               Tab(text: t('follow_ups')),
               Tab(text: t('appointments')),
               Tab(text: t('plans')),
+              Tab(text: t('images')),
             ],
           ),
 
@@ -480,6 +603,13 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                           onEdit: _editPlan,
                           onDelete: _deletePlan,
                           fmt: fmt),
+                      _ImagesTab(
+                        images: _images,
+                        onAdd: _addImage,
+                        onOpen: _openImage,
+                        onDelete: _deleteImage,
+                        onRefresh: _syncImages,
+                      ),
                     ],
                   ),
           ),
@@ -768,6 +898,152 @@ class _PlansTab extends StatelessWidget {
       default:
         return const Color(0xFF627386);
     }
+  }
+}
+
+class _ImagesTab extends StatelessWidget {
+  final List<MedicalImage> images;
+  final VoidCallback onAdd;
+  final void Function(MedicalImage) onOpen;
+  final Future<void> Function(MedicalImage, String Function(String)) onDelete;
+  final Future<void> Function() onRefresh;
+  const _ImagesTab({
+    required this.images,
+    required this.onAdd,
+    required this.onOpen,
+    required this.onDelete,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isArabic = context.select<AppState, bool>((state) => state.isArabic);
+    String t(String key) => AppStrings.t(key, isArabic: isArabic);
+
+    final body = images.isEmpty
+        ? EmptyState(
+            icon: Icons.image_outlined,
+            message: t('no_images'),
+            actionLabel: t('add_image'),
+            onAction: onAdd,
+          )
+        : Column(
+            children: [
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: onRefresh,
+                  child: GridView.builder(
+                    padding: const EdgeInsets.all(16),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
+                    ),
+                    itemCount: images.length,
+                    itemBuilder: (_, i) =>
+                        _ImageThumb(img: images[i], onOpen: onOpen, onDelete: (img) => onDelete(img, t)),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: GradientButton(
+                  label: t('add_image'),
+                  icon: Icons.add_a_photo_outlined,
+                  onPressed: onAdd,
+                  width: double.infinity,
+                ),
+              ),
+            ],
+          );
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+          child: Row(
+            children: [
+              Icon(Icons.wifi_outlined,
+                  size: 14, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(t('sync_images_lan_only'),
+                    style: TextStyle(
+                        fontSize: 11, color: scheme.onSurfaceVariant)),
+              ),
+              IconButton(
+                tooltip: isArabic ? 'مزامنة' : 'Sync',
+                onPressed: onRefresh,
+                icon: const Icon(Icons.sync, size: 20),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: body),
+      ],
+    );
+  }
+}
+
+class _ImageThumb extends StatelessWidget {
+  final MedicalImage img;
+  final void Function(MedicalImage) onOpen;
+  final void Function(MedicalImage) onDelete;
+  const _ImageThumb({
+    required this.img,
+    required this.onOpen,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isArabic = context.select<AppState, bool>((state) => state.isArabic);
+    String t(String key) => AppStrings.t(key, isArabic: isArabic);
+    final path = img.localPath;
+    final hasFile = path != null && File(path).existsSync();
+    return GestureDetector(
+      onTap: () => onOpen(img),
+      onLongPress: () => onDelete(img),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: hasFile
+                ? Image.file(File(path), fit: BoxFit.cover)
+                : Container(
+                    color: scheme.surfaceContainerHighest,
+                    child: Icon(Icons.broken_image_outlined,
+                        color: scheme.onSurfaceVariant),
+                  ),
+          ),
+          Positioned(
+            top: 4,
+            left: 4,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: (img.isSynced
+                        ? const Color(0xFF1F9A5F)
+                        : const Color(0xFFE8A33D))
+                    .withAlpha(230),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                img.isSynced ? t('image_synced') : t('image_pending'),
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -75,4 +75,43 @@ class ClinicApi {
         clinicToken: clinicToken,
         queryParameters: query,
       );
+
+  Future<Map<String, dynamic>> postMultipart(
+    String path, {
+    required Map<String, String> fields,
+    required String fileField,
+    required String filePath,
+    String? fileName,
+  }) =>
+      _client.postMultipart(
+        baseUrl: baseUrl,
+        path: path,
+        deviceToken: deviceToken,
+        clinicToken: clinicToken,
+        fields: fields,
+        fileField: fileField,
+        filePath: filePath,
+        fileName: fileName,
+      );
+
+  Future<List<int>> getBytes(String path, {Map<String, dynamic>? query}) =>
+      _client.getBytes(
+        baseUrl: baseUrl,
+        path: path,
+        deviceToken: deviceToken,
+        clinicToken: clinicToken,
+        queryParameters: query,
+      );
+
+  /// GET that returns a JSON *array* (the medical-image listing). The shared
+  /// ApiClient only types responses as objects, so decode the list here.
+  Future<List<dynamic>> getList(String path,
+          {Map<String, dynamic>? query}) async =>
+      _client.getJsonList(
+        baseUrl: baseUrl,
+        path: path,
+        deviceToken: deviceToken,
+        clinicToken: clinicToken,
+        queryParameters: query,
+      );
 }

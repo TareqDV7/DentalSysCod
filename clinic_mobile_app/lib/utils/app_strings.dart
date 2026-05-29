@@ -61,6 +61,16 @@ class AppStrings {
       'left': 'المتبقي',
       'no_data': 'لا توجد بيانات',
       'patient': 'المريض',
+      'images': 'الصور',
+      'no_images': 'لا توجد صور طبية',
+      'add_image': 'إضافة صورة',
+      'take_photo': 'التقاط صورة',
+      'pick_from_gallery': 'اختيار من المعرض',
+      'image_synced': 'تمت المزامنة',
+      'image_pending': 'بانتظار المزامنة',
+      'delete_image_confirm': 'حذف هذه الصورة؟',
+      'image_note_optional': 'ملاحظة (اختياري)',
+      'sync_images_lan_only': 'تتم مزامنة الصور عبر الشبكة المحلية فقط',
     },
     'en': {
       'cancel': 'Cancel',
@@ -123,6 +133,16 @@ class AppStrings {
       'left': 'Left',
       'no_data': 'No data',
       'patient': 'Patient',
+      'images': 'Images',
+      'no_images': 'No medical images yet',
+      'add_image': 'Add image',
+      'take_photo': 'Take photo',
+      'pick_from_gallery': 'Pick from gallery',
+      'image_synced': 'Synced',
+      'image_pending': 'Pending sync',
+      'delete_image_confirm': 'Delete this image?',
+      'image_note_optional': 'Note (optional)',
+      'sync_images_lan_only': 'Images sync over local Wi-Fi only',
     }
   };
 
