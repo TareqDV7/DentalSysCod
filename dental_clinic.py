@@ -11919,6 +11919,41 @@ def _bt_record_attempt(op, device_id=None, device_name=None, outcome='ok', detai
     _bt_recent_attempts.append(entry)
 
 
+class _BtSocketStream:
+    """Adapts a connected socket-like object (anything with recv/sendall/close)
+    onto the .read(n)/.write/.flush surface that _bt_serve_session +
+    encode_bt_frame/decode_bt_frame already use for the COM-port path. Lets the
+    new native RFCOMM listener reuse _bt_serve_session verbatim."""
+
+    def __init__(self, sock):
+        self._sock = sock
+
+    def read(self, n):
+        """Up to n bytes. Short reads (incl. zero on EOF) are allowed —
+        decode_bt_frame's _read_exactly turns a short read into EOFError."""
+        chunks = []
+        remaining = n
+        while remaining > 0:
+            chunk = self._sock.recv(remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b''.join(chunks)
+
+    def write(self, data):
+        self._sock.sendall(data)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+
 def _bt_open_port(port, baudrate=115200, timeout=30.0):
     """Open a pyserial port. Indirection so tests can swap this.
 
