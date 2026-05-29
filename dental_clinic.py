@@ -11919,6 +11919,250 @@ def _bt_record_attempt(op, device_id=None, device_name=None, outcome='ok', detai
     _bt_recent_attempts.append(entry)
 
 
+# ── Native Windows RFCOMM listener (AF_BTH) ────────────────────────────────
+#
+# Replaces the Windows "Incoming COM port" requirement. The pyserial COM-port
+# path remains as fallback in bt_sync_server() when this native path can't
+# bind (older Windows / no BT radio / API error). See:
+#   docs/superpowers/specs/2026-05-29-bluetooth-zero-setup-ux-design.md
+#
+# The radio cannot be unit-tested; the only testable seam is the accept→serve
+# loop in _bt_accept_and_serve, which Task 3 exercises with injected fakes.
+
+import ctypes as _ct
+from ctypes import wintypes as _wt
+import socket as _stdsocket  # importing initializes Winsock for the process
+
+_AF_BTH = 32
+_SOCK_STREAM = 1
+_BTHPROTO_RFCOMM = 3
+_BT_PORT_ANY = 0xFFFFFFFF  # (ULONG)-1; tells the stack to assign a channel
+_NS_BTH = 16
+_RNRSERVICE_REGISTER = 0
+_RNRSERVICE_DELETE = 1
+_INVALID_SOCKET = _ct.c_void_p(-1).value
+
+
+class _GUID(_ct.Structure):
+    _fields_ = [
+        ('Data1', _wt.DWORD),
+        ('Data2', _wt.WORD),
+        ('Data3', _wt.WORD),
+        ('Data4', _ct.c_ubyte * 8),
+    ]
+
+
+# Serial Port Profile service class UUID: 00001101-0000-1000-8000-00805F9B34FB
+# Android's BluetoothConnection.toAddress() looks up this exact UUID via SDP.
+_SPP_UUID = _GUID(
+    0x00001101, 0x0000, 0x1000,
+    (_ct.c_ubyte * 8)(0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB),
+)
+
+
+class _SOCKADDR_BTH(_ct.Structure):
+    _fields_ = [
+        ('addressFamily', _wt.USHORT),
+        ('btAddr', _ct.c_ulonglong),
+        ('serviceClassId', _GUID),
+        ('port', _wt.ULONG),
+    ]
+
+
+class _SOCKET_ADDRESS(_ct.Structure):
+    _fields_ = [
+        ('lpSockaddr', _ct.POINTER(_SOCKADDR_BTH)),
+        ('iSockaddrLength', _ct.c_int),
+    ]
+
+
+class _CSADDR_INFO(_ct.Structure):
+    _fields_ = [
+        ('LocalAddr', _SOCKET_ADDRESS),
+        ('RemoteAddr', _SOCKET_ADDRESS),
+        ('iSocketType', _ct.c_int),
+        ('iProtocol', _ct.c_int),
+    ]
+
+
+class _WSAQUERYSET(_ct.Structure):
+    _fields_ = [
+        ('dwSize', _wt.DWORD),
+        ('lpszServiceInstanceName', _wt.LPWSTR),
+        ('lpServiceClassId', _ct.POINTER(_GUID)),
+        ('lpVersion', _ct.c_void_p),
+        ('lpszComment', _wt.LPWSTR),
+        ('dwNameSpace', _wt.DWORD),
+        ('lpNSProviderId', _ct.POINTER(_GUID)),
+        ('lpszContext', _wt.LPWSTR),
+        ('dwNumberOfProtocols', _wt.DWORD),
+        ('lpafpProtocols', _ct.c_void_p),
+        ('lpszQueryString', _wt.LPWSTR),
+        ('dwNumberOfCsAddrs', _wt.DWORD),
+        ('lpcsaBuffer', _ct.POINTER(_CSADDR_INFO)),
+        ('dwOutputFlags', _wt.DWORD),
+        ('lpBlob', _ct.c_void_p),
+    ]
+
+
+try:
+    _ws2 = _ct.WinDLL('ws2_32', use_last_error=True)
+    _ws2.socket.restype = _ct.c_void_p
+    _ws2.socket.argtypes = [_ct.c_int, _ct.c_int, _ct.c_int]
+    _ws2.bind.restype = _ct.c_int
+    _ws2.bind.argtypes = [_ct.c_void_p, _ct.c_void_p, _ct.c_int]
+    _ws2.listen.restype = _ct.c_int
+    _ws2.listen.argtypes = [_ct.c_void_p, _ct.c_int]
+    _ws2.accept.restype = _ct.c_void_p
+    _ws2.accept.argtypes = [_ct.c_void_p, _ct.c_void_p, _ct.POINTER(_ct.c_int)]
+    _ws2.recv.restype = _ct.c_int
+    _ws2.recv.argtypes = [_ct.c_void_p, _ct.c_char_p, _ct.c_int, _ct.c_int]
+    _ws2.send.restype = _ct.c_int
+    _ws2.send.argtypes = [_ct.c_void_p, _ct.c_char_p, _ct.c_int, _ct.c_int]
+    _ws2.closesocket.restype = _ct.c_int
+    _ws2.closesocket.argtypes = [_ct.c_void_p]
+    _ws2.getsockname.restype = _ct.c_int
+    _ws2.getsockname.argtypes = [_ct.c_void_p, _ct.c_void_p, _ct.POINTER(_ct.c_int)]
+    _ws2.WSASetServiceW.restype = _ct.c_int
+    _ws2.WSASetServiceW.argtypes = [_ct.POINTER(_WSAQUERYSET), _ct.c_int, _wt.DWORD]
+    _BT_NATIVE_AVAILABLE = True
+except (AttributeError, OSError):
+    # Not Windows, or ws2_32 missing the symbols we need (very old SKUs).
+    _ws2 = None
+    _BT_NATIVE_AVAILABLE = False
+
+
+class _NativeBtSocket:
+    """Duck-types recv/sendall/close around a raw Winsock SOCKET handle so
+    _BtSocketStream doesn't care it's not a Python socket."""
+
+    def __init__(self, handle):
+        self._h = handle
+
+    def recv(self, n):
+        buf = _ct.create_string_buffer(n)
+        ret = _ws2.recv(self._h, buf, n, 0)
+        if ret <= 0:
+            return b''  # EOF or error — caller treats as EOF
+        return bytes(buf.raw[:ret])
+
+    def sendall(self, data):
+        view = memoryview(data)
+        offset = 0
+        while offset < len(view):
+            chunk = bytes(view[offset:])
+            ret = _ws2.send(self._h, chunk, len(chunk), 0)
+            if ret <= 0:
+                raise OSError(
+                    f'BT send failed: WSAError={_ct.get_last_error()}')
+            offset += ret
+
+    def close(self):
+        try:
+            _ws2.closesocket(self._h)
+        except Exception:
+            pass
+
+
+def _bt_open_native_listener():
+    """Open + advertise + listen on an AF_BTH RFCOMM socket. Returns the
+    listening socket handle, or raises OSError if the native path is
+    unavailable on this machine. Caller (bt_sync_server) treats OSError as
+    "fall back to COM port".
+
+    Side effect: publishes an SDP record under the SPP UUID so Android's
+    BluetoothConnection.toAddress() finds us without a fixed channel."""
+    if not _BT_NATIVE_AVAILABLE:
+        raise OSError('AF_BTH not available on this build')
+    _stdsocket  # ensure Winsock is started (importing is sufficient)
+    sock = _ws2.socket(_AF_BTH, _SOCK_STREAM, _BTHPROTO_RFCOMM)
+    if sock in (None, 0) or sock == _INVALID_SOCKET:
+        raise OSError(
+            f'AF_BTH socket() failed: WSAError={_ct.get_last_error()}')
+    addr = _SOCKADDR_BTH()
+    addr.addressFamily = _AF_BTH
+    addr.btAddr = 0
+    addr.serviceClassId = _SPP_UUID
+    addr.port = _BT_PORT_ANY
+    if _ws2.bind(sock, _ct.byref(addr), _ct.sizeof(addr)) != 0:
+        err = _ct.get_last_error()
+        _ws2.closesocket(sock)
+        raise OSError(f'AF_BTH bind() failed: WSAError={err}')
+    addr_len = _ct.c_int(_ct.sizeof(addr))
+    if _ws2.getsockname(sock, _ct.byref(addr), _ct.byref(addr_len)) != 0:
+        err = _ct.get_last_error()
+        _ws2.closesocket(sock)
+        raise OSError(f'AF_BTH getsockname() failed: WSAError={err}')
+    if _ws2.listen(sock, 1) != 0:
+        err = _ct.get_last_error()
+        _ws2.closesocket(sock)
+        raise OSError(f'AF_BTH listen() failed: WSAError={err}')
+    # Publish SDP record so the phone finds us by SPP UUID.
+    csa = _CSADDR_INFO()
+    csa.LocalAddr.lpSockaddr = _ct.pointer(addr)
+    csa.LocalAddr.iSockaddrLength = _ct.sizeof(addr)
+    csa.iSocketType = _SOCK_STREAM
+    csa.iProtocol = _BTHPROTO_RFCOMM
+    wqs = _WSAQUERYSET()
+    wqs.dwSize = _ct.sizeof(wqs)
+    wqs.lpszServiceInstanceName = 'DentaCare Sync'
+    wqs.lpServiceClassId = _ct.pointer(_SPP_UUID)
+    wqs.dwNameSpace = _NS_BTH
+    wqs.dwNumberOfCsAddrs = 1
+    wqs.lpcsaBuffer = _ct.pointer(csa)
+    if _ws2.WSASetServiceW(_ct.byref(wqs), _RNRSERVICE_REGISTER, 0) != 0:
+        err = _ct.get_last_error()
+        _ws2.closesocket(sock)
+        raise OSError(f'WSASetService(REGISTER) failed: WSAError={err}')
+    return sock
+
+
+def _bt_close_native_listener(handle):
+    """Best-effort teardown. Windows drops the SDP record when the registering
+    process exits, so we just close the socket — sufficient for daemon=True."""
+    try:
+        if handle:
+            _ws2.closesocket(handle)
+    except Exception:
+        pass
+
+
+def _bt_native_accept(listener_handle, stop_event):
+    """Block on accept() for one connection. stop_event is honored at the
+    session boundary by the outer worker loop (same model the COM-port path
+    uses); daemon=True kills any in-flight accept on process exit."""
+    addr = _SOCKADDR_BTH()
+    addr_len = _ct.c_int(_ct.sizeof(addr))
+    handle = _ws2.accept(
+        listener_handle, _ct.byref(addr), _ct.byref(addr_len))
+    if handle is None or handle == _INVALID_SOCKET:
+        return None
+    return handle
+
+
+def _bt_accept_and_serve(listener_handle, stop_event, db_path=None,
+                         _accept_fn=None, _wrap_sock=None):
+    """Accept one peer, wrap, dispatch via _bt_serve_session. Returns the
+    processed flag from _bt_serve_session (False = EOF before any frame).
+
+    _accept_fn / _wrap_sock are injectable seams for tests; defaults are the
+    real Winsock accept + _NativeBtSocket."""
+    accept_fn = _accept_fn or _bt_native_accept
+    wrap_fn = _wrap_sock or (lambda h: _NativeBtSocket(h))
+    conn_handle = accept_fn(listener_handle, stop_event)
+    if conn_handle is None:
+        return False
+    sock = wrap_fn(conn_handle)
+    stream = _BtSocketStream(sock)
+    try:
+        return _bt_serve_session(stream, stream, db_path=db_path)
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 class _BtSocketStream:
     """Adapts a connected socket-like object (anything with recv/sendall/close)
     onto the .read(n)/.write/.flush surface that _bt_serve_session +
