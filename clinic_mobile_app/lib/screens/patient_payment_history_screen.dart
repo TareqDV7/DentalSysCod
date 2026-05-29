@@ -117,9 +117,20 @@ class _PatientPaymentHistoryScreenState
                                     ],
                                   ),
                                 ),
-                                Text('₪${_fmt.format(e.amount)}',
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w800)),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text('₪${_fmt.format(e.amount)}',
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w800)),
+                                    if (e.creditUsed > 0)
+                                      Text(
+                                          '+₪${_fmt.format(e.creditUsed)} credit',
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: scheme.onSurfaceVariant)),
+                                  ],
+                                ),
                               ],
                             ),
                           );

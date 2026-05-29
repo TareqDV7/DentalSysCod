@@ -670,14 +670,18 @@ class DatabaseService {
       ));
     }
 
+    // Include any billing row that actually moved money — cash OR applied
+    // credit — so a credit-only settlement still shows (desktop parity).
     final bills = await db.query('billing_records',
-        where: 'patient_id = ? AND paid_amount > 0', whereArgs: [patientId]);
+        where: 'patient_id = ? AND (paid_amount > 0 OR credit_used > 0)',
+        whereArgs: [patientId]);
     for (final r in bills) {
       out.add(PaymentHistoryEntry(
         date: (r['payment_date'] ?? '').toString(),
         source: 'billing',
         description: 'Billing record',
         amount: (r['paid_amount'] as num?)?.toDouble() ?? 0,
+        creditUsed: (r['credit_used'] as num?)?.toDouble() ?? 0,
         method: r['payment_method'] as String?,
       ));
     }

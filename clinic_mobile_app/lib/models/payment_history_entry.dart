@@ -6,6 +6,7 @@ class PaymentHistoryEntry {
   final String source; // 'followup' | 'billing'
   final String description;
   final double amount;
+  final double creditUsed;
   final String? method;
 
   const PaymentHistoryEntry({
@@ -13,6 +14,7 @@ class PaymentHistoryEntry {
     required this.source,
     required this.description,
     required this.amount,
+    this.creditUsed = 0,
     this.method,
   });
 }

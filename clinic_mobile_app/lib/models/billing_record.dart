@@ -32,12 +32,16 @@ class BillingRecord {
     this.isSynced = false,
   });
 
-  double get total => subtotal - discount;
-  double get balanceDue => total - paidAmount - creditUsed;
+  // Mirror the desktop server math: total = max(subtotal − discount, 0);
+  // settled = cash paid + credit applied; balance = max(total − settled, 0).
+  double get total => (subtotal - discount).clamp(0, double.infinity).toDouble();
+  double get settled => paidAmount + creditUsed;
+  double get balanceDue =>
+      (total - settled).clamp(0, double.infinity).toDouble();
 
   String get statusLabel {
-    if (balanceDue <= 0) return 'Paid';
-    if (paidAmount > 0) return 'Partial';
+    if (total > 0 && settled >= total) return 'Paid';
+    if (settled > 0) return 'Partial';
     return 'Unpaid';
   }
 
