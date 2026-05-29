@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Kotlin compiler build cache (created by newer AGP/Kotlin)
+/android/.kotlin/
