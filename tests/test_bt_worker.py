@@ -126,3 +126,93 @@ def test_loop_recovers_after_open_failure(tmp_path, monkeypatch):
     t.join(timeout=2.0)
 
     assert calls['n'] >= 2  # tried again after the SerialException
+
+
+def test_loop_prefers_native_listener_when_available(tmp_path, monkeypatch):
+    """When _bt_open_native_listener returns a handle, the loop uses
+    _bt_accept_and_serve and never touches _bt_open_port (COM)."""
+    db = tmp_path / 'wn.db'
+    monkeypatch.setattr(dental_clinic, 'DB_NAME', str(db))
+    dental_clinic.init_database()
+    conn = dental_clinic.get_db_connection()
+    cur = conn.cursor()
+    dental_clinic.write_app_setting(cur, 'bt_sync_enabled', '1')
+    conn.commit()
+    conn.close()
+
+    native_open_calls = []
+    accept_serve_calls = []
+    com_open_calls = []
+
+    def fake_native_open():
+        native_open_calls.append(True)
+        return object()  # opaque "handle" — only passed back to accept_and_serve
+
+    def fake_accept_and_serve(handle, stop_event, db_path=None):
+        accept_serve_calls.append(handle)
+        return True  # processed one frame
+
+    def fake_com_open(port, **kwargs):
+        com_open_calls.append(port)
+        return _FakePort(b'')
+
+    stop = threading.Event()
+    monkeypatch.setattr(dental_clinic, '_bt_open_native_listener', fake_native_open)
+    monkeypatch.setattr(dental_clinic, '_bt_accept_and_serve', fake_accept_and_serve)
+    monkeypatch.setattr(dental_clinic, '_bt_close_native_listener', lambda h: None)
+    monkeypatch.setattr(dental_clinic, '_bt_open_port', fake_com_open)
+    monkeypatch.setattr(dental_clinic, '_BT_LOOP_SLEEP', 0.01)
+    monkeypatch.setattr(dental_clinic, '_BT_LOOP_RECONNECT_SLEEP', 0.01)
+    monkeypatch.setattr(dental_clinic, '_BT_LOOP_ERROR_SLEEP', 0.01)
+
+    t = threading.Thread(target=dental_clinic.bt_sync_server, args=(stop,))
+    t.start()
+    time.sleep(0.2)
+    stop.set()
+    t.join(timeout=2)
+
+    assert native_open_calls, 'native listener was not opened'
+    assert accept_serve_calls, 'native accept-and-serve was not invoked'
+    assert not com_open_calls, 'COM-port fallback was used when native was available'
+
+
+def test_loop_falls_back_to_com_port_when_native_unavailable(tmp_path, monkeypatch):
+    """When _bt_open_native_listener raises OSError, the loop uses the existing
+    COM-port path with the configured / auto-picked port."""
+    db = tmp_path / 'wf.db'
+    monkeypatch.setattr(dental_clinic, 'DB_NAME', str(db))
+    dental_clinic.init_database()
+    conn = dental_clinic.get_db_connection()
+    cur = conn.cursor()
+    dental_clinic.write_app_setting(cur, 'bt_sync_enabled', '1')
+    dental_clinic.write_app_setting(cur, 'bt_sync_com_port', 'COMTEST')
+    conn.commit()
+    conn.close()
+
+    def fake_native_open():
+        raise OSError('AF_BTH not available on this build')
+
+    com_open_calls = []
+    fake = _FakePort(dental_clinic.encode_bt_frame({'op': 'hello', 'device_token': 'x'}))
+
+    def fake_com_open(port, **kwargs):
+        com_open_calls.append(port)
+        return fake
+
+    stop = threading.Event()
+    monkeypatch.setattr(dental_clinic, '_bt_open_native_listener', fake_native_open)
+    monkeypatch.setattr(dental_clinic, '_bt_open_port', fake_com_open)
+    monkeypatch.setattr(dental_clinic, '_BT_LOOP_SLEEP', 0.01)
+    monkeypatch.setattr(dental_clinic, '_BT_LOOP_ERROR_SLEEP', 0.01)
+    # _BT_LOOP_RECONNECT_SLEEP intentionally left at its real default (1.0 s)
+    # so the loop can't cycle a second time within the 0.2 s test window —
+    # this lets the assertion check that exactly COMTEST was used.
+
+    t = threading.Thread(target=dental_clinic.bt_sync_server, args=(stop,))
+    t.start()
+    time.sleep(0.2)
+    stop.set()
+    t.join(timeout=2)
+
+    assert com_open_calls == ['COMTEST'], (
+        f'COM-port fallback not invoked correctly: {com_open_calls}')

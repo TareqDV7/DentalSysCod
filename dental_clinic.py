@@ -12212,12 +12212,13 @@ def _bt_open_port(port, baudrate=115200, timeout=30.0):
 
 
 def bt_sync_server(stop_event=None):
-    """Daemon loop: re-read settings every cycle, accept one peer at a time
-    on the configured COM port. Skipped on the cloud node and in debug mode
-    (the parent process gates startup).
+    """Daemon loop: each cycle, re-read settings, prefer the native AF_BTH
+    listener (no Windows COM port), fall back to the existing pyserial
+    COM-port path if the native one can't bind. Skipped on cloud / debug
+    parent.
 
-    Maintains the module-level _bt_server_listening flag so /api/bt/status
-    can show whether the daemon currently has the port open."""
+    Module-level _bt_server_listening reflects whichever path currently holds
+    the listener open, so /api/bt/status's diagnostic stays accurate."""
     import serial as _pyserial
     global _bt_server_listening
     while stop_event is None or not stop_event.is_set():
@@ -12226,29 +12227,50 @@ def bt_sync_server(stop_event=None):
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             enabled = read_app_setting(cur, 'bt_sync_enabled', '0') == '1'
-            port = (read_app_setting(cur, 'bt_sync_com_port', '') or '').strip()
+            com_port_setting = (read_app_setting(cur, 'bt_sync_com_port', '') or '').strip()
             conn.close()
         except sqlite3.Error:
-            enabled, port = False, ''
-        if not enabled or not port:
+            enabled, com_port_setting = False, ''
+        if not enabled:
             _bt_server_listening = False
             _bt_sleep(_BT_LOOP_SLEEP, stop_event)
             continue
+        native_handle = None
+        try:
+            native_handle = _bt_open_native_listener()
+        except OSError as exc:
+            _bt_record_attempt(
+                op='listen', outcome='rejected',
+                detail=f'native unavailable: {exc} — using COM fallback')
+        if native_handle is not None:
+            _bt_server_listening = True
+            try:
+                processed = _bt_accept_and_serve(native_handle, stop_event)
+            except Exception as exc:  # noqa: BLE001
+                _bt_record_error(f'{type(exc).__name__}: {exc}')
+                processed = False
+            finally:
+                _bt_server_listening = False
+                _bt_close_native_listener(native_handle)
+            if processed:
+                _bt_record_success()
+            _bt_sleep(_BT_LOOP_RECONNECT_SLEEP, stop_event)
+            continue
+        # ── COM-port fallback (legacy path) ──
+        port = com_port_setting or _bt_pick_default_port()
+        if not port:
+            _bt_server_listening = False
+            _bt_record_error('no bluetooth port available')
+            _bt_sleep(_BT_LOOP_ERROR_SLEEP, stop_event)
+            continue
         try:
             ser = _bt_open_port(port)
-            # Port opened successfully — flip the listening flag while we
-            # hold it. The `with` block guarantees release; the `finally`
-            # below flips the flag back to False even on exception paths.
             _bt_server_listening = True
             try:
                 with ser:
                     processed = _bt_serve_session(ser, ser)
             finally:
                 _bt_server_listening = False
-            # Only stamp "Last sync" when a real peer interaction happened.
-            # An idle read-timeout cycle returns False; recording it would
-            # paint a misleading green "synced just now" while nothing
-            # actually exchanged data.
             if processed:
                 _bt_record_success()
             _bt_sleep(_BT_LOOP_RECONNECT_SLEEP, stop_event)
