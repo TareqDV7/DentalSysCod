@@ -187,8 +187,8 @@ class AppBranding {
 - **Summary / weekly / range reports**: revenue (= follow-up payments collected), expenses (paid + postponed), profit (= revenue − expenses), clinic gross profit (= Σ price − discount − lab), lab expenses, patient count for any date range — all scoped to non-deleted follow-ups. Every report also shows a **current "Amounts Still Owed" table** — what each patient still owes (net billed = price − discount, paid, left, last visit, overdue days) — plus an *Unpaid by Patients* total
 - **Receivables report**: amount still owed per patient, with discounts subtracted from what is owed
 - **Patient statement / invoice**: built straight from the patient's follow-up sheet — one row per entry (date, procedure, price, **discount**, payment, running balance), with totals = subtotal, discount, total to pay (price − discount), paid, and what's left. The printable invoice (EN/AR) carries the same breakdown
-- Billing / payment records with discount and balance due; payment method is a **Cash / Card / Transfer dropdown**. Every patient picker (payments, statement, appointments) has a **search box** above it that filters the list by name or phone, so it stays usable with a large patient roster
-- **Per-patient payment history** — picking (or searching) a patient in the Billing → Payment Record tab swaps the all-records table for that patient's *combined* payment history: every payment they've made, merged from both the follow-up sheet's per-entry `payment` column **and** the billing payment records, sorted oldest-first with a "Total Collected" footer. *Show all records* clears the filter. Backed by `GET /api/patients/<id>/payment-history`
+- Billing / payment records with discount and balance due; payment method is a **Cash / Card / Transfer dropdown**. Paid status and balance are computed against the **settled** amount (paid + any credit applied), with total/balance clamped at 0 — so a credit-only partial reads *Partial* and an overpayment reads a 0 balance rather than going negative. Deleting a billing record **reverses any credit the invoice consumed** (returning it to the patient) before removing the row, and tombstones the deletion so it propagates on the next sync. Every patient picker (payments, statement, appointments) has a **search box** above it that filters the list by name or phone, so it stays usable with a large patient roster
+- **Per-patient payment history** — picking (or searching) a patient in the Billing → Payment Record tab swaps the all-records table for that patient's *combined* payment history: every payment they've made, merged from both the follow-up sheet's per-entry `payment` column **and** the billing payment records (including records settled purely by patient credit, with the applied-credit amount surfaced), sorted oldest-first with a "Total Collected" footer. *Show all records* clears the filter. Backed by `GET /api/patients/<id>/payment-history`
 
 > The dashboard's "Today's Revenue" and "Today's Visits" cards count *today's* follow-up payments and entries (visits are recorded on the follow-up sheet, not the legacy `visits` table). `Clinic profit = price − discount − lab expense`; lab expense is also auto-recorded as a postponed expense, so don't add the two together.
 
@@ -244,13 +244,14 @@ clinic/
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 164 tests across 21 suites
+├── tests/                    # 199 tests across 27 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
 │   ├── test_appointment_status.py   # Status-update accepts the full dropdown set
 │   ├── test_backup.py               # Per-tenant cloud backups + flat single-tenant layout
 │   ├── test_bt_codec.py             # 4-byte length-prefixed JSON frame codec
+│   ├── test_bt_diagnostics.py       # /api/bt/status diagnostics (paired_devices, recent_attempts, server_listening)
 │   ├── test_bt_endpoints.py         # /api/bt/status + /api/bt/configure
 │   ├── test_bt_protocol.py          # hello / bt_pair / sync_export / sync_import dispatcher
 │   ├── test_bt_session.py           # Frame in → dispatch → frame out, auth gating
@@ -262,10 +263,15 @@ clinic/
 │   ├── test_date_utils.py
 │   ├── test_expression_preservation.py  # "20+20" verbatim on sheet/invoice
 │   ├── test_followup_balance.py     # Recomputed Amount to Pay running balance
-│   ├── test_payment_history.py      # Per-patient combined payment history (follow-up + billing)
+│   ├── test_health_check.py         # Service-mode health-check helper
 │   ├── test_healthz.py              # /healthz probe (status, mode, db_writable, uptime)
+│   ├── test_medical_images.py       # Medical-image upload + byte download + sync reconcile
+│   ├── test_payment_history.py      # Per-patient combined payment history (follow-up + billing)
+│   ├── test_resolve_data_dir.py     # Data-dir resolution (source vs. frozen/service)
+│   ├── test_service_mode.py         # Packaged-service mode detection
 │   ├── test_sync_resilience.py      # Bad row doesn't kill batch; mobile fixes verified
-│   └── test_sync_tombstones.py      # Sync delta / tombstone propagation
+│   ├── test_sync_tombstones.py      # Sync delta / tombstone propagation
+│   └── test_window_state.py         # pywebview window-state persistence
 ├── tools/
 │   ├── db_check.py           # Quick SQLite inspection helper
 │   └── qa_financial_test.py  # Ad-hoc financial-logic runner against a live server
@@ -385,7 +391,7 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET / POST | `/api/billing` | List / create billing record |
-| DELETE | `/api/billing/<id>` | Delete record |
+| DELETE | `/api/billing/<id>` | Delete record (reverses any credit the invoice applied) |
 | GET | `/invoice/<id>` | Printable HTML invoice (`?lang=en|ar`) — requires login |
 
 ### Financial
@@ -492,9 +498,9 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**170 tests across 22 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, the per-patient combined payment history (follow-up sheet payments merged with billing records, ordering, totals, per-patient scoping, exclusion of zero-value and deleted entries), patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the BT diagnostics surfacing on `/api/bt/status` (paired_devices list, recent_attempts ring buffer bounded to maxlen=20, ok/unauthorized outcomes recorded by the dispatcher, server_listening flag round-trip — `tests/test_bt_diagnostics.py`), the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**199 tests across 27 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, the per-patient combined payment history (follow-up sheet payments merged with billing records, ordering, totals, per-patient scoping, exclusion of zero-value and deleted entries), patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, and a daemon-thread worker that re-reads settings each cycle and recovers from `SerialException`), the BT diagnostics surfacing on `/api/bt/status` (paired_devices list, recent_attempts ring buffer bounded to maxlen=20, ok/unauthorized outcomes recorded by the dispatcher, server_listening flag round-trip — `tests/test_bt_diagnostics.py`), medical-image upload + byte download + sync reconciliation, the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), the packaging/runtime plumbing (data-dir resolution for source vs. frozen/service builds, packaged-service-mode detection, the service health-check helper, and pywebview window-state persistence), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
 
-The Flutter app has its own analyzer-clean test suite under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `followup_balance_test.dart`, and the default widget test. Run with `cd clinic_mobile_app && flutter test`.
+The Flutter app has its own analyzer-clean test suite (50 tests) under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `followup_balance_test.dart`, `amount_expr_test.dart` (safe "20+20" money-expression evaluator), `patient_statement_totals_test.dart` (statement/invoice totals parity, to-pay/left clamped ≥0), `medical_image_reconcile_test.dart` (pull-side server↔local image reconciliation), and the default widget test. Run with `cd clinic_mobile_app && flutter test`.
 
 Mobile-desktop parity invariants (worth re-checking when touching either side): (1) the Receivables tab in the Financial screen and the desktop's `/api/reports/receivables` both source from the follow-up ledger — `max(Σ price − Σ discount − Σ payment, 0)` per patient — *not* from the `billing_records` table, which under-counts in clinics that record day-to-day collections inside follow-up rows. (2) The mobile follow-up entry sheet exposes the same catalog-prefill behaviour as the desktop: picking a procedure from the dropdown fills the procedure name + the default price/lab expense (only into empty fields, so a doctor's typed numbers aren't clobbered) and stores `procedure_id` alongside the free-text name. (3) The mobile appointments day-list tile is tappable — opens a status picker (scheduled / completed / postponed / pending) plus a delete action, wired to `AppointmentService.updateStatus` and `deleteAppointment`. (4) Currency on every price/total in the mobile UI is `₪` (NIS); accidental USD `$` glyphs are a regression.
 
