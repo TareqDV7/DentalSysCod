@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -147,6 +148,45 @@ class _BillingTabState extends State<_BillingTab> {
     );
   }
 
+  Future<void> _deleteBilling(BillingRecord b) async {
+    if (b.id == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final state = context.read<AppState>();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete billing record'),
+        content: Text(
+          b.creditUsed > 0
+              ? 'This also returns ₪${_fmt.format(b.creditUsed)} of applied '
+                  'credit to the patient. Delete this billing record?'
+              : 'Delete this billing record?',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete',
+                  style: TextStyle(color: Color(0xFFD9434E)))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await state.billing.deleteBillingRecord(b.id!);
+      unawaited(state.sync.syncNow());
+      if (mounted) {
+        await _load();
+        messenger.showSnackBar(
+            const SnackBar(content: Text('Billing record deleted')));
+      }
+    } catch (error) {
+      _showError(error.toString());
+    }
+  }
+
   List<BillingRecord> get _visibleRecords {
     final query = _searchCtrl.text.trim().toLowerCase();
     return _records.where((record) {
@@ -284,6 +324,23 @@ class _BillingTabState extends State<_BillingTab> {
                           ),
                         ),
                         StatusBadge(b.statusLabel.toLowerCase()),
+                        PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_vert, size: 20),
+                          onSelected: (v) {
+                            if (v == 'delete') _deleteBilling(b);
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.delete_outline,
+                                    color: Color(0xFFD9434E)),
+                                title: Text('Delete'),
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -296,6 +353,12 @@ class _BillingTabState extends State<_BillingTab> {
                             valueColor: b.balanceDue > 0 ? const Color(0xFFD9434E) : const Color(0xFF1F9A5F)),
                       ],
                     ),
+                    if (b.creditUsed > 0) ...[
+                      const SizedBox(height: 6),
+                      Text('Credit applied: ₪${_fmt.format(b.creditUsed)}',
+                          style: TextStyle(
+                              fontSize: 12, color: scheme.onSurfaceVariant)),
+                    ],
                   ],
                 ),
               );

@@ -536,6 +536,16 @@ class DatabaseService {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// Delete a billing record. Mirrors the desktop `delete_billing`: first
+  /// reverse any credit this invoice consumed (so the patient gets it back),
+  /// then hard-delete the row and tombstone it so the deletion syncs out.
+  Future<void> deleteBillingRecord(int id) async {
+    final db = await database;
+    await clearCreditForInvoice(id);
+    await db.delete('billing_records', where: 'id = ?', whereArgs: [id]);
+    await recordTombstone('billing_records', id);
+  }
+
   // ── Expenses ──────────────────────────────────────────────────────────────
 
   Future<List<Expense>> getExpenses({String? period, String? status}) async {

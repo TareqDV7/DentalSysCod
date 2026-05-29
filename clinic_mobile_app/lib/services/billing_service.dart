@@ -48,6 +48,16 @@ class BillingService {
     }
   }
 
+  /// Delete a billing record (reverses applied credit + tombstones for sync).
+  /// Best-effort direct server delete too, so a connected node drops it
+  /// immediately; offline, the tombstone propagates on the next sync.
+  Future<void> deleteBillingRecord(int id) async {
+    await _db.deleteBillingRecord(id);
+    try {
+      await _api.delete('/api/billing/$id');
+    } catch (_) {/* offline — tombstone will carry the delete */}
+  }
+
   Future<List<Map<String, dynamic>>> getReceivables() =>
       _db.getReceivables();
 
