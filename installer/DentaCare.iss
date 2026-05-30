@@ -74,13 +74,11 @@ Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; \
     StatusMsg: "Installing Microsoft Edge WebView2 runtime..."; \
     Check: NeedsWebView2
 
-; 2. Provision the Bluetooth Incoming SPP COM port.
-Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\provision_bt.ps1"""; \
-    StatusMsg: "Configuring Bluetooth sync..."; \
-    Flags: runhidden
-
-; 3. Register and start the NSSM service.
+; 2. Register and start the NSSM service.
+; (BT setup no longer runs here — the native AF_BTH listener in dental_clinic.py
+; publishes its own SPP SDP record at runtime, so no Incoming COM port is
+; required. installer\provision_bt.ps1 still ships in {app}\installer for the
+; rare COM-port fallback case; an admin can run it by hand if needed.)
 Filename: "{app}\nssm.exe"; Parameters: "install DentaCare ""{app}\{#MyServiceExeName}"""; Flags: runhidden
 Filename: "{app}\nssm.exe"; Parameters: "set DentaCare AppDirectory ""{commonappdata}\DentaCare"""; Flags: runhidden
 Filename: "{app}\nssm.exe"; Parameters: "set DentaCare AppStdout ""{commonappdata}\DentaCare\logs\service.stdout.log"""; Flags: runhidden
@@ -92,7 +90,7 @@ Filename: "{app}\nssm.exe"; Parameters: "set DentaCare Start SERVICE_AUTO_START"
 Filename: "{app}\nssm.exe"; Parameters: "set DentaCare ObjectName LocalSystem"; Flags: runhidden
 Filename: "{app}\nssm.exe"; Parameters: "start DentaCare"; Flags: runhidden
 
-; 4. Launch the window on install completion.
+; 3. Launch the window on install completion.
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch DentaCare"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
