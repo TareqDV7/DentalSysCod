@@ -115,21 +115,38 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// Stored BT error strings include both pre-localized friendly text (set by
-  /// this class via [btMessageFor]) and stable tokens like
-  /// `peer-unreachable:TimeoutException` (set by the connectivity layer in
-  /// [BluetoothSyncService] / [ConnectivitySyncService]). Classify the
-  /// tokenized ones via [classifyBtError] so the UI sees friendly localized
-  /// text either way. Friendly strings already contain no `:` tokens, so the
-  /// classifier maps them to [BtFailure.unknown] only when nothing else fits —
-  /// but we short-circuit on the `peer-unreachable:` prefix to avoid that.
+  /// Stored BT error strings are tokens, never rendered text — storing tokens
+  /// (not pre-localized strings) lets [setLocale] re-render the active banner
+  /// without waiting for the next BT cycle. Two token vocabularies coexist:
+  ///
+  ///   * `bt-failure:<BtFailure.name>` — written by [AppState] itself when it
+  ///     knows the category directly (permission denied, no peer chosen, …).
+  ///   * `peer-unreachable:<Type>` — written by the BT service / connectivity
+  ///     layer when classic BT can't distinguish the failure mode beyond
+  ///     "the PC didn't answer." Mapped to [BtFailure.peerUnreachable].
+  ///
+  /// Legacy raw English strings from pre-T7 builds (e.g. "BT connect failed:
+  /// PlatformException(…)") pass through [classifyBtError] for a one-shot
+  /// migration — the next BT tick overwrites them with a proper token.
   String? _classifyStoredBtError(String? stored) {
     if (stored == null || stored.isEmpty) return null;
+    if (stored.startsWith('bt-failure:')) {
+      final name = stored.substring('bt-failure:'.length);
+      for (final f in BtFailure.values) {
+        if (f.name == name) return btMessageFor(f, _locale);
+      }
+      return btMessageFor(BtFailure.unknown, _locale);
+    }
     if (stored.startsWith('peer-unreachable:')) {
       return btMessageFor(BtFailure.peerUnreachable, _locale);
     }
-    return stored;
+    return btMessageFor(classifyBtError(stored), _locale);
   }
+
+  /// Token written to storage for a given category. Reading back via
+  /// [_classifyStoredBtError] in the user's current locale produces the
+  /// rendered text.
+  String _btFailureToken(BtFailure kind) => 'bt-failure:${kind.name}';
 
   /// True when the BT auto-loop should be running: BT enabled, peer bonded,
   /// app currently in the foreground/visible-process lifecycle. The loop
@@ -162,7 +179,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         _btEnabled = false;
         _btLastError = btMessageFor(BtFailure.permissionDenied, _locale);
         await _storage.setBtEnabled(false);
-        await _storage.setBtLastError(_btLastError!);
+        await _storage.setBtLastError(_btFailureToken(BtFailure.permissionDenied));
         _refreshBtAutoLoop();
         notifyListeners();
         return;
@@ -198,14 +215,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final mac = _btBondedMac;
     if (mac == null || mac.isEmpty) {
       _btLastError = btMessageFor(BtFailure.noPeerSelected, _locale);
-      await _storage.setBtLastError(_btLastError!);
+      await _storage.setBtLastError(_btFailureToken(BtFailure.noPeerSelected));
       notifyListeners();
       return false;
     }
     final granted = await BluetoothPermissions.ensureGranted();
     if (!granted) {
       _btLastError = btMessageFor(BtFailure.permissionDenied, _locale);
-      await _storage.setBtLastError(_btLastError!);
+      await _storage.setBtLastError(_btFailureToken(BtFailure.permissionDenied));
       notifyListeners();
       return false;
     }
@@ -237,6 +254,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   void setLocale(String locale) {
     _locale = locale;
+    // Re-render any visible BT error banner in the new locale. Reads the
+    // stored token through _classifyStoredBtError, so a previously-displayed
+    // "Turn on Bluetooth to sync." flips to "قم بتشغيل البلوتوث للمزامنة."
+    // immediately instead of waiting for the next BT cycle.
+    unawaited(_loadBtState());
     notifyListeners();
   }
 

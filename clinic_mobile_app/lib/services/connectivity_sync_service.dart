@@ -181,7 +181,8 @@ class ConnectivitySyncService {
     // enabling the toggle, the next session would just hang. Bail early
     // with a clear error.
     if (!await BluetoothPermissions.areGranted()) {
-      await _storage.setBtLastError('Bluetooth permission revoked');
+      // Token (not English) — AppState renders it in the user's locale on read.
+      await _storage.setBtLastError('bt-failure:permissionDenied');
       return;
     }
     if (!force) {

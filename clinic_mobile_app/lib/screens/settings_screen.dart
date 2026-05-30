@@ -590,14 +590,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ok = await app.syncViaBluetoothNow();
     if (!context.mounted) return;
     messenger.hideCurrentSnackBar();
+    // Red background already signals failure; render only the friendly
+    // localized message (no extra "Failed:" prefix) so T7's one-phrase
+    // intent isn't undone here.
+    final failMsg =
+        app.btLastError ?? btMessageFor(BtFailure.unknown, app.locale);
     messenger.showSnackBar(SnackBar(
         backgroundColor:
             ok ? const Color(0xFF1F9A5F) : const Color(0xFFD9434E),
         content: Text(ok
             ? (app.locale == 'ar' ? 'تمت المزامنة عبر بلوتوث' : 'Synced via Bluetooth')
-            : (app.locale == 'ar'
-                ? 'فشل: ${app.btLastError ?? "غير معروف"}'
-                : 'Failed: ${app.btLastError ?? "unknown"}'))));
+            : failMsg)));
     if (ok) await _loadLastSync();
   }
 
@@ -680,7 +683,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // storage write or platform channel can still throw — surface it
       // instead of letting the unhandled exception look like a crash.
       if (!context.mounted) return;
-      snack('Pairing failed: $e', 'فشل الاقتران: $e');
+      snackMsg(btMessageFor(classifyBtError(e), app.locale));
       return;
     }
     if (!context.mounted) return;
