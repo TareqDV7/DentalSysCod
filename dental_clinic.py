@@ -13,6 +13,7 @@ import sqlite3
 import base64
 import binascii
 import collections
+import contextlib
 import hashlib
 import hmac
 import threading
@@ -11819,6 +11820,21 @@ def _bt_close_native_listener(handle):
         pass
 
 
+@contextlib.contextmanager
+def _bt_native_listener_session():
+    """Open the native AF_BTH RFCOMM listener and guarantee its close runs
+    regardless of how the body exits — including BaseException
+    (KeyboardInterrupt, SystemExit). Yields the listener handle.
+
+    Raises OSError if the native path is unavailable on this machine;
+    callers treat that as 'fall back to COM port'."""
+    handle = _bt_open_native_listener()
+    try:
+        yield handle
+    finally:
+        _bt_close_native_listener(handle)
+
+
 def _bt_native_accept(listener_handle, stop_event):
     """Block on accept() for one connection. stop_event is honored at the
     session boundary by the outer worker loop (same model the COM-port path
@@ -11927,27 +11943,29 @@ def bt_sync_server(stop_event=None):
             _bt_server_listening = False
             _bt_sleep(_BT_LOOP_SLEEP, stop_event)
             continue
-        native_handle = None
+        # Strategy: try the native RFCOMM listener first. Any OSError on open
+        # → fall back to the COM-port path (today's behaviour) so legacy
+        # machines don't regress. The context manager guarantees the listener
+        # is closed even if _bt_accept_and_serve raises BaseException, so
+        # Ctrl+C / SystemExit don't leak the Winsock handle.
         try:
-            native_handle = _bt_open_native_listener()
-        except OSError as exc:
-            _bt_record_attempt(
-                op='listen', outcome='rejected',
-                detail=f'native unavailable: {exc} — using COM fallback')
-        if native_handle is not None:
-            _bt_server_listening = True
-            try:
-                processed = _bt_accept_and_serve(native_handle, stop_event)
-            except Exception as exc:  # noqa: BLE001
-                _bt_record_error(f'{type(exc).__name__}: {exc}')
-                processed = False
-            finally:
-                _bt_server_listening = False
-                _bt_close_native_listener(native_handle)
+            with _bt_native_listener_session() as native_handle:
+                _bt_server_listening = True
+                try:
+                    processed = _bt_accept_and_serve(native_handle, stop_event)
+                except Exception as exc:  # noqa: BLE001
+                    _bt_record_error(f'{type(exc).__name__}: {exc}')
+                    processed = False
+                finally:
+                    _bt_server_listening = False
             if processed:
                 _bt_record_success()
             _bt_sleep(_BT_LOOP_RECONNECT_SLEEP, stop_event)
             continue
+        except OSError as exc:
+            _bt_record_attempt(
+                op='listen', outcome='rejected',
+                detail=f'native unavailable: {exc} — using COM fallback')
         # ── COM-port fallback (legacy path) ──
         port = com_port_setting or _bt_pick_default_port()
         if not port:

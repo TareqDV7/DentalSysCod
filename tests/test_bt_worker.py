@@ -143,6 +143,9 @@ def test_loop_prefers_native_listener_when_available(tmp_path, monkeypatch):
     native_open_calls = []
     accept_serve_calls = []
     com_open_calls = []
+    # Set by fake_accept_and_serve so the test waits on a real signal rather
+    # than an arbitrary sleep — no flake risk from a slow CI box.
+    served = threading.Event()
 
     def fake_native_open():
         native_open_calls.append(True)
@@ -150,6 +153,7 @@ def test_loop_prefers_native_listener_when_available(tmp_path, monkeypatch):
 
     def fake_accept_and_serve(handle, stop_event, db_path=None):
         accept_serve_calls.append(handle)
+        served.set()
         return True  # processed one frame
 
     def fake_com_open(port, **kwargs):
@@ -167,7 +171,7 @@ def test_loop_prefers_native_listener_when_available(tmp_path, monkeypatch):
 
     t = threading.Thread(target=dental_clinic.bt_sync_server, args=(stop,))
     t.start()
-    time.sleep(0.2)
+    assert served.wait(timeout=2.0), 'native accept-and-serve was never invoked'
     stop.set()
     t.join(timeout=2)
     assert not t.is_alive(), 'worker did not stop'
