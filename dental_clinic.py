@@ -3894,7 +3894,7 @@ HTML_TEMPLATE = '''
                     </div>
 
                     <div id="bt-error-line"
-                         style="display:none;margin-top:10px;color:var(--danger,#c0392b);font-size:0.9em;line-height:1.5;"
+                         style="display:none;margin-top:10px;color:var(--danger,#d9434e);font-size:0.9em;line-height:1.5;"
                          role="alert" aria-live="polite"></div>
                 </div>
 
@@ -6933,7 +6933,7 @@ HTML_TEMPLATE = '''
               ? 'تعذّر بدء البلوتوث — تحقق من تشغيل البلوتوث في هذا الحاسوب.'
               : "Bluetooth couldn't start — is this PC's Bluetooth turned on?";
           }
-          if (r.includes('serial')) {
+          if (r.includes('serial:')) {
             return ar
               ? 'تعذّر فتح منفذ البلوتوث.'
               : "Couldn't open the Bluetooth port.";
@@ -6941,15 +6941,27 @@ HTML_TEMPLATE = '''
           return ar ? 'حدث خطأ في مزامنة البلوتوث.' : 'Bluetooth sync hit an error.';
         }
 
+        function _showBtTransientError() {
+          // On fetch failure / non-OK status, keep the toggle visible (so the
+          // user can still try) and surface a one-line "temporarily unavailable"
+          // message in the existing error line. Don't hide the whole card —
+          // a transient blip should not make controls disappear.
+          const errLine = document.getElementById('bt-error-line');
+          if (!errLine) return;
+          errLine.textContent = _ar()
+            ? 'حالة البلوتوث غير متاحة مؤقتًا.'
+            : 'Bluetooth status temporarily unavailable.';
+          errLine.style.display = '';
+        }
+
         async function loadBluetoothSyncSettings() {
           // Re-uses the original entry point name so loadSupportSection() still
-          // wires up the BT card. Hides the whole card if the endpoint is
-          // unreachable (cloud node, network blip).
+          // wires up the BT card.
           try {
             const r = await fetch('/api/bt/status', {credentials: 'same-origin'});
             if (!r.ok) {
-              const card = document.getElementById('bt-sync-card');
-              if (card) card.style.display = 'none';
+              console.warn('[bt-sync] /api/bt/status', r.status);
+              _showBtTransientError();
               return;
             }
             const s = await r.json();
@@ -6965,9 +6977,9 @@ HTML_TEMPLATE = '''
                 errLine.style.display = 'none';
               }
             }
-          } catch (_) {
-            const card = document.getElementById('bt-sync-card');
-            if (card) card.style.display = 'none';
+          } catch (e) {
+            console.warn('[bt-sync] /api/bt/status', e);
+            _showBtTransientError();
           }
         }
 
@@ -6981,26 +6993,38 @@ HTML_TEMPLATE = '''
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({enabled}),
             });
-            if (!r.ok) return null;
+            if (!r.ok) {
+              console.warn('[bt-sync] /api/bt/configure', r.status);
+              return null;
+            }
             return await r.json();
-          } catch (_) { return null; }
+          } catch (e) {
+            console.warn('[bt-sync] /api/bt/configure', e);
+            return null;
+          }
         }
 
         async function bluetoothToggleEnabled(enabled) {
-          const res = await _btConfigure(!!enabled);
-          if (!res) {
-            alert(_ar() ? 'فشل الحفظ' : 'Save failed');
+          // Disable the input while the round-trip is in flight so spam-clicks
+          // can't race parallel POSTs (the perceived final state would otherwise
+          // be whichever request resolves last, not the user's last click).
+          const toggle = document.getElementById('bt-enabled');
+          if (toggle) toggle.disabled = true;
+          try {
+            const res = await _btConfigure(!!enabled);
+            if (!res) {
+              alert(_ar() ? 'فشل الحفظ' : 'Save failed');
+            }
             await loadBluetoothSyncSettings();
-            return;
+          } finally {
+            if (toggle) toggle.disabled = false;
           }
-          await loadBluetoothSyncSettings();
         }
 
         function bindBluetoothSyncControls() {
           // Kept as a no-op stub so loadSupportSection's existing call site
-          // (line ~6405) doesn't error. The toggle's change handler is wired
-          // inline via the onchange="" attribute, so no further binding is
-          // needed.
+          // doesn't error. The toggle's change handler is wired inline via the
+          // onchange="" attribute, so no further binding is needed.
         }
 
         function switchProfileTab(tabName, btn) {
