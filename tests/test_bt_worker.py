@@ -170,6 +170,7 @@ def test_loop_prefers_native_listener_when_available(tmp_path, monkeypatch):
     time.sleep(0.2)
     stop.set()
     t.join(timeout=2)
+    assert not t.is_alive(), 'worker did not stop'
 
     assert native_open_calls, 'native listener was not opened'
     assert accept_serve_calls, 'native accept-and-serve was not invoked'
@@ -213,6 +214,7 @@ def test_loop_falls_back_to_com_port_when_native_unavailable(tmp_path, monkeypat
     time.sleep(0.2)
     stop.set()
     t.join(timeout=2)
+    assert not t.is_alive(), 'worker did not stop'
 
     assert com_open_calls == ['COMTEST'], (
         f'COM-port fallback not invoked correctly: {com_open_calls}')
