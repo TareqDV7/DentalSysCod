@@ -129,6 +129,8 @@ Desktop side: a daemon thread parallel to `cloud_sync_worker()` re-reads its set
 
 **Known limitation:** the 30 s auto-loop only runs while the app's activity is alive — swiping the app from recents or rebooting the phone stops sync until the doctor opens the app again. (Earlier releases used a `flutter_background_service` foreground notification to keep the loop alive when the activity was gone, but the foreground-service stack repeatedly crashed the app on Android 13/14 with an uncatchable `RemoteServiceException`; the stability tradeoff is intentional for the single-doctor clinic flow.)
 
+> **Zero-setup BT initiative (in flight — partial):** A change is underway to remove the Windows *Incoming COM port* requirement entirely. The desktop will register its own RFCOMM SDP service via the native Windows Bluetooth API (no COM port, no manual setup), the Settings → Bluetooth card collapses to a single toggle, and mobile errors are rewritten to plain language. Internal plumbing for the native listener is on `main` (`b7b875f` adapter, `717d124` native ctypes listener, `57a0f92` worker fallback wiring); the UI strip, installer change, and mobile error helper are still pending. Spec: `docs/superpowers/specs/2026-05-29-bluetooth-zero-setup-ux-design.md`. Plan + progress checkpoint: `docs/superpowers/plans/2026-05-29-bluetooth-zero-setup-ux.md`.
+
 ---
 
 ## Branding & Configuration

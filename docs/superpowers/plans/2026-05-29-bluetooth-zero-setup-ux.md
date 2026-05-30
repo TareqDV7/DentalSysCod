@@ -10,6 +10,23 @@
 
 ---
 
+## Progress
+
+- [x] **Task 1** — `_BtSocketStream` adapter — commit `b7b875f` — spec ✅, code-quality ✅
+- [x] **Task 2** — Native AF_BTH RFCOMM listener (ctypes) — commit `717d124` — spec ✅, code-quality ✅ (with minors: dead `_RNRSERVICE_DELETE` constant; `recv` collapses errors→EOF — both documented tradeoffs)
+- [x] **Task 3** — `bt_sync_server` native-preferred + COM-port fallback — commit `57a0f92` — spec ✅, **code-quality review pending** (paused before dispatch). Implementer caught a contradiction in the plan's fallback test (the `_BT_LOOP_RECONNECT_SLEEP=0.01` monkeypatch made `== ['COMTEST']` exact-once assertion fail) and dropped the conflicting monkeypatch — principled deviation, retained.
+- [ ] **Task 4** — Desktop Settings UI: just the toggle
+- [ ] **Task 5** — Installer: drop COM-port provisioning
+- [ ] **Task 6** — Mobile `btMessageFor` + `classifyBtError` (TDD, pure)
+- [ ] **Task 7** — Wire mobile error mapping + remove COM-port tip
+- [ ] **Task 8** — README update + full verification + push
+
+**Test counts on hold:** pytest 205 (199 baseline + 4 from T1 + 2 from T3). Flutter test count 50 (unchanged until T6 adds 17).
+
+**Resume here:** dispatch the code-quality review subagent for commit `57a0f92` (T3) per the subagent-driven-development flow, then proceed to T4. The Step-3.3 plan caveat about existing `test_bt_worker.py` needing a defensive `OSError`-raising monkeypatch turned out to be unnecessary on this dev machine (no BT radio → `_bt_open_native_listener` raises `WSAError=10050` naturally). On a machine *with* a real BT radio, existing COM-driven tests may need that monkeypatch — re-check if resuming on a different host.
+
+---
+
 ## File Structure
 
 **Desktop (single-file convention — everything in `dental_clinic.py`):**
