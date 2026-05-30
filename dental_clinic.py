@@ -2928,56 +2928,7 @@ HTML_TEMPLATE = '''
             align-items: center;
         }
 
-        /* ── Bluetooth-sync status pill ── */
-        .bt-status-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 9px;
-            padding: 8px 16px;
-            border-radius: 999px;
-            font-size: 0.88rem;
-            font-weight: 600;
-            background: var(--bg);
-            color: var(--text);
-            border: 1px solid var(--line);
-            max-width: 100%;
-        }
-        .bt-status-pill .bt-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #98a4b0;
-            box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
-            transition: box-shadow 200ms ease, background 200ms ease;
-            flex: 0 0 auto;
-        }
-        .bt-status-pill.bt-listening {
-            background: #e6f7f5;
-            color: #0d6f64;
-            border-color: #13b5a7;
-        }
-        .bt-status-pill.bt-listening .bt-dot {
-            background: #13b5a7;
-            box-shadow: 0 0 0 4px rgba(19, 181, 167, 0.18);
-        }
-        .bt-status-pill.bt-waiting {
-            background: #fef6e3;
-            color: #7a4d0e;
-            border-color: #e69b1a;
-        }
-        .bt-status-pill.bt-waiting .bt-dot {
-            background: #e69b1a;
-            box-shadow: 0 0 0 4px rgba(230, 155, 26, 0.18);
-        }
-        .bt-status-pill.bt-error {
-            background: #fde7e9;
-            color: #9c2e36;
-            border-color: #d9434e;
-        }
-        .bt-status-pill.bt-error .bt-dot {
-            background: #d9434e;
-            box-shadow: 0 0 0 4px rgba(217, 67, 78, 0.18);
-        }
+        /* ── Bluetooth-sync toggle row ── */
         .bt-toggle-row {
             display: flex;
             align-items: center;
@@ -2992,70 +2943,6 @@ HTML_TEMPLATE = '''
             cursor: pointer;
             font-weight: 600;
         }
-        .bt-advanced > summary {
-            cursor: pointer;
-            color: var(--muted);
-            font-size: 0.85rem;
-            padding: 6px 0;
-            user-select: none;
-        }
-        .bt-advanced[open] > summary {
-            color: var(--text);
-        }
-        .bt-advanced-body {
-            padding-top: 10px;
-            display: grid;
-            gap: 10px;
-        }
-        .bt-advanced-body select {
-            padding: 8px 10px;
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            background: var(--panel);
-            color: var(--text);
-            font: inherit;
-            width: 100%;
-        }
-        .bt-listener-line.bt-listener-on { color: #0d6f64; }
-        .bt-listener-line.bt-listener-off { color: #9c2e36; }
-        .bt-diagnostics > summary {
-            cursor: pointer;
-            color: var(--muted);
-            font-size: 0.85rem;
-            padding: 6px 0;
-            user-select: none;
-        }
-        .bt-diagnostics[open] > summary { color: var(--text); }
-        .bt-diagnostics-body { padding-top: 8px; }
-        .bt-diagnostics-tablewrap { overflow-x: auto; }
-        .bt-diagnostics-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
-        }
-        .bt-diagnostics-table th,
-        .bt-diagnostics-table td {
-            padding: 6px 8px;
-            border-bottom: 1px solid var(--line);
-            text-align: start;
-            vertical-align: top;
-        }
-        .bt-diagnostics-table th {
-            font-weight: 600;
-            color: var(--muted);
-            background: var(--bg);
-        }
-        .bt-diagnostics-table td.bt-detail {
-            max-width: 240px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            color: var(--muted);
-        }
-        .bt-outcome-ok { color: #0d6f64; font-weight: 600; }
-        .bt-outcome-error,
-        .bt-outcome-unauthorized { color: #9c2e36; font-weight: 600; }
-        .bt-outcome-rejected { color: #6b7280; font-weight: 600; }
         .screen-shell {
             display: grid;
             gap: 16px;
@@ -3992,104 +3879,23 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
-                <h3 style="margin-top:18px;" data-en="Bluetooth Sync" data-ar="مزامنة عبر بلوتوث">Bluetooth Sync</h3>
+                <h3 style="margin-top:18px;" data-en="Bluetooth sync" data-ar="مزامنة بلوتوث">Bluetooth sync</h3>
                 <div class="section-card" id="bt-sync-card" style="max-width:560px;margin-bottom:18px;">
                     <p style="margin:0 0 12px;color:var(--muted);font-size:0.9em;line-height:1.6;"
-                       data-en="A paired phone syncs over Bluetooth whenever Wi-Fi and the cloud aren't reachable. Pair phone ↔ PC once in Windows Bluetooth settings, then just flip the toggle — the clinic PC auto-picks the right COM port."
-                       data-ar="يتزامن الهاتف المُقترن عبر بلوتوث عند تعذّر الوصول إلى الإنترنت والشبكة المحلية. اقترن الجهازَين مرّة واحدة من إعدادات بلوتوث في ويندوز، ثم فعّل الخيار — يختار الكمبيوتر منفذ COM تلقائيًا.">
+                       data-en="When the phone can't reach Wi-Fi or the cloud, it syncs with this PC over Bluetooth. Pair your phone in Windows Bluetooth settings once, then flip the toggle."
+                       data-ar="عندما لا يمكن للهاتف الوصول إلى الواي فاي أو السحابة، يقوم بالمزامنة مع هذا الحاسوب عبر البلوتوث. قم بإقران الهاتف في إعدادات بلوتوث ويندوز مرة واحدة، ثم قم بتفعيل المفتاح.">
                     </p>
-
-                    <div id="bt-status-pill" class="bt-status-pill">
-                        <span class="bt-dot"></span>
-                        <span id="bt-status-text" data-en="Loading…" data-ar="جارٍ التحميل…">Loading…</span>
-                    </div>
 
                     <div class="bt-toggle-row">
                         <label>
                             <input type="checkbox" id="bt-enabled" onchange="bluetoothToggleEnabled(this.checked)"/>
-                            <span data-en="Enable Bluetooth Sync" data-ar="تفعيل المزامنة عبر بلوتوث">Enable Bluetooth Sync</span>
+                            <span data-en="Bluetooth sync" data-ar="مزامنة بلوتوث">Bluetooth sync</span>
                         </label>
                     </div>
 
-                    <!-- Diagnostic section: live listener indicator + paired phones + connection log.
-                         Populated by _renderBtDiagnostics() after /api/bt/status returns. -->
-                    <div id="bt-listener-line" class="bt-listener-line" style="font-size:0.85em;color:var(--muted);margin:6px 0 10px;">
-                        <span data-en="Listener: —" data-ar="المستمع: —">Listener: —</span>
-                    </div>
-
-                    <details class="bt-diagnostics" id="bt-paired-details" style="margin-top:8px;">
-                        <summary>
-                            <span id="bt-paired-summary" data-en="Paired phones (0)" data-ar="الهواتف المقترنة (0)">Paired phones (0)</span>
-                        </summary>
-                        <div class="bt-diagnostics-body">
-                            <div id="bt-paired-empty" style="display:none;color:var(--muted);font-size:0.85em;padding:6px 0;"
-                                 data-en="No phones paired yet. After the first successful sync, devices will appear here."
-                                 data-ar="لا توجد هواتف مقترنة بعد. ستظهر الأجهزة هنا بعد أول مزامنة ناجحة.">
-                                No phones paired yet. After the first successful sync, devices will appear here.
-                            </div>
-                            <div class="bt-diagnostics-tablewrap">
-                                <table class="bt-diagnostics-table" id="bt-paired-table" style="display:none;">
-                                    <thead>
-                                        <tr>
-                                            <th data-en="Name" data-ar="الاسم">Name</th>
-                                            <th data-en="First paired" data-ar="أول اقتران">First paired</th>
-                                            <th data-en="Last seen" data-ar="آخر ظهور">Last seen</th>
-                                            <th data-en="Active" data-ar="نشط">Active</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="bt-paired-body"></tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </details>
-
-                    <details class="bt-diagnostics" id="bt-attempts-details" style="margin-top:6px;">
-                        <summary>
-                            <span data-en="Recent connection log" data-ar="سجل المحاولات الأخيرة">Recent connection log</span>
-                        </summary>
-                        <div class="bt-diagnostics-body">
-                            <div id="bt-attempts-empty" style="display:none;color:var(--muted);font-size:0.85em;padding:6px 0;"
-                                 data-en="No connection attempts yet. When a phone tries to sync, the result will appear here."
-                                 data-ar="لا توجد محاولات اتصال بعد. عند محاولة هاتف للمزامنة، ستظهر النتيجة هنا.">
-                                No connection attempts yet. When a phone tries to sync, the result will appear here.
-                            </div>
-                            <div class="bt-diagnostics-tablewrap">
-                                <table class="bt-diagnostics-table" id="bt-attempts-table" style="display:none;">
-                                    <thead>
-                                        <tr>
-                                            <th data-en="Time" data-ar="الوقت">Time</th>
-                                            <th data-en="Device" data-ar="الجهاز">Device</th>
-                                            <th data-en="Op" data-ar="العملية">Op</th>
-                                            <th data-en="Outcome" data-ar="النتيجة">Outcome</th>
-                                            <th data-en="Detail" data-ar="التفاصيل">Detail</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="bt-attempts-body"></tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </details>
-
-                    <details class="bt-advanced">
-                        <summary data-en="Advanced — pick COM port manually" data-ar="إعدادات متقدّمة — اختيار منفذ COM يدويًا">Advanced — pick COM port manually</summary>
-                        <div class="bt-advanced-body">
-                            <select id="bt-com-port"></select>
-                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                                <button class="btn btn-warning" type="button" onclick="loadBluetoothSyncSettings()"
-                                        data-en="Refresh ports" data-ar="تحديث القائمة">Refresh ports</button>
-                                <button class="btn btn-primary" type="button" id="bt-save-btn"
-                                        data-en="Save" data-ar="حفظ">Save</button>
-                            </div>
-                        </div>
-                    </details>
-
-                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
-                        <button class="btn btn-secondary" id="bt-open-windows-btn" type="button"
-                                data-en="Open Windows Bluetooth settings"
-                                data-ar="فتح إعدادات بلوتوث في ويندوز">
-                            Open Windows Bluetooth settings
-                        </button>
-                    </div>
+                    <div id="bt-error-line"
+                         style="display:none;margin-top:10px;color:var(--danger,#c0392b);font-size:0.9em;line-height:1.5;"
+                         role="alert" aria-live="polite"></div>
                 </div>
 
                 <h3 style="margin-top:4px;" data-i18n="audit_log">Audit Log</h3>
@@ -7115,181 +6921,65 @@ HTML_TEMPLATE = '''
 
         // ── Bluetooth Sync (Settings → Bluetooth Sync) ────────────────────────
 
-        function _renderBtStatusPill(s) {
-          // Drive both the status pill (color + dot) and its text from /api/bt/status.
-          const pill = document.getElementById('bt-status-pill');
-          const txt  = document.getElementById('bt-status-text');
-          if (!pill || !txt) return;
-          pill.classList.remove('bt-listening', 'bt-waiting', 'bt-error');
+        function _friendlyBtDesktopError(raw) {
+          // Map the server-side last_error string to plain language. Server
+          // errors we currently emit: "no bluetooth port available",
+          // "serial: …", "WSAError=…", "OSError: …". Everything else falls
+          // through to a friendly catch-all.
+          const r = (raw || '').toString().toLowerCase();
           const ar = _ar();
-          let cls = '', line = '';
-          if (!s.enabled) {
-            line = ar ? 'متوقّفة' : 'Disabled';
-          } else if (s.last_error) {
-            cls = 'bt-error';
-            line = (ar ? '⚠️ ' : '⚠️ ') + s.last_error;
-          } else if (!s.com_port) {
-            cls = 'bt-waiting';
-            line = ar ? 'لم يُعثر على منفذ بلوتوث — اقترن هاتفًا من إعدادات ويندوز.'
-                       : 'No Bluetooth port found — pair a phone in Windows BT settings first.';
-          } else if (s.last_sync_at) {
-            cls = 'bt-listening';
-            line = (ar ? 'آخر مزامنة: ' : 'Last sync: ') + s.last_sync_at + ' · ' + s.com_port;
-          } else {
-            cls = 'bt-listening';
-            line = (ar ? 'يستمع على ' : 'Listening on ') + s.com_port +
-                   (ar ? ' — بانتظار الهاتف…' : ' — waiting for a phone…');
+          if (r.includes('no bluetooth port') || r.includes('af_bth') || r.includes('wsaerror')) {
+            return ar
+              ? 'تعذّر بدء البلوتوث — تحقق من تشغيل البلوتوث في هذا الحاسوب.'
+              : "Bluetooth couldn't start — is this PC's Bluetooth turned on?";
           }
-          if (cls) pill.classList.add(cls);
-          txt.textContent = line;
-        }
-
-        function _renderBtDiagnostics(s) {
-          // Populate the three diagnostic sections (listener line, paired phones,
-          // recent attempts) from the same /api/bt/status payload. Pure DOM
-          // work — no fetch — so it stays cheap and reusable.
-          const ar = _ar();
-
-          // 1. Listener indicator line.
-          const lineEl = document.getElementById('bt-listener-line');
-          if (lineEl) {
-            lineEl.classList.remove('bt-listener-on', 'bt-listener-off');
-            const span = lineEl.querySelector('span');
-            if (s.server_listening) {
-              lineEl.classList.add('bt-listener-on');
-              const port = s.com_port || '?';
-              if (span) {
-                span.textContent = (ar ? 'يستمع على ' : 'Listening on ') + port + ' ✓';
-              }
-            } else {
-              lineEl.classList.add('bt-listener-off');
-              if (span) {
-                span.textContent = ar ? 'لا يستمع (المنفذ غير مفتوح) ✗'
-                                       : 'No listener (port not open) ✗';
-              }
-            }
+          if (r.includes('serial')) {
+            return ar
+              ? 'تعذّر فتح منفذ البلوتوث.'
+              : "Couldn't open the Bluetooth port.";
           }
-
-          // 2. Paired phones table.
-          const paired = Array.isArray(s.paired_devices) ? s.paired_devices : [];
-          const summaryEl = document.getElementById('bt-paired-summary');
-          if (summaryEl) {
-            summaryEl.textContent = (ar ? 'الهواتف المقترنة (' : 'Paired phones (') + paired.length + ')';
-          }
-          const pairedTable = document.getElementById('bt-paired-table');
-          const pairedBody  = document.getElementById('bt-paired-body');
-          const pairedEmpty = document.getElementById('bt-paired-empty');
-          if (pairedBody) {
-            pairedBody.innerHTML = '';
-            if (paired.length === 0) {
-              if (pairedTable) pairedTable.style.display = 'none';
-              if (pairedEmpty) pairedEmpty.style.display = '';
-            } else {
-              if (pairedTable) pairedTable.style.display = '';
-              if (pairedEmpty) pairedEmpty.style.display = 'none';
-              for (const d of paired) {
-                const tr = document.createElement('tr');
-                const cells = [
-                  d.device_name || d.device_id || '—',
-                  d.paired_at || '—',
-                  d.last_seen_at || '—',
-                  d.is_active ? (ar ? 'نعم' : 'Yes') : (ar ? 'لا' : 'No'),
-                ];
-                for (const text of cells) {
-                  const td = document.createElement('td');
-                  td.textContent = text;
-                  tr.appendChild(td);
-                }
-                pairedBody.appendChild(tr);
-              }
-            }
-          }
-
-          // 3. Recent connection attempts.
-          const attempts = Array.isArray(s.recent_attempts) ? s.recent_attempts : [];
-          const attTable = document.getElementById('bt-attempts-table');
-          const attBody  = document.getElementById('bt-attempts-body');
-          const attEmpty = document.getElementById('bt-attempts-empty');
-          if (attBody) {
-            attBody.innerHTML = '';
-            if (attempts.length === 0) {
-              if (attTable) attTable.style.display = 'none';
-              if (attEmpty) attEmpty.style.display = '';
-            } else {
-              if (attTable) attTable.style.display = '';
-              if (attEmpty) attEmpty.style.display = 'none';
-              for (const a of attempts) {
-                const tr = document.createElement('tr');
-                const tdTime = document.createElement('td');
-                tdTime.textContent = a.ts || '—';
-                const tdDev = document.createElement('td');
-                tdDev.textContent = a.device_name || a.device_id || '—';
-                const tdOp  = document.createElement('td');
-                tdOp.textContent = a.op || '—';
-                const tdOut = document.createElement('td');
-                tdOut.textContent = a.outcome || '—';
-                const outcomeClass = 'bt-outcome-' + (a.outcome || 'unknown');
-                tdOut.classList.add(outcomeClass);
-                const tdDet = document.createElement('td');
-                tdDet.classList.add('bt-detail');
-                tdDet.textContent = a.detail || '';
-                if (a.detail) tdDet.title = a.detail;
-                tr.appendChild(tdTime);
-                tr.appendChild(tdDev);
-                tr.appendChild(tdOp);
-                tr.appendChild(tdOut);
-                tr.appendChild(tdDet);
-                attBody.appendChild(tr);
-              }
-            }
-          }
+          return ar ? 'حدث خطأ في مزامنة البلوتوث.' : 'Bluetooth sync hit an error.';
         }
 
         async function loadBluetoothSyncSettings() {
+          // Re-uses the original entry point name so loadSupportSection() still
+          // wires up the BT card. Hides the whole card if the endpoint is
+          // unreachable (cloud node, network blip).
           try {
             const r = await fetch('/api/bt/status', {credentials: 'same-origin'});
-            if (!r.ok) { document.getElementById('bt-sync-card').style.display = 'none'; return; }
+            if (!r.ok) {
+              const card = document.getElementById('bt-sync-card');
+              if (card) card.style.display = 'none';
+              return;
+            }
             const s = await r.json();
-            document.getElementById('bt-enabled').checked = !!s.enabled;
-            const sel = document.getElementById('bt-com-port');
-            if (sel) {
-              sel.innerHTML = '';
-              const opt0 = document.createElement('option');
-              opt0.value = '';
-              opt0.textContent = _ar()
-                ? (s.recommended_port ? `— تلقائي (${s.recommended_port}) —` : '— تلقائي —')
-                : (s.recommended_port ? `— Auto (${s.recommended_port}) —` : '— Auto —');
-              sel.appendChild(opt0);
-              for (const p of (s.available_ports || [])) {
-                const o = document.createElement('option');
-                const tag = p.looks_incoming ? (_ar() ? ' [موصى به]' : ' [recommended]') : '';
-                o.value = p.device;
-                o.textContent = `${p.device} (${p.description || '—'})${tag}`;
-                if (p.device === s.com_port) o.selected = true;
-                sel.appendChild(o);
-              }
-              if (s.com_port && !Array.from(sel.options).some(o => o.value === s.com_port)) {
-                const o = document.createElement('option');
-                o.value = s.com_port;
-                o.textContent = `${s.com_port} ` + (_ar() ? '(غير متوفّر حاليًا)' : '(not currently present)');
-                o.selected = true;
-                sel.appendChild(o);
+            const toggle = document.getElementById('bt-enabled');
+            if (toggle) toggle.checked = !!s.enabled;
+            const errLine = document.getElementById('bt-error-line');
+            if (errLine) {
+              if (s.enabled && s.last_error) {
+                errLine.textContent = _friendlyBtDesktopError(s.last_error);
+                errLine.style.display = '';
+              } else {
+                errLine.textContent = '';
+                errLine.style.display = 'none';
               }
             }
-            _renderBtStatusPill(s);
-            _renderBtDiagnostics(s);
           } catch (_) {
-            document.getElementById('bt-sync-card').style.display = 'none';
+            const card = document.getElementById('bt-sync-card');
+            if (card) card.style.display = 'none';
           }
         }
 
-        async function _btConfigure(enabled, com_port) {
+        async function _btConfigure(enabled) {
           // Single network call. Returns the parsed JSON or null on failure.
+          // com_port is no longer sent — the native listener doesn't need one;
+          // the COM-port fallback uses the server-side default picker.
           try {
             const r = await fetch('/api/bt/configure', {
               method: 'POST', credentials: 'same-origin',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({enabled, com_port}),
+              body: JSON.stringify({enabled}),
             });
             if (!r.ok) return null;
             return await r.json();
@@ -7297,42 +6987,20 @@ HTML_TEMPLATE = '''
         }
 
         async function bluetoothToggleEnabled(enabled) {
-          // Toggle path: leave com_port blank so the server auto-picks the
-          // best-looking Bluetooth port. If the user already picked one
-          // manually, preserve it.
-          const sel = document.getElementById('bt-com-port');
-          const picked = sel ? (sel.value || '') : '';
-          const res = await _btConfigure(!!enabled, picked);
+          const res = await _btConfigure(!!enabled);
           if (!res) {
             alert(_ar() ? 'فشل الحفظ' : 'Save failed');
-            // Revert the checkbox to whatever the server still thinks.
             await loadBluetoothSyncSettings();
             return;
           }
-          if (enabled && res.auto_picked && res.com_port) {
-            // Briefly flash a hint so the user knows we picked a port for them.
-            const txt = document.getElementById('bt-status-text');
-            if (txt) {
-              txt.textContent = (_ar() ? 'اختير المنفذ تلقائيًا: ' : 'Auto-picked port: ') + res.com_port;
-            }
-          }
-          await loadBluetoothSyncSettings();
-        }
-
-        async function saveBluetoothSyncSettings() {
-          // Advanced path: explicit Save inside the manual COM-port disclosure.
-          const enabled  = document.getElementById('bt-enabled').checked;
-          const com_port = (document.getElementById('bt-com-port') || {}).value || '';
-          const res = await _btConfigure(enabled, com_port);
-          if (!res) { alert(_ar() ? 'فشل الحفظ' : 'Save failed'); return; }
           await loadBluetoothSyncSettings();
         }
 
         function bindBluetoothSyncControls() {
-          const saveBtn = document.getElementById('bt-save-btn');
-          if (saveBtn) saveBtn.onclick = saveBluetoothSyncSettings;
-          const winBtn = document.getElementById('bt-open-windows-btn');
-          if (winBtn) winBtn.onclick = () => { window.location.href = 'ms-settings:bluetooth'; };
+          // Kept as a no-op stub so loadSupportSection's existing call site
+          // (line ~6405) doesn't error. The toggle's change handler is wired
+          // inline via the onchange="" attribute, so no further binding is
+          // needed.
         }
 
         function switchProfileTab(tabName, btn) {
