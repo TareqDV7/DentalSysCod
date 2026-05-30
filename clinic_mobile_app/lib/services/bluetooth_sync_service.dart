@@ -126,10 +126,16 @@ class BluetoothSyncService {
 
   /// Open a fresh stream, run `op:bt_pair`, store the returned token.
   /// Returns an outcome carrying either the token (on success) or a
-  /// human-readable error message (on failure). The previous version
-  /// collapsed every failure mode to a bare null, which is unfixable from
-  /// the field — the Settings UI had no way to tell a timeout from a
-  /// permission denial from a server-side rejection.
+  /// **stable error token** (on failure) — never raw `e.toString()`.
+  ///
+  /// Token contract (read by [classifyBtError] in the UI layer):
+  ///   * `peer-unreachable:<runtimeType>` — connect / open failed. The
+  ///     `:<runtimeType>` suffix is informational only (it surfaces in
+  ///     support logs when the user copies the stored string); the
+  ///     classifier matches only the `peer-unreachable:` prefix.
+  ///   * `auto-pair not wired on this build` / server-side rejection text
+  ///     pass through unchanged — they are conditions, not exceptions, and
+  ///     the legacy classifier maps them to [BtFailure.unknown].
   Future<_AutoPairOutcome> _autoPair(String bondedMac) async {
     if (!_canAutoPair) {
       return _AutoPairOutcome.failure('auto-pair not wired on this build');

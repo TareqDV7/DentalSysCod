@@ -16,7 +16,7 @@ import '../services/bluetooth_sync_service.dart';
 import '../services/connectivity_sync_service.dart';
 import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
-import 'package:clinic_mobile_app/utils/bt_error_message.dart';
+import '../utils/bt_error_message.dart';
 
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final LocalStorageService _storage;

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:provider/provider.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import '../config/app_config.dart';
@@ -639,9 +640,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           return;
         }
       }
-    } catch (_) {
+    } on PlatformException catch (_) {
       // Adapter state probe itself failed — fall through and let the
-      // device list query report a clearer error.
+      // device list query report a clearer error. Tightened from a bare
+      // `catch (_)` so non-platform exceptions (real bugs) propagate.
     }
 
     final List<BluetoothDevice> devices;
