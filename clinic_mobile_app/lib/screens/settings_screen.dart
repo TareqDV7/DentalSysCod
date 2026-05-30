@@ -12,6 +12,7 @@ import '../services/local_storage_service.dart';
 import 'catalog_screen.dart';
 import 'pairing_screen.dart';
 import '../utils/app_strings.dart';
+import '../utils/bt_error_message.dart';
 import '../utils/date_format_helper.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/clinic_card.dart';
@@ -606,6 +607,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       messenger.showSnackBar(
           SnackBar(content: Text(app.locale == 'ar' ? ar : en)));
     }
+    void snackMsg(String msg) =>
+        messenger.showSnackBar(SnackBar(content: Text(msg)));
 
     // Android 12+ runtime perms — getBondedDevices() returns empty without
     // BLUETOOTH_CONNECT granted, which is indistinguishable from "no devices
@@ -613,9 +616,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final granted = await BluetoothPermissions.ensureGranted();
     if (!granted) {
       if (!context.mounted) return;
-      snack(
-          'Bluetooth permission denied — grant it in Android settings',
-          'يلزم منح إذن بلوتوث من إعدادات أندرويد');
+      snackMsg(btMessageFor(BtFailure.permissionDenied, app.locale));
       return;
     }
 
@@ -631,8 +632,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             await FlutterBluetoothSerial.instance.requestEnable() ?? false;
         if (!enabled) {
           if (!context.mounted) return;
-          snack('Turn Bluetooth on, then try again',
-              'فعّل البلوتوث ثم حاول مرّة أخرى');
+          snackMsg(btMessageFor(BtFailure.phoneBtOff, app.locale));
           return;
         }
       }
@@ -646,15 +646,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       devices = await FlutterBluetoothSerial.instance.getBondedDevices();
     } catch (e) {
       if (!context.mounted) return;
-      snack('Could not access Bluetooth: $e',
-          'تعذّر الوصول إلى بلوتوث: $e');
+      snackMsg(btMessageFor(classifyBtError(e), app.locale));
       return;
     }
     if (!context.mounted) return;
     if (devices.isEmpty) {
-      snack(
-          'No bonded devices — pair in Android Bluetooth settings first',
-          'لا توجد أجهزة مقترنة — اقترن أولًا من إعدادات بلوتوث');
+      snackMsg(btMessageFor(BtFailure.notBonded, app.locale));
       return;
     }
     final picked = await showModalBottomSheet<BluetoothDevice>(
@@ -688,7 +685,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     if (!context.mounted) return;
     if (app.btLastError != null && app.btLastError!.isNotEmpty) {
-      snack(app.btLastError!, app.btLastError!);
+      snackMsg(app.btLastError!);
     } else {
       snack('Paired with ${picked.name ?? picked.address}',
           'تم الاقتران مع ${picked.name ?? picked.address}');
@@ -698,27 +695,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
 /// Red banner shown under the Bluetooth peer row when `app.btLastError`
 /// is set. The technical message is wrapped in [SelectableText] so the
-/// doctor can long-press → copy to share with support; connection-style
-/// failures get a one-line hint pointing at the clinic PC's COM port pill.
+/// doctor can long-press → copy to share with support.
 class _BtErrorCard extends StatelessWidget {
   final String message;
   final bool isArabic;
   const _BtErrorCard({required this.message, required this.isArabic});
 
-  bool get _looksLikeConnectFailure {
-    final m = message.toLowerCase();
-    return m.contains('bt connect timed out') ||
-        m.contains('connect failed') ||
-        m.contains('bt connect failed');
-  }
-
   @override
   Widget build(BuildContext context) {
-    final hint = _looksLikeConnectFailure
-        ? (isArabic
-            ? 'تلميح: في كمبيوتر العيادة، افتح الإعدادات → مزامنة بلوتوث وتأكد أن مؤشّر منفذ COM أخضر.'
-            : 'Tip: on the clinic PC, open Settings → Bluetooth Sync, check the COM port pill is green.')
-        : null;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
@@ -727,40 +711,26 @@ class _BtErrorCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFD9434E)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.error_outline,
-              color: Color(0xFF9C2E36), size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(
-                  message,
-                  style: const TextStyle(
-                    color: Color(0xFF9C2E36),
-                    fontSize: 13,
-                    height: 1.35,
-                  ),
+      child: Directionality(
+        textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.error_outline,
+                color: Color(0xFF9C2E36), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SelectableText(
+                message,
+                style: const TextStyle(
+                  color: Color(0xFF9C2E36),
+                  fontSize: 13,
+                  height: 1.35,
                 ),
-                if (hint != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    hint,
-                    style: const TextStyle(
-                      color: Color(0xFF9C2E36),
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
-              ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

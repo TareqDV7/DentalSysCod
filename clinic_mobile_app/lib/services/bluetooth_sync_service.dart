@@ -137,16 +137,13 @@ class BluetoothSyncService {
     final BtStream stream;
     try {
       stream = await _open(bondedMac);
-    } on TimeoutException catch (e) {
-      final detail = e.message ?? '';
-      return _AutoPairOutcome.failure(
-          'BT connect timed out (10s) — is the clinic PC listening? $detail'
-              .trim());
+    } on TimeoutException catch (_) {
+      return _AutoPairOutcome.failure('peer-unreachable:timeout');
     } on Exception catch (e) {
-      return _AutoPairOutcome.failure('BT connect failed: $e');
+      return _AutoPairOutcome.failure('peer-unreachable:${e.runtimeType}');
     } catch (e) {
       // Some platform channels still throw bare String / Error objects.
-      return _AutoPairOutcome.failure('BT connect failed: $e');
+      return _AutoPairOutcome.failure('peer-unreachable:${e.runtimeType}');
     }
     final deviceId = await _loadDeviceId!();
     final result = await BtSessionClient(stream).runPairing(
@@ -168,7 +165,7 @@ class BluetoothSyncService {
     try {
       stream = await _open(bondedMac);
     } catch (e) {
-      return BtSessionResult.failure(e.toString());
+      return BtSessionResult.failure('peer-unreachable:${e.runtimeType}');
     }
     return BtSessionClient(stream).runSession(
       deviceToken: deviceToken,

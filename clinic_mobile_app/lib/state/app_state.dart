@@ -16,6 +16,7 @@ import '../services/bluetooth_sync_service.dart';
 import '../services/connectivity_sync_service.dart';
 import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
+import 'package:clinic_mobile_app/utils/bt_error_message.dart';
 
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final LocalStorageService _storage;
@@ -109,8 +110,25 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _btBondedMac = await _storage.getBtBondedMac();
     _btBondedLabel = await _storage.getBtBondedLabel();
     _btLastSyncAt = await _storage.getBtLastSyncAt();
-    _btLastError = await _storage.getBtLastError();
+    final stored = await _storage.getBtLastError();
+    _btLastError = _classifyStoredBtError(stored);
     notifyListeners();
+  }
+
+  /// Stored BT error strings include both pre-localized friendly text (set by
+  /// this class via [btMessageFor]) and stable tokens like
+  /// `peer-unreachable:TimeoutException` (set by the connectivity layer in
+  /// [BluetoothSyncService] / [ConnectivitySyncService]). Classify the
+  /// tokenized ones via [classifyBtError] so the UI sees friendly localized
+  /// text either way. Friendly strings already contain no `:` tokens, so the
+  /// classifier maps them to [BtFailure.unknown] only when nothing else fits —
+  /// but we short-circuit on the `peer-unreachable:` prefix to avoid that.
+  String? _classifyStoredBtError(String? stored) {
+    if (stored == null || stored.isEmpty) return null;
+    if (stored.startsWith('peer-unreachable:')) {
+      return btMessageFor(BtFailure.peerUnreachable, _locale);
+    }
+    return stored;
   }
 
   /// True when the BT auto-loop should be running: BT enabled, peer bonded,
@@ -142,7 +160,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       final granted = await BluetoothPermissions.ensureGranted();
       if (!granted) {
         _btEnabled = false;
-        _btLastError = 'Bluetooth permission denied';
+        _btLastError = btMessageFor(BtFailure.permissionDenied, _locale);
         await _storage.setBtEnabled(false);
         await _storage.setBtLastError(_btLastError!);
         _refreshBtAutoLoop();
@@ -179,14 +197,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<bool> syncViaBluetoothNow() async {
     final mac = _btBondedMac;
     if (mac == null || mac.isEmpty) {
-      _btLastError = 'No clinic PC paired';
+      _btLastError = btMessageFor(BtFailure.noPeerSelected, _locale);
       await _storage.setBtLastError(_btLastError!);
       notifyListeners();
       return false;
     }
     final granted = await BluetoothPermissions.ensureGranted();
     if (!granted) {
-      _btLastError = 'Bluetooth permission denied';
+      _btLastError = btMessageFor(BtFailure.permissionDenied, _locale);
       await _storage.setBtLastError(_btLastError!);
       notifyListeners();
       return false;
