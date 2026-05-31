@@ -2169,11 +2169,11 @@ HTML_TEMPLATE = '''
                     <div class="form-row-3">
                         <div class="form-group">
                             <label data-i18n="subtotal_required">Subtotal *<small style="font-weight:400;color:var(--muted);"> (or expression)</small></label>
-                            <input type="text" inputmode="decimal" name="subtotal" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off" required>
+                            <input type="text" inputmode="decimal" name="subtotal" id="billing-subtotal" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off" required>
                         </div>
                         <div class="form-group">
-                            <label data-i18n="discount">Discount</label>
-                            <input type="text" inputmode="decimal" name="discount" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
+                            <label data-i18n="discount">Discount <small style="font-weight:400;color:var(--muted);">(or %, e.g. 20%)</small></label>
+                            <input type="text" inputmode="decimal" name="discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="billing-subtotal" placeholder="0" autocomplete="off">
                         </div>
                         <div class="form-group">
                             <label>Credit Used <small id="billing-credit-available" style="font-weight:400;color:var(--muted);"></small></label>
@@ -2583,8 +2583,8 @@ HTML_TEMPLATE = '''
                         <input type="text" inputmode="decimal" id="ef-price" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
                     </div>
                     <div class="form-group">
-                        <label data-i18n="discount">Discount <small style="font-weight:400;color:var(--muted);">(or expression)</small></label>
-                        <input type="text" inputmode="decimal" id="ef-discount" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
+                        <label data-i18n="discount">Discount <small style="font-weight:400;color:var(--muted);">(or expression, or % e.g. 20%)</small></label>
+                        <input type="text" inputmode="decimal" id="ef-discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="ef-price" placeholder="0" autocomplete="off">
                     </div>
                     <div class="form-group">
                         <label data-i18n="lab_expense">Lab Expense <small style="font-weight:400;color:var(--muted);">(or expression)</small></label>
@@ -2991,6 +2991,7 @@ HTML_TEMPLATE = '''
                 receivables_empty_hint: 'Once invoices are created, the outstanding balance will appear here.',
                 expenses_empty_hint: 'Adjust the filters or add the first expense entry.',
                 or_expression: 'or expression',
+                or_percent: 'or % e.g. 20%',
                 unknown_patient: 'Unknown patient'
             },
             ar: {
@@ -3346,6 +3347,7 @@ HTML_TEMPLATE = '''
                 receivables_empty_hint: 'بمجرد إنشاء الفواتير، سيظهر الرصيد المستحق هنا.',
                 expenses_empty_hint: 'عدّل الفلاتر أو أضف أول إدخال مصاريف.',
                 or_expression: 'أو تعبير',
+                or_percent: 'أو نسبة مثل ٪20',
                 unknown_patient: 'مريض غير معروف'
             }
         };
@@ -5610,7 +5612,7 @@ HTML_TEMPLATE = '''
                             </div>
                             <div class="form-row-3">
                                 <div class="form-group"><label>${t('price','Price')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')})</small></label><input type="text" inputmode="decimal" name="price" id="followup-price" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off" required></div>
-                                <div class="form-group"><label>${t('discount','Discount')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')})</small></label><input type="text" inputmode="decimal" name="discount" id="followup-discount" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off"></div>
+                                <div class="form-group"><label>${t('discount','Discount')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')}, ${t('or_percent','or % e.g. 20%')})</small></label><input type="text" inputmode="decimal" name="discount" id="followup-discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="followup-price" placeholder="0" autocomplete="off"></div>
                                 <div class="form-group"><label>${t('lab_expense','Lab Expense')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')})</small></label><input type="text" inputmode="decimal" name="lab_expense" id="followup-lab-expense" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off"></div>
                                 <div class="form-group"><label>${t('payment','Payment')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')})</small></label><input type="text" inputmode="decimal" name="payment" id="followup-payment" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off" required></div>
                             </div>
