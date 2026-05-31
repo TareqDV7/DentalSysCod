@@ -3490,9 +3490,9 @@ def billing_invoice(billing_id):
     pay_method = escape(b.get("payment_method") or "—")
     pay_status = escape(b.get("payment_status") or "—")
 
-    def amt_cell(value, expr=None):
-        # Show the verbatim expression the user typed (e.g. "20+20") when there is one.
-        expr = sanitize_amount_expr(expr, value)
+    def amt_cell(value, expr=None, base=None):
+        # Show the verbatim expression the user typed (e.g. "20+20" or "20%") when there is one.
+        expr = sanitize_amount_expr(expr, value, base=base)
         if expr:
             return f'{escape(expr)} = {currency} {float(value or 0):.2f}'
         return f'{currency} {float(value or 0):.2f}'
@@ -3531,7 +3531,7 @@ def billing_invoice(billing_id):
   <tr><th>{lbl["method"]}</th><td>{pay_method}</td></tr>
   <tr><th>{lbl["status"]}</th><td>{pay_status}</td></tr>
   <tr><th>{lbl["subtotal"]}</th><td>{amt_cell(b.get("subtotal"), b.get("subtotal_expr"))}</td></tr>
-  <tr><th>{lbl["discount"]}</th><td>{amt_cell(b.get("discount"), b.get("discount_expr"))}</td></tr>
+  <tr><th>{lbl["discount"]}</th><td>{amt_cell(b.get("discount"), b.get("discount_expr"), base=b.get("subtotal"))}</td></tr>
   <tr class="total-row"><th>{lbl["total"]}</th><td>{currency} {float(b.get("amount") or 0):.2f}</td></tr>
   <tr><th>{lbl["paid"]}</th><td>{amt_cell(b.get("paid_amount"), b.get("paid_amount_expr"))}</td></tr>
   <tr class="total-row"><th>{lbl["balance"]}</th><td>{currency} {float(b.get("balance_due") or 0):.2f}</td></tr>

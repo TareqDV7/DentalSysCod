@@ -171,3 +171,20 @@ def test_billing_keeps_percent_discount(client):
     assert r.status_code == 200
     row = client.get('/api/billing').get_json()[0]
     assert row['discount_expr'] == '20%'
+
+
+def test_invoice_renders_percent_discount(client):
+    pid = _patient()
+    client.post('/api/billing', json={
+        'patient_id': pid,
+        'subtotal': 100, 'discount': 20, 'discount_expr': '20%',
+        'paid_amount': 0,
+    })
+    bid = client.get('/api/billing').get_json()[0]['id']
+    # /invoice is behind the portal login gate; a truthy session uid satisfies it.
+    with client.session_transaction() as sess:
+        sess['uid'] = 1
+        sess['uname'] = 'tester'
+    html = client.get(f'/invoice/{bid}').get_data(as_text=True)
+    # amt_cell must re-keep the percent (it re-validates with the subtotal as base).
+    assert '20% = ' in html
