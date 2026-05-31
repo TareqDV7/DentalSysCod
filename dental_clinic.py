@@ -1244,15 +1244,48 @@ def get_patient_credit_balance(cursor, patient_id):
 
 
 _AMOUNT_EXPR_RE = re.compile(r'^[0-9.+\-*/() ]+$')
+_PERCENT_NUM_RE = re.compile(r'^\d+(?:\.\d+)?$')
 
 
-def sanitize_amount_expr(raw, numeric_value):
+def _parse_percent(raw):
+    """Return the percent magnitude when ``raw`` is a single leading/trailing ``%`` wrapping
+    a plain non-negative number (``"20%"`` or ``"%20"`` → ``20.0``); otherwise ``None``."""
+    s = str(raw or '').strip()
+    if s.count('%') != 1 or not (s.startswith('%') or s.endswith('%')):
+        return None
+    core = s.replace('%', '').strip()
+    if not _PERCENT_NUM_RE.match(core):
+        return None
+    return float(core)
+
+
+def _format_percent(pct):
+    """Normalise a percent magnitude for display: ``20.0`` → ``"20%"``, ``12.5`` → ``"12.5%"``."""
+    text = f'{pct:.4f}'.rstrip('0').rstrip('.')
+    return f'{text}%'
+
+
+def sanitize_amount_expr(raw, numeric_value, base=None):
     """If the user typed a real arithmetic expression for an amount (e.g. ``"20+20"``)
     we keep it verbatim so it can be shown on the sheet / invoice. Returns the cleaned
     string only when it (a) is just digits / operators / parens, (b) actually contains
-    an operator, and (c) evaluates to the numeric value we stored. Otherwise ``None``."""
+    an operator, and (c) evaluates to the numeric value we stored. Otherwise ``None``.
+
+    A percent (``"20%"`` / ``"%20"``) is also kept — normalized to ``"20%"`` — but only
+    when ``base`` is supplied and ``base * pct/100`` equals the stored ``numeric_value``
+    (so it can't be tampered into a lie). Callers that don't pass ``base`` reject percents."""
     s = str(raw or '').strip()
-    if not s or len(s) > 40 or not _AMOUNT_EXPR_RE.match(s):
+    if not s or len(s) > 40:
+        return None
+    pct = _parse_percent(s)
+    if pct is not None:
+        if base is None:
+            return None
+        expected = round(float(base) * pct / 100.0, 2)
+        if abs(expected - float(numeric_value or 0)) > 0.01:
+            return None
+        return _format_percent(pct)
+    if not _AMOUNT_EXPR_RE.match(s):
         return None
     if not re.search(r'[+*/]', s) and not re.search(r'\d\s*-\s*\d', s):
         return None  # a bare number (or just a leading minus) — nothing to preserve
