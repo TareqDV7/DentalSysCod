@@ -177,6 +177,7 @@ class AppBranding {
 - The "Amount to Pay" column is the true running balance — `Σ (price − discount − payment)` walked in date order — recomputed on the server every time the sheet is read and rewritten after any add / edit / delete, so editing or removing an earlier entry (or adding one out of date order) keeps every later row correct. Deleting a follow-up also removes its auto-created lab expense.
 - **Patient credit balance** — money the clinic is holding *for* the patient. It's the overpayment on the follow-up ledger (`Σ payment − Σ (price − discount)`, when positive) plus any manual credit adjustments. Shown on the patient profile, and a payment record's *Credit Used* field draws it down (the form shows how much is available, and the amount can't exceed it).
 - **Amount fields keep your expression** — any money field (price / discount / lab / payment on the follow-up sheet, subtotal / discount / paid on a payment record) accepts an arithmetic expression like `20+20`; the number is used for all maths but the expression is stored and shown verbatim on the sheet and on the printed invoice (e.g. `20+20 = ₪ 40.00`).
+- **Percentage discounts** — a discount field (follow-up Add/Edit, billing) also accepts a percentage, `%20` or `20%`. It resolves to that percent of the line's base — the follow-up **price**, or the billing **subtotal** — when you leave the field, and the `20%` notation is preserved on the sheet (hover for the ₪ amount) and the printed invoice (e.g. `20% = ₪ 20.00`), the same as arithmetic expressions. Percentages work in discount fields only; typing `%` in price / payment / lab / subtotal / paid is rejected (the field turns red).
 - Medical image uploads (X-rays, photos)
 
 ### Appointments
@@ -248,7 +249,7 @@ clinic/
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 205 tests across 28 suites
+├── tests/                    # 215 tests across 28 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -266,7 +267,7 @@ clinic/
 │   ├── test_cloud_sync_worker.py    # Local ⇄ cloud background sync round-trip
 │   ├── test_credit_balance.py       # Patient credit derivation + Credit Used
 │   ├── test_date_utils.py
-│   ├── test_expression_preservation.py  # "20+20" verbatim on sheet/invoice
+│   ├── test_expression_preservation.py  # "20+20" / "20%" verbatim on sheet/invoice
 │   ├── test_followup_balance.py     # Recomputed Amount to Pay running balance
 │   ├── test_health_check.py         # Service-mode health-check helper
 │   ├── test_healthz.py              # /healthz probe (status, mode, db_writable, uptime)
@@ -509,7 +510,7 @@ python3 -m pytest tests/ -v
 
 The Flutter app has its own analyzer-clean test suite (67 tests) under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `bt_error_message_test.dart` (`BtFailure` enum → bilingual EN/AR plain-language text via `btMessageFor`, plus `classifyBtError` mapping of `TimeoutException` / `'connect failed'` / `'read failed'` exception shapes), `followup_balance_test.dart`, `amount_expr_test.dart` (safe "20+20" money-expression evaluator), `patient_statement_totals_test.dart` (statement/invoice totals parity, to-pay/left clamped ≥0), `medical_image_reconcile_test.dart` (pull-side server↔local image reconciliation), and the default widget test. Run with `cd clinic_mobile_app && flutter test`.
 
-Mobile-desktop parity invariants (worth re-checking when touching either side): (1) the Receivables tab in the Financial screen and the desktop's `/api/reports/receivables` both source from the follow-up ledger — `max(Σ price − Σ discount − Σ payment, 0)` per patient — *not* from the `billing_records` table, which under-counts in clinics that record day-to-day collections inside follow-up rows. (2) The mobile follow-up entry sheet exposes the same catalog-prefill behaviour as the desktop: picking a procedure from the dropdown fills the procedure name + the default price/lab expense (only into empty fields, so a doctor's typed numbers aren't clobbered) and stores `procedure_id` alongside the free-text name. (3) The mobile appointments day-list tile is tappable — opens a status picker (scheduled / completed / postponed / pending) plus a delete action, wired to `AppointmentService.updateStatus` and `deleteAppointment`. (4) Currency on every price/total in the mobile UI is `₪` (NIS); accidental USD `$` glyphs are a regression.
+Mobile-desktop parity invariants (worth re-checking when touching either side): (1) the Receivables tab in the Financial screen and the desktop's `/api/reports/receivables` both source from the follow-up ledger — `max(Σ price − Σ discount − Σ payment, 0)` per patient — *not* from the `billing_records` table, which under-counts in clinics that record day-to-day collections inside follow-up rows. (2) The mobile follow-up entry sheet exposes the same catalog-prefill behaviour as the deskinset-block-start: picking a procedure from the dropdown fills the procedure name + the default price/lab expense (only into empty fields, so a doctor's typed numbers aren't clobbered) and stores `procedure_id` alongside the free-text name. (3) The mobile appointments day-list tile is tappable — opens a status picker (scheduled / completed / postponed / pending) plus a delete action, wired to `AppointmentService.updateStatus` and `deleteAppointment`. (4) Currency on every price/total in the mobile UI is `₪` (NIS); accidental USD `$` glyphs are a regression.
 
 Financial logic can also be exercised end-to-end against a running server with the ad-hoc runner under `tools/`:
 
