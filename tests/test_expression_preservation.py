@@ -117,6 +117,32 @@ def test_followup_drops_tampered_expression(client):
     assert rows[0]['price_expr'] is None
 
 
+def test_followup_keeps_percent_discount(client):
+    pid = _patient()
+    r = client.post(f'/api/patients/{pid}/followups', json={
+        'followup_date': '03/02/2026', 'treatment_procedure': 'Z',
+        'price': 100, 'discount': 20, 'discount_expr': '%20',  # 20% of 100 == 20
+        'payment': 0,
+    })
+    assert r.status_code == 200
+
+    rows = client.get(f'/api/patients/{pid}/followups').get_json()
+    assert rows[0]['discount'] == 20
+    assert rows[0]['discount_expr'] == '20%'   # leading-% normalized, preserved
+
+
+def test_followup_drops_tampered_percent(client):
+    pid = _patient()
+    r = client.post(f'/api/patients/{pid}/followups', json={
+        'followup_date': '04/02/2026', 'treatment_procedure': 'Z',
+        'price': 100, 'discount': 30, 'discount_expr': '20%',  # 20% of 100 != 30
+        'payment': 0,
+    })
+    assert r.status_code == 200
+    rows = client.get(f'/api/patients/{pid}/followups').get_json()
+    assert rows[0]['discount_expr'] is None
+
+
 # ── billing round-trip ──────────────────────────────────────────────────────
 
 def test_billing_round_trip_keeps_expressions(client):
@@ -133,3 +159,15 @@ def test_billing_round_trip_keeps_expressions(client):
     assert row['subtotal_expr'] == '40+60'
     assert row['discount_expr'] == '5+5'
     assert row['paid_amount_expr'] == '10+20'
+
+
+def test_billing_keeps_percent_discount(client):
+    pid = _patient()
+    r = client.post('/api/billing', json={
+        'patient_id': pid,
+        'subtotal': 100, 'discount': 20, 'discount_expr': '20%',  # 20% of subtotal
+        'paid_amount': 0,
+    })
+    assert r.status_code == 200
+    row = client.get('/api/billing').get_json()[0]
+    assert row['discount_expr'] == '20%'

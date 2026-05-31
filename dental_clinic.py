@@ -2077,7 +2077,7 @@ def patient_followups(patient_id):
         return jsonify({'error': 'Treatment procedure is required'}), 400
 
     price_expr = sanitize_amount_expr(data.get('price_expr'), price)
-    discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount)
+    discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount, base=price)
     payment_expr = sanitize_amount_expr(data.get('payment_expr'), payment)
     lab_expense_expr = sanitize_amount_expr(data.get('lab_expense_expr'), lab_expense) if requires_lab else None
 
@@ -2220,7 +2220,7 @@ def followup_detail(patient_id, followup_id):
     clinic_profit = price - discount - lab_expense
 
     price_expr = sanitize_amount_expr(data.get('price_expr'), price)
-    discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount)
+    discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount, base=price)
     payment_expr = sanitize_amount_expr(data.get('payment_expr'), payment)
     lab_expense_expr = sanitize_amount_expr(data.get('lab_expense_expr'), lab_expense)
 
@@ -3364,7 +3364,7 @@ def billing():
 
         invoice_number = data.get('invoice_number') or generate_invoice_number()
         subtotal_expr = sanitize_amount_expr(data.get('subtotal_expr'), subtotal)
-        discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount)
+        discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount, base=subtotal)
         paid_amount_expr = sanitize_amount_expr(data.get('paid_amount_expr'), paid_amount)
 
         # Parse payment date to ensure YYYY-MM-DD format
