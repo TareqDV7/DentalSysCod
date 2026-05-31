@@ -56,6 +56,34 @@ def test_sanitize_rejects_unsafe_input():
     assert dental_clinic.sanitize_amount_expr('x' * 50, 0) is None
 
 
+# ── percent discounts (unit-level) ──────────────────────────────────────────
+
+def test_sanitize_keeps_matching_percent():
+    # 20% of base 100 == stored discount 20 → keep, normalized to "20%"
+    assert dental_clinic.sanitize_amount_expr('20%', 20, base=100) == '20%'
+    assert dental_clinic.sanitize_amount_expr('%20', 20, base=100) == '20%'   # leading % normalizes
+    assert dental_clinic.sanitize_amount_expr('12.5%', 10, base=80) == '12.5%'
+    assert dental_clinic.sanitize_amount_expr('20.0%', 20, base=100) == '20%'  # trailing zero trimmed
+
+
+def test_sanitize_percent_requires_base():
+    # No base → cannot verify a percent → dropped.
+    assert dental_clinic.sanitize_amount_expr('20%', 20) is None
+    assert dental_clinic.sanitize_amount_expr('20%', 20, base=None) is None
+
+
+def test_sanitize_drops_mismatched_percent():
+    # 20% of 100 is 20, not 30 → tampered → dropped.
+    assert dental_clinic.sanitize_amount_expr('20%', 30, base=100) is None
+
+
+def test_sanitize_rejects_malformed_percent():
+    assert dental_clinic.sanitize_amount_expr('50%+10', 60, base=100) is None
+    assert dental_clinic.sanitize_amount_expr('%-20', 20, base=100) is None
+    assert dental_clinic.sanitize_amount_expr('20%%', 20, base=100) is None
+    assert dental_clinic.sanitize_amount_expr('%', 0, base=100) is None
+
+
 # ── follow-up round-trip ────────────────────────────────────────────────────
 
 def test_followup_round_trip_keeps_expression(client):
