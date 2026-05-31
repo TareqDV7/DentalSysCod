@@ -188,3 +188,12 @@ def test_invoice_renders_percent_discount(client):
     html = client.get(f'/invoice/{bid}').get_data(as_text=True)
     # amt_cell must re-keep the percent (it re-validates with the subtotal as base).
     assert '20% = ' in html
+
+
+# ── client wiring (template presence guards) ────────────────────────────────
+
+def test_template_has_percent_js():
+    import templates
+    html = templates.HTML_TEMPLATE
+    assert 'function parsePercent' in html
+    assert 'percentBase' in html              # evalCalcField reads el.dataset.percentBase

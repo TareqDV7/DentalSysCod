@@ -6255,6 +6255,19 @@ HTML_TEMPLATE = '''
             }
         }
 
+        function parsePercent(raw) {
+            const s = String(raw || '').trim();
+            if ((s.match(/%/g) || []).length !== 1) return null;
+            if (!s.startsWith('%') && !s.endsWith('%')) return null;
+            const core = s.replace('%', '').trim();
+            if (!/^\\d+(\\.\\d+)?$/.test(core)) return null;
+            return parseFloat(core);
+        }
+
+        function formatPercent(pct) {
+            return String(pct) + '%';   // parseFloat already trimmed trailing zeros
+        }
+
         function evalCalcField(el) {
             const raw = el.value.trim();
             if (!raw) { delete el.dataset.expr; return; }
@@ -6267,6 +6280,24 @@ HTML_TEMPLATE = '''
                     el.classList.add('calc-ok');
                     setTimeout(() => el.classList.remove('calc-ok'), 1200);
                 }
+                return;
+            }
+            const pct = parsePercent(raw);
+            if (pct !== null) {
+                const baseEl = el.dataset.percentBase ? document.getElementById(el.dataset.percentBase) : null;
+                if (!baseEl) {
+                    // Percent only means something against a base (discount fields only).
+                    el.classList.add('calc-error');
+                    el.classList.remove('calc-ok');
+                    return;
+                }
+                const base = parseCurrency(baseEl.value);
+                const amount = Math.max(0, base * pct / 100);
+                el.value = amount.toFixed(2);
+                el.dataset.expr = formatPercent(pct);   // normalized "20%" for sheet / invoice
+                el.classList.remove('calc-error');
+                el.classList.add('calc-ok');
+                setTimeout(() => el.classList.remove('calc-ok'), 1200);
                 return;
             }
             const result = evalArithmeticExpr(raw);
