@@ -197,3 +197,12 @@ def test_template_has_percent_js():
     html = templates.HTML_TEMPLATE
     assert 'function parsePercent' in html
     assert 'percentBase' in html              # evalCalcField reads el.dataset.percentBase
+
+
+def test_template_wires_percent_bases():
+    import templates
+    html = templates.HTML_TEMPLATE
+    assert 'data-percent-base="followup-price"' in html
+    assert 'data-percent-base="ef-price"' in html
+    assert 'data-percent-base="billing-subtotal"' in html
+    assert 'id="billing-subtotal"' in html
