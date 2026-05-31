@@ -25,7 +25,7 @@ A self-contained dental clinic management platform with a Flask web portal and a
      (desktop/tablet via browser)                    └───────────────────────┘
 ```
 
-**Backend** — `dental_clinic.py`: single Python file, auto-installs its own dependencies, initialises a SQLite database, and serves both a full web portal and a REST API on `http://0.0.0.0:5000`. The clinic's staff always use their **local** server (works offline); set `CLINIC_CLOUD_MODE=1` (Docker deployment) to run the same file as the shared **cloud node** instead — see [`DEPLOY_CLOUD.md`](DEPLOY_CLOUD.md).
+**Backend** — `dental_clinic.py`: the Flask app, REST API and SQLite schema (with its HTML/CSS/JS portals living in `templates.py`); auto-installs its own dependencies, initialises a SQLite database, and serves both a full web portal and a REST API on `http://0.0.0.0:5000`. The clinic's staff always use their **local** server (works offline); set `CLINIC_CLOUD_MODE=1` (Docker deployment) to run the same file as the shared **cloud node** instead — see [`DEPLOY_CLOUD.md`](DEPLOY_CLOUD.md).
 
 **Mobile** — `clinic_mobile_app/`: Flutter app that keeps its own local SQLite database, writes locally first, then pushes/pulls from the server. Works fully offline; syncs when connectivity returns. Each sync picks the best available link in order: **LAN local server → cloud node → Bluetooth**. The app reaches the cloud node directly via a clinic token (paired from Settings → Cloud Account), so a phone stays in sync with the clinic's data even when it's off the clinic Wi-Fi. The patient detail screen carries the canonical follow-up sheet (date · procedure · tooth · price · discount · lab · payment · running balance — the same per-patient ledger as the desktop, recomputed locally so the doctor sees the new balance immediately after logging an entry, and reconciled against the server's recompute on the next sync), plus a Treatment Plans tab for multi-visit work, a Holidays card in Settings for clinic-wide non-working days, and a Procedure-catalog admin sheet (Settings → Procedure catalog) that mirrors the desktop's catalog management — the same list the follow-up sheet picks from to prefill price/lab. Bluetooth sync runs entirely in the main app isolate — the 30-second auto-fallback loop ticks while the app's Android activity is in the `resumed` lifecycle state, and pauses when the activity moves to `paused` / `detached`. Walking into BT range of the bonded clinic PC while offline (with the app open) triggers a silent auto-pair on first cycle, then sync, no taps. The mobile app intentionally skips the desktop's legacy `treatments` table — follow-ups supersede it.
 
@@ -213,7 +213,7 @@ class AppBranding {
 
 ### Internationalisation
 - Full English and Arabic (RTL) support throughout the web portal
-- Translation keys live in the `translations` JS object inside `dental_clinic.py`
+- Translation keys live in the `translations` JS object inside `templates.py` (the `HTML_TEMPLATE` web portal)
 - The Flutter app exposes a language toggle in Settings (EN / ع) via `app_state.dart`
 
 ---
@@ -224,7 +224,8 @@ class AppBranding {
 
 ```
 clinic/
-├── dental_clinic.py          # Entire backend: Flask app + HTML/CSS/JS template + SQLite schema
+├── dental_clinic.py          # Backend: Flask app + REST API + SQLite schema
+├── templates.py              # HTML/CSS/JS for the web portal, mobile-download page, and login
 ├── requirements.txt          # Flask, Flask-CORS, pyserial, waitress
 ├── serial_generator.py       # CLI tool to generate and batch-export license serials
 ├── pytest.ini                # pytest config
