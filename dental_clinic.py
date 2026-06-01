@@ -2689,6 +2689,147 @@ def treatment_plan_detail(plan_id):
     conn.close()
     return jsonify({'success': True})
 
+@app.route('/api/patients/<int:patient_id>/tooth-chart', methods=['GET', 'POST'])
+def patient_tooth_chart_collection(patient_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if request.method == 'POST':
+        data = request.json or {}
+        tooth_no = str(data.get('tooth_no') or '').strip()
+        if not _is_valid_fdi(tooth_no):
+            conn.close()
+            return jsonify({'error': 'Invalid FDI tooth number'}), 400
+
+        condition_id = data.get('condition_id')
+        if condition_id in (None, '', 0, '0'):
+            cursor.execute(
+                'SELECT id FROM patient_tooth_chart WHERE patient_id = ? AND tooth_no = ?',
+                (patient_id, tooth_no),
+            )
+            for row in cursor.fetchall():
+                cursor.execute('DELETE FROM patient_tooth_chart WHERE id = ?', (row['id'],))
+                record_tombstone(cursor, 'patient_tooth_chart', row['id'])
+            conn.commit()
+            conn.close()
+            return jsonify({'success': True})
+
+        cursor.execute('SELECT id FROM tooth_conditions WHERE id = ?', (condition_id,))
+        if cursor.fetchone() is None:
+            conn.close()
+            return jsonify({'error': 'Unknown condition_id'}), 400
+
+        note = (data.get('note') or None)
+        cursor.execute(
+            'SELECT id FROM patient_tooth_chart WHERE patient_id = ? AND tooth_no = ? ORDER BY updated_at DESC',
+            (patient_id, tooth_no),
+        )
+        rows = cursor.fetchall()
+        if rows:
+            cursor.execute(
+                'UPDATE patient_tooth_chart SET condition_id = ?, note = ? WHERE id = ?',
+                (condition_id, note, rows[0]['id']),
+            )
+            for extra in rows[1:]:
+                cursor.execute('DELETE FROM patient_tooth_chart WHERE id = ?', (extra['id'],))
+                record_tombstone(cursor, 'patient_tooth_chart', extra['id'])
+        else:
+            cursor.execute(
+                'INSERT INTO patient_tooth_chart (patient_id, tooth_no, condition_id, note) VALUES (?, ?, ?, ?)',
+                (patient_id, tooth_no, condition_id, note),
+            )
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+
+    # --- GET ---
+    cursor.execute('''
+        SELECT id, name, name_ar, color, icon, sort_order
+        FROM tooth_conditions WHERE active = 1
+        ORDER BY sort_order ASC, name COLLATE NOCASE ASC
+    ''')
+    conditions = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute('''
+        SELECT c.tooth_no, c.condition_id, c.note,
+               tc.name AS condition_name, tc.color AS color
+        FROM patient_tooth_chart c
+        LEFT JOIN tooth_conditions tc ON tc.id = c.condition_id
+        WHERE c.patient_id = ?
+        ORDER BY c.updated_at ASC
+    ''', (patient_id,))
+    teeth = {}
+    for r in cursor.fetchall():
+        teeth[r['tooth_no']] = {
+            'condition_id': r['condition_id'],
+            'condition_name': r['condition_name'],
+            'color': r['color'],
+            'note': r['note'],
+            'source': 'chart',
+        }
+
+    cursor.execute(
+        'SELECT DISTINCT tooth_no FROM patient_followups WHERE patient_id = ? AND tooth_no IS NOT NULL',
+        (patient_id,),
+    )
+    for r in cursor.fetchall():
+        t = r['tooth_no']
+        if _is_valid_fdi(t) and t not in teeth:
+            teeth[t] = {
+                'condition_id': None, 'condition_name': None, 'color': None,
+                'note': None, 'source': 'legacy',
+            }
+
+    cursor.execute(
+        '''SELECT DISTINCT tpt.tooth_no
+           FROM treatment_plan_teeth tpt
+           JOIN treatment_plans tp ON tpt.plan_id = tp.id
+           WHERE tp.patient_id = ? AND tpt.tooth_no IS NOT NULL''',
+        (patient_id,),
+    )
+    for r in cursor.fetchall():
+        t = r['tooth_no']
+        if _is_valid_fdi(t) and t not in teeth:
+            teeth[t] = {
+                'condition_id': None, 'condition_name': None, 'color': None,
+                'note': None, 'source': 'legacy',
+            }
+
+    for tooth_no, entry in teeth.items():
+        cursor.execute(
+            'SELECT COALESCE(SUM(price - discount - payment), 0) FROM patient_followups '
+            'WHERE patient_id = ? AND tooth_no = ?',
+            (patient_id, tooth_no),
+        )
+        entry['unpaid_balance'] = max(0, round(cursor.fetchone()[0], 2))
+        cursor.execute(
+            'SELECT 1 FROM treatment_plan_teeth tpt JOIN treatment_plans tp ON tpt.plan_id = tp.id '
+            'WHERE tp.patient_id = ? AND tpt.tooth_no = ? LIMIT 1',
+            (patient_id, tooth_no),
+        )
+        entry['has_plan'] = cursor.fetchone() is not None
+
+    conn.close()
+    return jsonify({'conditions': conditions, 'teeth': teeth})
+
+
+@app.route('/api/patients/<int:patient_id>/tooth-chart/<tooth_no>', methods=['DELETE'])
+def patient_tooth_chart_delete(patient_id, tooth_no):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id FROM patient_tooth_chart WHERE patient_id = ? AND tooth_no = ?',
+        (patient_id, str(tooth_no)),
+    )
+    for row in cursor.fetchall():
+        cursor.execute('DELETE FROM patient_tooth_chart WHERE id = ?', (row[0],))
+        record_tombstone(cursor, 'patient_tooth_chart', row[0])
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
 @app.route('/api/expenses', methods=['GET', 'POST'])
 def expenses():
     conn = sqlite3.connect(DB_NAME)
