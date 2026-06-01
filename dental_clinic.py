@@ -1946,6 +1946,22 @@ def patient_full_profile(patient_id):
     profile['age'] = calculate_age(dict(patient).get('date_of_birth'))
     profile['birth_date_display'] = format_date_display(dict(patient).get('date_of_birth'))
     profile['credit_balance'] = get_patient_credit_balance(cursor, patient_id)
+
+    # Attach teeth array to each treatment plan row
+    plans_list = profile['treatment_plans']
+    if plans_list:
+        plan_ids = [p['id'] for p in plans_list]
+        qmarks = ','.join('?' * len(plan_ids))
+        cursor.execute(
+            f'SELECT plan_id, tooth_no FROM treatment_plan_teeth WHERE plan_id IN ({qmarks}) ORDER BY tooth_no',
+            plan_ids,
+        )
+        teeth_by_plan = {}
+        for plan_id_val, tooth_no in cursor.fetchall():
+            teeth_by_plan.setdefault(plan_id_val, []).append(tooth_no)
+        for p in plans_list:
+            p['teeth'] = teeth_by_plan.get(p['id'], [])
+
     conn.close()
     return jsonify(profile)
 
