@@ -1949,21 +1949,102 @@ def patient_full_profile(patient_id):
     conn.close()
     return jsonify(profile)
 
-@app.route('/api/tooth-conditions', methods=['GET'])
-def tooth_conditions_list():
+@app.route('/api/tooth-conditions', methods=['GET', 'POST'])
+def tooth_conditions_collection():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    include_inactive = str(request.args.get('all', '0')).strip() in ('1', 'true', 'True')
-    where = '' if include_inactive else 'WHERE active = 1'
-    cursor.execute(f'''
-        SELECT id, name, name_ar, color, icon, sort_order, active, created_at
-        FROM tooth_conditions {where}
-        ORDER BY sort_order ASC, name COLLATE NOCASE ASC
-    ''')
-    rows = [dict(r) for r in cursor.fetchall()]
+
+    if request.method == 'GET':
+        include_inactive = str(request.args.get('all', '0')).strip() in ('1', 'true', 'True')
+        where = '' if include_inactive else 'WHERE active = 1'
+        cursor.execute(f'''
+            SELECT id, name, name_ar, color, icon, sort_order, active, created_at
+            FROM tooth_conditions {where}
+            ORDER BY sort_order ASC, name COLLATE NOCASE ASC
+        ''')
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return jsonify(rows)
+
+    data = request.json or {}
+    name = str(data.get('name') or '').strip()
+    if not name:
+        conn.close()
+        return jsonify({'error': 'Condition name is required'}), 400
+
+    def as_int(value, default=0):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    try:
+        cursor.execute('''
+            INSERT INTO tooth_conditions (name, name_ar, color, icon, sort_order, active)
+            VALUES (?, ?, ?, ?, ?, 1)
+        ''', (
+            name,
+            (data.get('name_ar') or None),
+            (str(data.get('color') or '#9ca3af').strip() or '#9ca3af'),
+            (data.get('icon') or None),
+            as_int(data.get('sort_order'), 0),
+        ))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({'error': 'Condition already exists'}), 409
+
     conn.close()
-    return jsonify(rows)
+    return jsonify({'success': True})
+
+
+@app.route('/api/tooth-conditions/<int:condition_id>', methods=['PUT', 'DELETE'])
+def tooth_condition_item(condition_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    if request.method == 'DELETE':
+        cursor.execute('UPDATE tooth_conditions SET active = 0 WHERE id = ?', (condition_id,))
+        record_tombstone(cursor, 'tooth_conditions', condition_id)
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+
+    data = request.json or {}
+    name = str(data.get('name') or '').strip()
+    if not name:
+        conn.close()
+        return jsonify({'error': 'Condition name is required'}), 400
+
+    def as_int(value, default=0):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    active = 1 if str(data.get('active', '1')).strip() in ('1', 'true', 'True', 'on') else 0
+    try:
+        cursor.execute('''
+            UPDATE tooth_conditions
+            SET name = ?, name_ar = ?, color = ?, icon = ?, sort_order = ?, active = ?
+            WHERE id = ?
+        ''', (
+            name,
+            (data.get('name_ar') or None),
+            (str(data.get('color') or '#9ca3af').strip() or '#9ca3af'),
+            (data.get('icon') or None),
+            as_int(data.get('sort_order'), 0),
+            active,
+            condition_id,
+        ))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({'error': 'Condition already exists'}), 409
+
+    conn.close()
+    return jsonify({'success': True})
 
 
 @app.route('/api/treatment-procedures', methods=['GET', 'POST'])
