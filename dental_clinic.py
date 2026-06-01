@@ -618,6 +618,20 @@ def init_database():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tooth_conditions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            name_ar TEXT,
+            color TEXT DEFAULT '#9ca3af',
+            icon TEXT,
+            sort_order INTEGER DEFAULT 0,
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS patient_followups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             patient_id INTEGER NOT NULL,
@@ -941,6 +955,22 @@ def init_database():
         INSERT OR IGNORE INTO treatment_procedures (name, requires_lab, default_price, default_lab_expense)
         VALUES (?, ?, ?, ?)
     ''', default_procedures)
+
+    default_tooth_conditions = [
+        # name, name_ar, color, sort_order
+        ('Healthy', 'سليم', '#22c55e', 0),
+        ('Decay', 'تسوّس', '#ef4444', 1),
+        ('Filled', 'حشوة', '#3b82f6', 2),
+        ('Crown', 'تاج', '#a855f7', 3),
+        ('Root canal', 'علاج عصب', '#f59e0b', 4),
+        ('Missing', 'مفقود', '#6b7280', 5),
+        ('Implant', 'زرعة', '#06b6d4', 6),
+        ('Needs extraction', 'يحتاج خلع', '#dc2626', 7),
+    ]
+    cursor.executemany('''
+        INSERT OR IGNORE INTO tooth_conditions (name, name_ar, color, sort_order)
+        VALUES (?, ?, ?, ?)
+    ''', default_tooth_conditions)
 
     # One-time migration: the legacy "treatment_catalog" was merged into the procedure catalog.
     # If an old database still has that table, copy any custom rows into treatment_procedures
@@ -1874,6 +1904,23 @@ def patient_full_profile(patient_id):
     profile['credit_balance'] = get_patient_credit_balance(cursor, patient_id)
     conn.close()
     return jsonify(profile)
+
+@app.route('/api/tooth-conditions', methods=['GET'])
+def tooth_conditions_list():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    include_inactive = str(request.args.get('all', '0')).strip() in ('1', 'true', 'True')
+    where = '' if include_inactive else 'WHERE active = 1'
+    cursor.execute(f'''
+        SELECT id, name, name_ar, color, icon, sort_order, active, created_at
+        FROM tooth_conditions {where}
+        ORDER BY sort_order ASC, name COLLATE NOCASE ASC
+    ''')
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(rows)
+
 
 @app.route('/api/treatment-procedures', methods=['GET', 'POST'])
 def treatment_procedures_collection():
