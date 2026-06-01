@@ -377,6 +377,20 @@ MOBILE_ANDROID_PACKAGE_PATH = Path('deployment') / 'mobile' / 'android' / 'clini
 MOBILE_IOS_PACKAGE_PATH = Path('deployment') / 'mobile' / 'ios' / 'clinic-mobile.ipa'
 
 
+_FDI_RE = re.compile(r'^[1-4][1-8]$')
+
+
+def _is_valid_fdi(tooth_no):
+    """True for a permanent-dentition FDI tooth number ('11'..'48').
+
+    Quadrant 1-4, tooth 1-8. Rejects primary teeth (51-85), free text,
+    whitespace, None, and non-two-digit values.
+    """
+    if not isinstance(tooth_no, str):
+        return False
+    return bool(_FDI_RE.match(tooth_no))
+
+
 def ensure_table_column(cursor, table_name, column_name, column_type):
     cursor.execute(f"PRAGMA table_info({table_name})")
     columns = [row[1] for row in cursor.fetchall()]
