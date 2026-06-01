@@ -368,7 +368,10 @@ SYNC_TABLES = [
     'patient_followups',
     'expenses',
     'billing',
-    'holidays'
+    'holidays',
+    'tooth_conditions',
+    'patient_tooth_chart',
+    'treatment_plan_teeth',
 ]
 MOBILE_ANDROID_PACKAGE_PATH = Path('deployment') / 'mobile' / 'android' / 'clinic-mobile.apk'
 MOBILE_IOS_PACKAGE_PATH = Path('deployment') / 'mobile' / 'ios' / 'clinic-mobile.ipa'
