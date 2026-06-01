@@ -2597,6 +2597,8 @@ def _set_plan_teeth(cursor, plan_id, teeth):
     """
     wanted = {t for t in (teeth or []) if _is_valid_fdi(t)}
     cursor.execute('SELECT id, tooth_no FROM treatment_plan_teeth WHERE plan_id = ?', (plan_id,))
+    # One link row per (plan_id, tooth_no) per device; a cross-device sync dup
+    # would collapse here (last id wins) — acceptable, matches the chart's model.
     existing = {row[1]: row[0] for row in cursor.fetchall()}
 
     for tooth_no in wanted - set(existing):
@@ -2613,7 +2615,6 @@ def _set_plan_teeth(cursor, plan_id, teeth):
 @app.route('/api/treatment-plans', methods=['GET', 'POST'])
 def treatment_plans():
     conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
     if request.method == 'GET':
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -2623,7 +2624,7 @@ def treatment_plans():
             JOIN patients p ON tp.patient_id = p.id
             ORDER BY tp.id DESC
         ''')
-        plans = [dict(row) for row in cursor.fetchall()]
+        plans = [dict(row) | {'teeth': []} for row in cursor.fetchall()]
         if plans:
             ids = [p['id'] for p in plans]
             qmarks = ','.join('?' * len(ids))
@@ -2639,6 +2640,8 @@ def treatment_plans():
         conn.close()
         return jsonify(plans)
 
+    # POST path:
+    cursor = conn.cursor()
     data = request.json or {}
     if not data.get('patient_id') or not data.get('plan_name'):
         conn.close()
