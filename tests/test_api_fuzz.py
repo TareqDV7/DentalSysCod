@@ -69,6 +69,23 @@ MALFORMED_TARGETS = [
     ('POST', '/api/pairing/complete', {'pair_code': 'wrong'}),
     ('POST', '/api/cloud/sync-now', None),
     ('POST', '/api/cloud/unpair', None),
+    # Odontogram endpoints
+    ('GET',  '/api/tooth-conditions', None),
+    ('POST', '/api/tooth-conditions', None),
+    ('POST', '/api/tooth-conditions', 'not-json'),
+    ('POST', '/api/tooth-conditions', {}),
+    ('POST', '/api/tooth-conditions', {'name': 12345}),
+    ('PUT',  '/api/tooth-conditions/1', None),
+    ('PUT',  '/api/tooth-conditions/1', {}),
+    ('PUT',  '/api/tooth-conditions/1', {'name': 12345}),
+    ('DELETE', '/api/tooth-conditions/1', None),
+    ('GET',  '/api/patients/1/tooth-chart', None),
+    ('POST', '/api/patients/1/tooth-chart', None),
+    ('POST', '/api/patients/1/tooth-chart', 'not-json'),
+    ('POST', '/api/patients/1/tooth-chart', {}),
+    ('POST', '/api/patients/1/tooth-chart', {'tooth_no': 'not-fdi', 'condition_id': 1}),
+    ('POST', '/api/patients/1/tooth-chart', {'tooth_no': '16', 'condition_id': 'not-int'}),
+    ('DELETE', '/api/patients/1/tooth-chart/not-fdi', None),
 ]
 
 
