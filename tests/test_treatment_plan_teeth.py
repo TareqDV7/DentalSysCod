@@ -40,7 +40,7 @@ def _create_plan(client, pid, teeth, name='Upper crowns'):
         'patient_id': pid, 'plan_name': name, 'teeth': teeth,
     })
     assert r.status_code == 200, r.get_data(as_text=True)
-    return r
+    return r.get_json()['id']
 
 
 def _plan(client, plan_id):
@@ -48,29 +48,24 @@ def _plan(client, plan_id):
     return next(p for p in plans if p['id'] == plan_id)
 
 
-def _plan_id(client):
-    return client.get('/api/treatment-plans').get_json()[0]['id']
-
-
 def test_create_plan_with_teeth(client):
     pid = _patient()
-    _create_plan(client, pid, ['16', '26', '36'])
-    plan = _plan(client, _plan_id(client))
+    plan_id = _create_plan(client, pid, ['16', '26', '36'])
+    plan = _plan(client, plan_id)
     assert sorted(plan['teeth']) == ['16', '26', '36']
     assert plan['patient_name'] == 'Plan Teeth'
 
 
 def test_invalid_tooth_skipped_on_create(client):
     pid = _patient()
-    _create_plan(client, pid, ['16', '99', 'junk', '36'])
-    plan = _plan(client, _plan_id(client))
+    plan_id = _create_plan(client, pid, ['16', '99', 'junk', '36'])
+    plan = _plan(client, plan_id)
     assert sorted(plan['teeth']) == ['16', '36']
 
 
 def test_update_plan_teeth_diffs(client):
     pid = _patient()
-    _create_plan(client, pid, ['16', '26'])
-    plan_id = _plan_id(client)
+    plan_id = _create_plan(client, pid, ['16', '26'])
     r = client.put(f'/api/treatment-plans/{plan_id}', json={
         'plan_name': 'Upper crowns', 'teeth': ['26', '46'],
     })
@@ -79,14 +74,13 @@ def test_update_plan_teeth_diffs(client):
     conn = sqlite3.connect(dental_clinic.DB_NAME)
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='treatment_plan_teeth'")
-    assert cur.fetchone()[0] >= 1
+    assert cur.fetchone()[0] == 1
     conn.close()
 
 
 def test_delete_plan_cascades_teeth(client):
     pid = _patient()
-    _create_plan(client, pid, ['16', '26', '36'])
-    plan_id = _plan_id(client)
+    plan_id = _create_plan(client, pid, ['16', '26', '36'])
     assert client.delete(f'/api/treatment-plans/{plan_id}').status_code == 200
     conn = sqlite3.connect(dental_clinic.DB_NAME)
     cur = conn.cursor()
@@ -95,3 +89,14 @@ def test_delete_plan_cascades_teeth(client):
     cur.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='treatment_plan_teeth'")
     assert cur.fetchone()[0] == 3
     conn.close()
+
+
+def test_put_without_teeth_key_leaves_links_untouched(client):
+    pid = _patient()
+    plan_id = _create_plan(client, pid, ['16', '26'])
+    # A PUT that doesn't mention teeth (e.g. a status-only edit) must not clear links.
+    r = client.put(f'/api/treatment-plans/{plan_id}', json={
+        'plan_name': 'Upper crowns', 'status': 'active',
+    })
+    assert r.status_code == 200
+    assert sorted(_plan(client, plan_id)['teeth']) == ['16', '26']
