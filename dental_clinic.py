@@ -2589,32 +2589,53 @@ def delete_appointment(appointment_id):
     conn.close()
     return jsonify({'success': True})
 
+def _set_plan_teeth(cursor, plan_id, teeth):
+    """Reconcile a plan's linked teeth to exactly `teeth` (valid FDI only).
+
+    Inserts new links, deletes (and tombstones) removed ones. No-ops for any
+    tooth_no that isn't valid FDI. Caller commits.
+    """
+    wanted = {t for t in (teeth or []) if _is_valid_fdi(t)}
+    cursor.execute('SELECT id, tooth_no FROM treatment_plan_teeth WHERE plan_id = ?', (plan_id,))
+    existing = {row[1]: row[0] for row in cursor.fetchall()}
+
+    for tooth_no in wanted - set(existing):
+        cursor.execute(
+            'INSERT INTO treatment_plan_teeth (plan_id, tooth_no) VALUES (?, ?)',
+            (plan_id, tooth_no),
+        )
+    for tooth_no in set(existing) - wanted:
+        link_id = existing[tooth_no]
+        cursor.execute('DELETE FROM treatment_plan_teeth WHERE id = ?', (link_id,))
+        record_tombstone(cursor, 'treatment_plan_teeth', link_id)
+
+
 @app.route('/api/treatment-plans', methods=['GET', 'POST'])
 def treatment_plans():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     if request.method == 'GET':
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
         cursor.execute('''
-            SELECT tp.*, p.first_name || ' ' || p.last_name as patient_name
+            SELECT tp.*, p.first_name || ' ' || p.last_name AS patient_name
             FROM treatment_plans tp
             JOIN patients p ON tp.patient_id = p.id
             ORDER BY tp.id DESC
         ''')
-        plans = []
-        for row in cursor.fetchall():
-            plans.append({
-                'id': row[0],
-                'patient_id': row[1],
-                'plan_name': row[2],
-                'goals': row[3],
-                'estimated_cost': row[4],
-                'status': row[5],
-                'start_date': row[6],
-                'end_date': row[7],
-                'notes': row[8],
-                'created_at': row[9],
-                'patient_name': row[10]
-            })
+        plans = [dict(row) for row in cursor.fetchall()]
+        if plans:
+            ids = [p['id'] for p in plans]
+            qmarks = ','.join('?' * len(ids))
+            cursor.execute(
+                f'SELECT plan_id, tooth_no FROM treatment_plan_teeth WHERE plan_id IN ({qmarks}) ORDER BY tooth_no',
+                ids,
+            )
+            teeth_by_plan = {}
+            for r in cursor.fetchall():
+                teeth_by_plan.setdefault(r['plan_id'], []).append(r['tooth_no'])
+            for p in plans:
+                p['teeth'] = teeth_by_plan.get(p['id'], [])
         conn.close()
         return jsonify(plans)
 
@@ -2629,15 +2650,18 @@ def treatment_plans():
         data['patient_id'], data['plan_name'], data.get('goals'), data.get('estimated_cost'),
         data.get('status', 'draft'), data.get('start_date'), data.get('end_date'), data.get('notes')
     ))
+    plan_id = cursor.lastrowid
+    _set_plan_teeth(cursor, plan_id, data.get('teeth'))
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'id': plan_id})
 
 @app.route('/api/treatment-plans/<int:plan_id>', methods=['PUT', 'DELETE'])
 def treatment_plan_detail(plan_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     if request.method == 'DELETE':
+        _set_plan_teeth(cursor, plan_id, [])  # delete + tombstone every linked tooth
         cursor.execute('DELETE FROM treatment_plans WHERE id = ?', (plan_id,))
         record_tombstone(cursor, 'treatment_plans', plan_id)
         conn.commit()
@@ -2656,6 +2680,8 @@ def treatment_plan_detail(plan_id):
         data['plan_name'], data.get('goals'), data.get('estimated_cost'), data.get('status', 'draft'),
         data.get('start_date'), data.get('end_date'), data.get('notes'), plan_id
     ))
+    if 'teeth' in data:
+        _set_plan_teeth(cursor, plan_id, data.get('teeth'))
     conn.commit()
     conn.close()
     return jsonify({'success': True})

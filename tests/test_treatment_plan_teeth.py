@@ -33,3 +33,65 @@ def test_plan_teeth_table_exists(client):
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='treatment_plan_teeth'")
     assert cur.fetchone() is not None
     conn.close()
+
+
+def _create_plan(client, pid, teeth, name='Upper crowns'):
+    r = client.post('/api/treatment-plans', json={
+        'patient_id': pid, 'plan_name': name, 'teeth': teeth,
+    })
+    assert r.status_code == 200, r.get_data(as_text=True)
+    return r
+
+
+def _plan(client, plan_id):
+    plans = client.get('/api/treatment-plans').get_json()
+    return next(p for p in plans if p['id'] == plan_id)
+
+
+def _plan_id(client):
+    return client.get('/api/treatment-plans').get_json()[0]['id']
+
+
+def test_create_plan_with_teeth(client):
+    pid = _patient()
+    _create_plan(client, pid, ['16', '26', '36'])
+    plan = _plan(client, _plan_id(client))
+    assert sorted(plan['teeth']) == ['16', '26', '36']
+    assert plan['patient_name'] == 'Plan Teeth'
+
+
+def test_invalid_tooth_skipped_on_create(client):
+    pid = _patient()
+    _create_plan(client, pid, ['16', '99', 'junk', '36'])
+    plan = _plan(client, _plan_id(client))
+    assert sorted(plan['teeth']) == ['16', '36']
+
+
+def test_update_plan_teeth_diffs(client):
+    pid = _patient()
+    _create_plan(client, pid, ['16', '26'])
+    plan_id = _plan_id(client)
+    r = client.put(f'/api/treatment-plans/{plan_id}', json={
+        'plan_name': 'Upper crowns', 'teeth': ['26', '46'],
+    })
+    assert r.status_code == 200
+    assert sorted(_plan(client, plan_id)['teeth']) == ['26', '46']
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='treatment_plan_teeth'")
+    assert cur.fetchone()[0] >= 1
+    conn.close()
+
+
+def test_delete_plan_cascades_teeth(client):
+    pid = _patient()
+    _create_plan(client, pid, ['16', '26', '36'])
+    plan_id = _plan_id(client)
+    assert client.delete(f'/api/treatment-plans/{plan_id}').status_code == 200
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    cur = conn.cursor()
+    cur.execute('SELECT COUNT(*) FROM treatment_plan_teeth WHERE plan_id = ?', (plan_id,))
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='treatment_plan_teeth'")
+    assert cur.fetchone()[0] == 3
+    conn.close()
