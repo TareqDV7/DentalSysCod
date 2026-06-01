@@ -100,3 +100,11 @@ def test_put_without_teeth_key_leaves_links_untouched(client):
     })
     assert r.status_code == 200
     assert sorted(_plan(client, plan_id)['teeth']) == ['16', '26']
+
+
+def test_full_profile_includes_plan_teeth(client):
+    pid = _patient()
+    _create_plan(client, pid, ['16', '26'])
+    profile = client.get(f'/api/patients/{pid}/full-profile').get_json()
+    plan = profile['treatment_plans'][0]
+    assert sorted(plan['teeth']) == ['16', '26']
