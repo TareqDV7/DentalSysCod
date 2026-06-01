@@ -2769,8 +2769,11 @@ def patient_tooth_chart_collection(patient_id):
             'source': 'chart',
         }
 
+    # Legacy auto-adopt: surface valid-FDI teeth that have a follow-up or a plan
+    # but no explicit chart row, so badges show even before the tooth is charted.
     cursor.execute(
-        'SELECT DISTINCT tooth_no FROM patient_followups WHERE patient_id = ? AND tooth_no IS NOT NULL',
+        'SELECT DISTINCT tooth_no FROM patient_followups '
+        'WHERE patient_id = ? AND tooth_no IS NOT NULL AND COALESCE(is_deleted, 0) = 0',
         (patient_id,),
     )
     for r in cursor.fetchall():
@@ -2796,19 +2799,28 @@ def patient_tooth_chart_collection(patient_id):
                 'note': None, 'source': 'legacy',
             }
 
+    # Badges, computed once (read-time, never stored). Up to ~32 teeth; two
+    # batched queries instead of per-tooth N+1.
+    cursor.execute(
+        'SELECT tooth_no, '
+        'COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(payment, 0)), 0) AS bal '
+        'FROM patient_followups '
+        'WHERE patient_id = ? AND tooth_no IS NOT NULL AND COALESCE(is_deleted, 0) = 0 '
+        'GROUP BY tooth_no',
+        (patient_id,),
+    )
+    balance_map = {row['tooth_no']: max(0, round(row['bal'], 2)) for row in cursor.fetchall()}
+
+    cursor.execute(
+        'SELECT DISTINCT tpt.tooth_no FROM treatment_plan_teeth tpt '
+        'JOIN treatment_plans tp ON tpt.plan_id = tp.id WHERE tp.patient_id = ?',
+        (patient_id,),
+    )
+    plan_teeth = {row['tooth_no'] for row in cursor.fetchall()}
+
     for tooth_no, entry in teeth.items():
-        cursor.execute(
-            'SELECT COALESCE(SUM(price - discount - payment), 0) FROM patient_followups '
-            'WHERE patient_id = ? AND tooth_no = ?',
-            (patient_id, tooth_no),
-        )
-        entry['unpaid_balance'] = max(0, round(cursor.fetchone()[0], 2))
-        cursor.execute(
-            'SELECT 1 FROM treatment_plan_teeth tpt JOIN treatment_plans tp ON tpt.plan_id = tp.id '
-            'WHERE tp.patient_id = ? AND tpt.tooth_no = ? LIMIT 1',
-            (patient_id, tooth_no),
-        )
-        entry['has_plan'] = cursor.fetchone() is not None
+        entry['unpaid_balance'] = balance_map.get(tooth_no, 0.0)
+        entry['has_plan'] = tooth_no in plan_teeth
 
     conn.close()
     return jsonify({'conditions': conditions, 'teeth': teeth})
@@ -2816,6 +2828,8 @@ def patient_tooth_chart_collection(patient_id):
 
 @app.route('/api/patients/<int:patient_id>/tooth-chart/<tooth_no>', methods=['DELETE'])
 def patient_tooth_chart_delete(patient_id, tooth_no):
+    if not _is_valid_fdi(str(tooth_no)):
+        return jsonify({'error': 'Invalid FDI tooth number'}), 400
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
