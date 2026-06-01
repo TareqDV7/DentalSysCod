@@ -646,6 +646,17 @@ def init_database():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS treatment_plan_teeth (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            tooth_no TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (plan_id) REFERENCES treatment_plans (id)
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS patient_followups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             patient_id INTEGER NOT NULL,
