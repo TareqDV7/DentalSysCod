@@ -632,6 +632,20 @@ def init_database():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS patient_tooth_chart (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            tooth_no TEXT NOT NULL,
+            condition_id INTEGER,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (patient_id) REFERENCES patients (id),
+            FOREIGN KEY (condition_id) REFERENCES tooth_conditions (id)
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS patient_followups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             patient_id INTEGER NOT NULL,
@@ -913,6 +927,8 @@ def init_database():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_credit_patient_id ON patient_credit_transactions(patient_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_followups_is_deleted ON patient_followups(is_deleted)')
 
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_patient_tooth_chart_patient_id ON patient_tooth_chart(patient_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_treatment_plan_teeth_plan_id ON treatment_plan_teeth(plan_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_treatment_plans_patient_id ON treatment_plans(patient_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_expenses_status ON expenses(payment_status)')
