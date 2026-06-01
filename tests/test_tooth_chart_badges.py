@@ -98,3 +98,19 @@ def test_chart_scoped_to_patient(client):
     decay = _condition_id(client, 'Decay')
     client.post(f'/api/patients/{a}/tooth-chart', json={'tooth_no': '16', 'condition_id': decay})
     assert client.get(f'/api/patients/{b}/tooth-chart').get_json()['teeth'] == {}
+
+
+def test_unpaid_balance_excludes_deleted_followup(client):
+    pid = _patient()
+    _followup(client, pid, '26', price=300, payment=0)  # 300 owed
+    rows = client.get(f'/api/patients/{pid}/followups').get_json()
+    fid = rows[0]['id']
+    client.delete(f'/api/patients/{pid}/followups/{fid}')  # remove it
+    teeth = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']
+    # Tooth 26 should no longer carry a phantom balance (and may drop out entirely).
+    assert teeth.get('26', {}).get('unpaid_balance', 0) == 0
+
+
+def test_delete_invalid_fdi_rejected(client):
+    pid = _patient()
+    assert client.delete(f'/api/patients/{pid}/tooth-chart/junk').status_code == 400
