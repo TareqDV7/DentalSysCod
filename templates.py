@@ -5882,8 +5882,37 @@ HTML_TEMPLATE = '''
           const proc = document.getElementById('followup-procedure-id');
           if (proc) proc.focus();
         }
-        // Stub — replaced in Task 6
-        function addToothToPlan(patientId, fdi) {}
+        async function addToothToPlan(patientId, fdi) {
+          const plans = (await (await fetch('/api/treatment-plans')).json())
+            .filter(p => p.patient_id === patientId);
+          let choice = '';
+          if (plans.length) {
+            const menu = plans.map((p, i) => `${i + 1}. ${p.plan_name} [${(p.teeth || []).join(', ')}]`).join('\n');
+            choice = prompt(`${t('add_to_plan','+ Add to plan')} — ${t('tooth','Tooth')} ${fdi}\n\n${menu}\n\n${t('plan_pick_hint','Enter a number, or a new plan name:')}`);
+          } else {
+            choice = prompt(`${t('plan_new_name','New plan name:')}`, `${t('plan','Plan')} ${fdi}`);
+          }
+          if (!choice) return;
+
+          const asIndex = parseInt(choice, 10);
+          if (plans.length && asIndex >= 1 && asIndex <= plans.length && String(asIndex) === choice.trim()) {
+            const plan = plans[asIndex - 1];
+            const teeth = Array.from(new Set([...(plan.teeth || []), fdi]));
+            await fetch(`/api/treatment-plans/${plan.id}`, {
+              method: 'PUT', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ plan_name: plan.plan_name, goals: plan.goals, estimated_cost: plan.estimated_cost,
+                                     status: plan.status, start_date: plan.start_date, end_date: plan.end_date,
+                                     notes: plan.notes, teeth }),
+            });
+          } else {
+            await fetch('/api/treatment-plans', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ patient_id: patientId, plan_name: choice.trim(), teeth: [fdi] }),
+            });
+          }
+          renderOdontogram(patientId);
+          if (typeof renderTreatmentPlans === 'function') renderTreatmentPlans(patientId);  // refresh plans tab if present
+        }
 
         let _popupPatientId = null, _popupFdi = null;
 
