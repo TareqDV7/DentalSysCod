@@ -4335,7 +4335,7 @@ HTML_TEMPLATE = '''
                     icon: '⏳',
                     title: t('loading_patients', 'Loading patients...'),
                     text: t('loading_patients_hint', 'Fetching the patient list.'),
-                    colSpan: 6,
+                    colSpan: 9,
                     kind: 'loading'
                 });
             }
@@ -4349,7 +4349,7 @@ HTML_TEMPLATE = '''
                         icon: '⚠️',
                         title: t('patients_load_failed', 'Unable to load patients'),
                         text: t('patients_load_failed_hint', 'Refresh the page or try again in a moment.'),
-                        colSpan: 6,
+                        colSpan: 9,
                         kind: 'error',
                         buttonHtml: `<button class="btn btn-primary" type="button" onclick="loadPatients()">${t('refresh', 'Refresh')}</button>`
                     });
@@ -4364,7 +4364,7 @@ HTML_TEMPLATE = '''
                     icon: '👥',
                     title: t('no_patients_found', 'No patients found'),
                     text: t('no_patients_found_hint', 'Add a patient or adjust your search to see matching records.'),
-                    colSpan: 6,
+                    colSpan: 9,
                     buttonHtml: `<button class="btn btn-primary" type="button" onclick="showAddPatientModal()">${t('add_new_patient', 'Add New Patient')}</button>`
                 });
                 const status = document.getElementById('patient-search-status');
@@ -4374,11 +4374,14 @@ HTML_TEMPLATE = '''
 
             tbody.innerHTML = patients.map(patient => `
                 <tr>
-                    <td>${patient.id}</td>
+                    <td class="center-cell">${patient.id}</td>
                     <td><a href="#" onclick="viewPatientProfile(${patient.id}); return false;">${patient.first_name} ${patient.last_name}</a></td>
                     <td>${formatDateDisplay(patient.date_of_birth) || t('no_data', 'No data')}</td>
+                    <td>${patient.gender ? t(patient.gender, patient.gender) : '—'}</td>
                     <td>${patient.phone || t('no_data', 'No data')}</td>
-                    <td>${patient.email || t('no_data', 'No data')}</td>
+                    <td class="center-cell">${patient.appointment_count ?? 0}</td>
+                    <td class="numeric-cell">₪ ${parseCurrency(patient.total_billed).toFixed(2)}</td>
+                    <td class="numeric-cell">₪ ${parseCurrency(patient.balance).toFixed(2)}</td>
                     <td class="actions-cell">
                         <div class="action-buttons">
                             <button class="btn btn-primary" onclick="viewPatientProfile(${patient.id})">${t('view', 'View')}</button>

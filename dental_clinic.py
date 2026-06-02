@@ -1834,8 +1834,27 @@ def patients():
     cursor = conn.cursor()
 
     if request.method == 'GET':
-        cursor.execute('SELECT * FROM patients ORDER BY id DESC')
-        patients_list = [dict(row) for row in cursor.fetchall()]
+        # Per-patient finance (total net billed) + balance (amount still to pay) +
+        # appointment count, computed from the follow-up ledger so the patients
+        # table can show the Finance / Balance / Appointments columns.
+        cursor.execute('''
+            SELECT p.*,
+                (SELECT COUNT(*) FROM appointments a WHERE a.patient_id = p.id) AS appointment_count,
+                COALESCE((SELECT SUM(COALESCE(pf.price, 0) - COALESCE(pf.discount, 0))
+                          FROM patient_followups pf
+                          WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0) AS total_billed,
+                COALESCE((SELECT SUM(COALESCE(pf.price, 0) - COALESCE(pf.discount, 0) - COALESCE(pf.payment, 0))
+                          FROM patient_followups pf
+                          WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0) AS balance_raw
+            FROM patients p
+            ORDER BY p.id DESC
+        ''')
+        patients_list = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            d['total_billed'] = round(float(d.get('total_billed') or 0), 2)
+            d['balance'] = round(max(float(d.pop('balance_raw') or 0), 0.0), 2)
+            patients_list.append(d)
         conn.close()
         return jsonify(patients_list)
     
