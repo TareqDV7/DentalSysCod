@@ -5871,8 +5871,17 @@ HTML_TEMPLATE = '''
           }
         }
 
-        // Stub — replaced in Task 5
-        function openFollowupFormPrefilledTooth(patientId, fdi) {}
+        function openFollowupFormPrefilledTooth(patientId, fdi) {
+          // Switch to the followups tab
+          const followupsBtn = document.querySelector('#patient-profile-modal .profile-tab:nth-child(2)');
+          if (followupsBtn) switchProfileTab('followups', followupsBtn);
+          // Pre-fill the tooth field
+          const el = document.getElementById('followup-tooth-no');
+          if (el) el.value = fdi;
+          // Move focus to the procedure picker
+          const proc = document.getElementById('followup-procedure-id');
+          if (proc) proc.focus();
+        }
         // Stub — replaced in Task 6
         function addToothToPlan(patientId, fdi) {}
 
