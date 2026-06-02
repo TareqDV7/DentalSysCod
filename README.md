@@ -178,6 +178,7 @@ class AppBranding {
 - **Patient credit balance** — money the clinic is holding *for* the patient. It's the overpayment on the follow-up ledger (`Σ payment − Σ (price − discount)`, when positive) plus any manual credit adjustments. Shown on the patient profile, and a payment record's *Credit Used* field draws it down (the form shows how much is available, and the amount can't exceed it).
 - **Amount fields keep your expression** — any money field (price / discount / lab / payment on the follow-up sheet, subtotal / discount / paid on a payment record) accepts an arithmetic expression like `20+20`; the number is used for all maths but the expression is stored and shown verbatim on the sheet and on the printed invoice (e.g. `20+20 = ₪ 40.00`).
 - **Percentage discounts** — a discount field (follow-up Add/Edit, billing) also accepts a percentage, `%20` or `20%`. It resolves to that percent of the line's base — the follow-up **price**, or the billing **subtotal** — when you leave the field, and the `20%` notation is preserved on the sheet (hover for the ₪ amount) and the printed invoice (e.g. `20% = ₪ 20.00`), the same as arithmetic expressions. Percentages work in discount fields only; typing `%` in price / payment / lab / subtotal / paid is rejected (the field turns red).
+- **Odontogram (tooth chart)** — an interactive FDI permanent-dentition chart (32 teeth, ISO two-digit numbering 11–48) on the patient profile. Each tooth carries one condition from an **editable catalog** (`tooth_conditions`, seeded with a Core 8 — healthy / decay / filled / crown / root canal / missing / implant / needs-extraction — managed like the procedure catalog, EN/AR, color-coded). Tap a tooth to set its condition, **+ Log treatment** (opens the follow-up Add form with the tooth pre-filled), or **+ Add to plan** (treatment plans are now **multi-tooth**). Two badges are **computed at read time from the ledger + plans, never stored**: a purple *has-plan* dot and an amber *unpaid-balance* dot (₪). Teeth recorded on legacy follow-ups (`tooth_no`) are **auto-adopted** onto the chart on read (valid FDI only; junk ignored). Available on both the web portal (inline SVG arch) and the Flutter app (CustomPaint arch); the three new tables (`tooth_conditions`, `patient_tooth_chart`, `treatment_plan_teeth`) ride the existing `SYNC_TABLES` machinery, so they sync (last-write-wins + tombstones) like everything else
 - Medical image uploads (X-rays, photos)
 
 ### Appointments
@@ -249,7 +250,7 @@ clinic/
 │   ├── docker-compose.yml    #   app + Caddy (auto-HTTPS)
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 215 tests across 28 suites
+├── tests/                    # 263 tests across 33 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -277,6 +278,11 @@ clinic/
 │   ├── test_service_mode.py         # Packaged-service mode detection
 │   ├── test_sync_resilience.py      # Bad row doesn't kill batch; mobile fixes verified
 │   ├── test_sync_tombstones.py      # Sync delta / tombstone propagation
+│   ├── test_tooth_conditions.py      # Editable tooth-condition catalog (Core-8 seed, CRUD, soft-delete)
+│   ├── test_tooth_chart_api.py       # Tooth-chart upsert / clear / FDI validation / per-patient scoping
+│   ├── test_tooth_chart_badges.py    # Computed has_plan / unpaid_balance + legacy tooth_no auto-adopt
+│   ├── test_tooth_chart_sync.py      # Odontogram tables export/import + tombstone propagation
+│   ├── test_treatment_plan_teeth.py  # Multi-tooth treatment plans (treatment_plan_teeth link table)
 │   └── test_window_state.py         # pywebview window-state persistence
 ├── tools/
 │   ├── db_check.py           # Quick SQLite inspection helper
@@ -293,7 +299,7 @@ clinic/
         │   └── app_config.dart         # AppBranding constants
         ├── state/
         │   └── app_state.dart          # Provider: theme, locale, sync, DB references
-        ├── models/                     # Appointment, Patient, Visit, BillingRecord, …
+        ├── models/                     # Appointment, Patient, Visit, BillingRecord, ToothCondition, ToothChartEntry, TreatmentPlan (now carries teeth[]), …
         ├── screens/
         │   ├── pairing_screen.dart     # Wi-Fi/LAN onboarding: server URL + 6-digit pair code → device token (reached from Settings → Pair via Wi-Fi)
         │   ├── activation_screen.dart  # Offline-license flow: serial activation (legacy/manual entry)
@@ -301,8 +307,10 @@ clinic/
         │   ├── dashboard_screen.dart   # Stats grid + recent appointments
         │   ├── patients_screen.dart
         │   ├── patient_detail_screen.dart
+        │   ├── odontogram_view.dart    # Tooth-chart tab: CustomPaint FDI arch + tap sheet (set condition / log treatment / add to plan)
         │   ├── appointments_screen.dart
         │   ├── catalog_screen.dart     # Procedure catalog admin (CRUD + active/inactive toggle) — opens from Settings → Procedure catalog
+        │   ├── tooth_conditions_screen.dart # Tooth-condition catalog admin (mirrors catalog_screen) — opens from Settings → Tooth conditions
         │   ├── financial_screen.dart
         │   ├── reports_screen.dart
         │   └── settings_screen.dart    # Server URL, sync, dark mode, language
@@ -320,6 +328,7 @@ clinic/
         │   ├── appointment_service.dart
         │   ├── billing_service.dart
         │   ├── catalog_service.dart         # Treatment-procedure catalog: list / add / update / soft-delete, syncs to /api/treatment-procedures
+        │   ├── tooth_chart_service.dart     # Tooth-condition catalog + per-patient chart (pure parseToothChart + server-backed CRUD)
         │   └── report_service.dart
         ├── utils/
         │   └── bt_error_message.dart        # Pure: BtFailure enum + classifyBtError + bilingual btMessageFor — plain-language BT errors
@@ -391,8 +400,17 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 | DELETE | `/api/treatments/<id>` | Remove treatment |
 | GET / POST | `/api/treatment-procedures` | Procedure catalog (list / create) |
 | PUT | `/api/treatment-procedures/<id>` | Update procedure |
-| GET / POST | `/api/treatment-plans` | Treatment plans |
-| PUT / DELETE | `/api/treatment-plans/<id>` | Manage plan |
+| GET / POST | `/api/treatment-plans` | Treatment plans — GET returns each plan's `teeth[]`; POST accepts a `teeth` array (multi-tooth, FDI-validated) |
+| PUT / DELETE | `/api/treatment-plans/<id>` | Manage plan — PUT reconciles `teeth` when the key is present (deleting links is tombstoned); DELETE cascades + tombstones its tooth links |
+
+### Odontogram (tooth chart)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET / POST | `/api/tooth-conditions` | Condition catalog — list active (`?all=1` includes inactive) / create. Duplicate name → `409`, blank → `400` |
+| PUT / DELETE | `/api/tooth-conditions/<id>` | Update / soft-delete (deactivate, tombstoned) a condition |
+| GET / POST | `/api/patients/<id>/tooth-chart` | GET returns `{conditions, teeth}` — each tooth carries `condition_id/condition_name/color/note/source` plus read-time-computed `has_plan` + `unpaid_balance` badges, with valid-FDI legacy `tooth_no` auto-adopted. POST upserts one tooth (FDI-validated; `condition_id: null` clears it to healthy + tombstones the row) |
+| DELETE | `/api/patients/<id>/tooth-chart/<tooth_no>` | Clear a tooth (deletes the chart row + tombstones it) |
 
 ### Billing
 
@@ -506,9 +524,9 @@ cd clinic/
 python3 -m pytest tests/ -v
 ```
 
-**215 tests across 28 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, the per-patient combined payment history (follow-up sheet payments merged with billing records, ordering, totals, per-patient scoping, exclusion of zero-value and deleted entries), patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, the `_BtSocketStream` adapter that lets the native RFCOMM listener reuse `_bt_serve_session` verbatim — `tests/test_bt_socket_stream.py`, and a daemon-thread worker that prefers the native AF_BTH path and falls back to the legacy pyserial COM-port path on `OSError` — `tests/test_bt_worker.py`), the BT diagnostics surfacing on `/api/bt/status` (paired_devices list, recent_attempts ring buffer bounded to maxlen=20, ok/unauthorized outcomes recorded by the dispatcher, server_listening flag round-trip — `tests/test_bt_diagnostics.py`), medical-image upload + byte download + sync reconciliation, the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), the packaging/runtime plumbing (data-dir resolution for source vs. frozen/service builds, packaged-service-mode detection, the service health-check helper, and pywebview window-state persistence), and a 38-case property-fuzz suite that exercises every public endpoint with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure.
+**263 tests across 33 suites.** Covers the appointment API + flow, date utilities, the catalog migration, follow-up running balance, the per-patient combined payment history (follow-up sheet payments merged with billing records, ordering, totals, per-patient scoping, exclusion of zero-value and deleted entries), patient credit balance, expression preservation in money fields, appointment status updates, sync tombstones (delta export + deletion propagation), sync resilience (per-row error isolation, mobile-shaped payloads, billing `amount`), cloud-mode multi-tenant routing + tenant isolation + rate limit + HMAC-signed serials, the local ⇄ cloud background sync round-trip, the per-tenant cloud backup loop (master + each `clinic_<id>.db`, per-label retention, isolation on per-tenant failure) plus the historic flat single-tenant layout, the Bluetooth-SPP fallback (4-byte length-prefixed frame codec, hello/bt_pair/sync_export/sync_import dispatcher reusing the HTTP helpers — including the zero-code first-time pair that issues a fresh device_token over the OS-bonded BT channel and rotates cleanly on re-pair, full session driver including malformed-frame handling, `/api/bt/status` + `/api/bt/configure` endpoints behind staff login, the `_BtSocketStream` adapter that lets the native RFCOMM listener reuse `_bt_serve_session` verbatim — `tests/test_bt_socket_stream.py`, and a daemon-thread worker that prefers the native AF_BTH path and falls back to the legacy pyserial COM-port path on `OSError` — `tests/test_bt_worker.py`), the BT diagnostics surfacing on `/api/bt/status` (paired_devices list, recent_attempts ring buffer bounded to maxlen=20, ok/unauthorized outcomes recorded by the dispatcher, server_listening flag round-trip — `tests/test_bt_diagnostics.py`), medical-image upload + byte download + sync reconciliation, the `/healthz` probe (200 with `status/mode/db_writable/uptime_seconds` on local, 503 when the DB is unreachable, open without a clinic token on the cloud node), the packaging/runtime plumbing (data-dir resolution for source vs. frozen/service builds, packaged-service-mode detection, the service health-check helper, and pywebview window-state persistence), and a property-fuzz suite that exercises every public endpoint (the odontogram routes included) with malformed JSON, wrong types, missing fields and oversized payloads — anything returning HTTP 5xx is a test failure. The odontogram backend contributes five suites: the editable tooth-condition catalog (Core-8 seed, CRUD, duplicate/blank rejection, soft-delete + tombstone), the tooth-chart upsert/clear with FDI validation and per-patient scoping, the read-time `has_plan`/`unpaid_balance` badge computation plus legacy `tooth_no` auto-adopt, multi-tooth treatment plans via the `treatment_plan_teeth` link table (create / diff / cascade-delete, all tombstoned), and the export/import + tombstone round-trip for the three new `SYNC_TABLES` entries.
 
-The Flutter app has its own analyzer-clean test suite (67 tests) under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `bt_error_message_test.dart` (`BtFailure` enum → bilingual EN/AR plain-language text via `btMessageFor`, plus `classifyBtError` mapping of `TimeoutException` / `'connect failed'` / `'read failed'` exception shapes), `followup_balance_test.dart`, `amount_expr_test.dart` (safe "20+20" money-expression evaluator), `patient_statement_totals_test.dart` (statement/invoice totals parity, to-pay/left clamped ≥0), `medical_image_reconcile_test.dart` (pull-side server↔local image reconciliation), and the default widget test. Run with `cd clinic_mobile_app && flutter test`.
+The Flutter app has its own analyzer-clean test suite (78 tests) under `clinic_mobile_app/test/` — currently `bluetooth_frame_codec_test.dart`, `bt_session_client_test.dart` (includes BT auto-pair handshake), `bluetooth_sync_service_test.dart` (includes auto-pair + self-heal on revoked token), `bt_error_message_test.dart` (`BtFailure` enum → bilingual EN/AR plain-language text via `btMessageFor`, plus `classifyBtError` mapping of `TimeoutException` / `'connect failed'` / `'read failed'` exception shapes), `followup_balance_test.dart`, `amount_expr_test.dart` (safe "20+20" money-expression evaluator), `patient_statement_totals_test.dart` (statement/invoice totals parity, to-pay/left clamped ≥0), `medical_image_reconcile_test.dart` (pull-side server↔local image reconciliation), `tooth_models_test.dart` (`ToothCondition` / `ToothChartEntry` JSON round-trip + `TreatmentPlan.teeth`), `tooth_chart_parse_test.dart` (pure `parseToothChart` splitting conditions + per-tooth badge entries), `odontogram_view_test.dart` (the arch renders 32 tooth cells + the condition legend), and the default widget test. Run with `cd clinic_mobile_app && flutter test`.
 
 Mobile-desktop parity invariants (worth re-checking when touching either side): (1) the Receivables tab in the Financial screen and the desktop's `/api/reports/receivables` both source from the follow-up ledger — `max(Σ price − Σ discount − Σ payment, 0)` per patient — *not* from the `billing_records` table, which under-counts in clinics that record day-to-day collections inside follow-up rows. (2) The mobile follow-up entry sheet exposes the same catalog-prefill behaviour as the desktop: picking a procedure from the dropdown fills the procedure name + the default price/lab expense (only into empty fields, so a doctor's typed numbers aren't clobbered) and stores `procedure_id` alongside the free-text name. (3) The mobile appointments day-list tile is tappable — opens a status picker (scheduled / completed / postponed / pending) plus a delete action, wired to `AppointmentService.updateStatus` and `deleteAppointment`. (4) Currency on every price/total in the mobile UI is `₪` (NIS); accidental USD `$` glyphs are a regression.
 
