@@ -5974,7 +5974,7 @@ HTML_TEMPLATE = '''
             .filter(p => p.patient_id === patientId);
           let choice = '';
           if (plans.length) {
-            const menu = plans.map((p, i) => `${i + 1}. ${p.plan_name} [${(p.teeth || []).join(', ')}]`).join('\n');
+            const menu = plans.map((p, i) => `${i + 1}. ${p.plan_name} [${(p.teeth || []).join(', ')}]`).join('\\n');
             choice = prompt(`${t('add_to_plan','+ Add to plan')} — ${t('tooth','Tooth')} ${fdi}\n\n${menu}\n\n${t('plan_pick_hint','Enter a number, or a new plan name:')}`);
           } else {
             choice = prompt(`${t('plan_new_name','New plan name:')}`, `${t('plan','Plan')} ${fdi}`);
