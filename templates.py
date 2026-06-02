@@ -5756,6 +5756,22 @@ HTML_TEMPLATE = '''
             return e ? `<span title="₪${n.toFixed(2)}">${e}</span>` : `₪${n.toFixed(2)}`;
         }
 
+        // ── Odontogram helpers ──────────────────────────────────────────────────
+        // FDI permanent dentition, clinician's view (patient's right on the left).
+        const FDI_UPPER = ['18','17','16','15','14','13','12','11','21','22','23','24','25','26','27','28'];
+        const FDI_LOWER = ['48','47','46','45','44','43','42','41','31','32','33','34','35','36','37','38'];
+
+        // Tooth class by FDI position (2nd digit): 1-2 incisor, 3 canine, 4-5 premolar, 6-8 molar.
+        function fdiToothClass(fdi) {
+          const n = parseInt(fdi[1], 10);
+          if (n <= 2) return 'incisor';
+          if (n === 3) return 'canine';
+          if (n <= 5) return 'premolar';
+          return 'molar';
+        }
+
+        function isValidFdi(s) { return /^[1-4][1-8]$/.test(String(s || '')); }
+
         function renderFollowupsRows(followups) {
             if (!followups || !followups.length) {
                 return `<tr><td colspan="10">${t('no_entries_yet', 'No entries yet')}</td></tr>`;
