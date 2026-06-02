@@ -5592,6 +5592,11 @@ HTML_TEMPLATE = '''
                 </div>
 
                 <div id="profile-tab-followups" class="profile-tab-content">
+                    <section class="card odontogram-card" id="odontogram-card" style="display:none;">
+                      <h3 data-i18n="odontogram">${t('odontogram','Tooth chart')}</h3>
+                      <div id="odontogram-arch"></div>
+                      <div class="tooth-legend" id="odontogram-legend"></div>
+                    </section>
                     <details class="form-panel" open>
                         <summary>➕ ${t('add_entry','Add New Entry')}</summary>
                         <div class="form-panel-body">
@@ -5737,6 +5742,8 @@ HTML_TEMPLATE = '''
                 const imagesBtn = document.querySelector('#patient-profile-modal .profile-tab:nth-child(3)');
                 if (imagesBtn) switchProfileTab('images', imagesBtn);
             });
+            // Render odontogram chart for this patient
+            renderOdontogram(patientId);
         }
 
         function formatDateDisplay(dateStr) {
@@ -5819,6 +5826,32 @@ HTML_TEMPLATE = '''
           return `<div class="arch arch-upper">${buildToothRowSvg(FDI_UPPER, chart, false)}</div>`
                + `<div class="arch arch-lower">${buildToothRowSvg(FDI_LOWER, chart, true)}</div>`;
         }
+
+        let currentChartConditions = [];
+
+        async function renderOdontogram(patientId) {
+          const card = document.getElementById('odontogram-card');
+          if (!card) return;
+          try {
+            const resp = await fetch(`/api/patients/${patientId}/tooth-chart`);
+            const chart = await resp.json();
+            currentChartConditions = chart.conditions || [];
+            document.getElementById('odontogram-arch').innerHTML = buildToothArchSvg(chart);
+            document.getElementById('odontogram-legend').innerHTML = (chart.conditions || [])
+              .map(c => `<span><i style="background:${c.color}"></i>${(currentLanguage==='ar' && c.name_ar) ? c.name_ar : c.name}</span>`)
+              .join('');
+            card.style.display = '';
+            document.querySelectorAll('#odontogram-arch .tooth').forEach(el => {
+              el.addEventListener('click', () => openToothPopup(patientId, el.dataset.fdi, chart));
+              el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openToothPopup(patientId, el.dataset.fdi, chart); } });
+            });
+          } catch (e) {
+            card.style.display = 'none';  // backend not present / older server — degrade silently
+          }
+        }
+
+        // Stub — replaced in Task 4
+        function openToothPopup(patientId, fdi, chart) {}
 
         function renderFollowupsRows(followups) {
             if (!followups || !followups.length) {
