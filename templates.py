@@ -1590,13 +1590,16 @@ HTML_TEMPLATE = '''
         }
         /* ── Odontogram ──────────────────────────────────────── */
         .odontogram-card { padding: 16px; }
-        .arch { margin: 4px 0; }
-        .tooth { cursor: pointer; transition: filter var(--duration-fast, 150ms) ease; }
-        .tooth:hover, .tooth:focus-visible { filter: brightness(0.92) drop-shadow(0 1px 3px rgba(0,0,0,.25)); outline: none; }
-        .tooth-num { font-size: 9px; fill: var(--muted, #64748b); font-weight: 600; }
+        .arch { margin: 4px 0; overflow: visible; }
+        .tooth { cursor: pointer; transition: filter 150ms ease; }
+        .tooth:hover, .tooth:focus-visible { filter: brightness(0.88) drop-shadow(0 2px 4px rgba(0,0,0,.3)); outline: none; }
+        .tooth:focus-visible { filter: brightness(0.88) drop-shadow(0 0 0 3px var(--brand, #2563eb)); }
+        .tooth-num { font-size: 9px; fill: var(--muted, #64748b); font-weight: 700; font-family: inherit; }
         .tooth-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
-        .tooth-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
-        .tooth-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid #334155; }
+        .tooth-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text, #1e293b); }
+        .tooth-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid #334155; flex-shrink: 0; }
+        [data-theme="dark"] .tooth-num { fill: #94a3b8; }
+        [data-theme="dark"] path[stroke="#94a3b8"] { stroke: #475569; }
         [dir="rtl"] .tooth-row { transform: scaleX(-1); }
         [dir="rtl"] .tooth-num { transform: scaleX(-1); transform-origin: center; }
     </style>
@@ -3789,7 +3792,7 @@ HTML_TEMPLATE = '''
           const wrap = document.getElementById('tooth-conditions-table');
           if (!wrap) return;
           const rows = await (await fetch('/api/tooth-conditions?all=1')).json();
-          wrap.innerHTML = `<table class="data-table"><thead><tr>
+          wrap.innerHTML = `<table><thead><tr>
               <th>${t('color','Color')}</th><th>${t('name','Name')}</th><th>${t('name_ar','Arabic')}</th>
               <th>#</th><th></th></tr></thead><tbody>` +
             rows.map(c => `<tr style="${c.active ? '' : 'opacity:.5;'}">
