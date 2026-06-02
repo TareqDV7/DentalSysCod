@@ -1588,6 +1588,17 @@ HTML_TEMPLATE = '''
             gap: 14px;
             margin-bottom: 22px;
         }
+        /* ── Odontogram ──────────────────────────────────────── */
+        .odontogram-card { padding: 16px; }
+        .arch { margin: 4px 0; }
+        .tooth { cursor: pointer; transition: filter var(--duration-fast, 150ms) ease; }
+        .tooth:hover, .tooth:focus-visible { filter: brightness(0.92) drop-shadow(0 1px 3px rgba(0,0,0,.25)); outline: none; }
+        .tooth-num { font-size: 9px; fill: var(--muted, #64748b); font-weight: 600; }
+        .tooth-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
+        .tooth-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+        .tooth-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid #334155; }
+        [dir="rtl"] .tooth-row { transform: scaleX(-1); }
+        [dir="rtl"] .tooth-num { transform: scaleX(-1); transform-origin: center; }
     </style>
 </head>
 <body>
@@ -5771,6 +5782,43 @@ HTML_TEMPLATE = '''
         }
 
         function isValidFdi(s) { return /^[1-4][1-8]$/.test(String(s || '')); }
+
+        // Tooth silhouettes in a 40x56 cell (crown on top, root tapering down).
+        // Distinct per class; refine visually in Task 9's review.
+        const TOOTH_PATHS = {
+          molar:    'M6,10 Q8,4 12,8 Q16,3 20,8 Q24,3 28,8 Q32,4 34,10 Q38,16 34,26 Q34,40 28,52 Q24,56 20,52 Q16,56 12,52 Q6,40 6,26 Q2,16 6,10 Z',
+          premolar: 'M9,10 Q14,3 20,8 Q26,3 31,10 Q35,18 31,28 Q31,42 26,52 Q20,57 14,52 Q9,42 9,28 Q5,18 9,10 Z',
+          canine:   'M20,3 Q27,9 30,18 Q33,30 28,44 Q24,56 20,53 Q16,56 12,44 Q7,30 10,18 Q13,9 20,3 Z',
+          incisor:  'M11,5 Q20,2 29,5 Q33,14 30,26 Q29,42 24,52 Q20,57 16,52 Q11,42 10,26 Q7,14 11,5 Z',
+        };
+
+        // Build one row of teeth as inline SVG. `chart` is the {teeth:{}} map from the API.
+        function buildToothRowSvg(fdiList, chart, isLower) {
+          const cellW = 44, cellH = 64, pad = 4;
+          let cells = '';
+          fdiList.forEach((fdi, i) => {
+            const x = i * cellW + pad;
+            const entry = (chart.teeth || {})[fdi];
+            const fill = entry && entry.color ? entry.color
+                       : entry ? '#cbd5e1'          // legacy/unknown tint
+                       : 'transparent';             // healthy = outline only
+            const stroke = entry ? '#334155' : '#94a3b8';
+            const dot = entry && entry.has_plan
+              ? `<circle cx="${x+34}" cy="6" r="4" fill="#7c3aed"><title>${t('has_plan','Has plan')}</title></circle>` : '';
+            const warn = entry && entry.unpaid_balance > 0
+              ? `<circle cx="${x+34}" cy="${cellH-8}" r="4" fill="#f59e0b"><title>${t('unpaid','Unpaid')}: ₪ ${entry.unpaid_balance.toFixed(2)}</title></circle>` : '';
+            const label = `<text x="${x+20}" y="${isLower ? cellH-1 : 10}" text-anchor="middle" class="tooth-num">${fdi}</text>`;
+            const path = `<path d="${TOOTH_PATHS[fdiToothClass(fdi)]}" transform="translate(${x},${isLower ? 6 : 14}) ${isLower ? 'rotate(180 20 28)' : ''}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+            cells += `<g class="tooth" data-fdi="${fdi}" tabindex="0" role="button" aria-label="${t('tooth','Tooth')} ${fdi}">${path}${label}${dot}${warn}</g>`;
+          });
+          const w = fdiList.length * cellW + pad * 2;
+          return `<svg viewBox="0 0 ${w} ${cellH}" width="100%" preserveAspectRatio="xMidYMid meet" class="tooth-row">${cells}</svg>`;
+        }
+
+        function buildToothArchSvg(chart) {
+          return `<div class="arch arch-upper">${buildToothRowSvg(FDI_UPPER, chart, false)}</div>`
+               + `<div class="arch arch-lower">${buildToothRowSvg(FDI_LOWER, chart, true)}</div>`;
+        }
 
         function renderFollowupsRows(followups) {
             if (!followups || !followups.length) {
