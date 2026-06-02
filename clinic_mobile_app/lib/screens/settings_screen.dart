@@ -11,6 +11,7 @@ import '../services/connectivity_sync_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/local_storage_service.dart';
 import 'catalog_screen.dart';
+import 'tooth_conditions_screen.dart';
 import 'pairing_screen.dart';
 import '../utils/app_strings.dart';
 import '../utils/bt_error_message.dart';
@@ -452,6 +453,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
                       builder: (_) => const CatalogScreen())),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // ── Tooth conditions ────────────────────────────────────────────
+          SectionHeader(
+              title: state.locale == 'ar'
+                  ? 'حالات الأسنان'
+                  : 'Tooth conditions'),
+          ClinicCard(
+            padding: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.medical_services_outlined),
+              title: Text(state.locale == 'ar'
+                  ? 'إدارة حالات وألوان الأسنان'
+                  : 'Manage tooth conditions & colors'),
+              subtitle: Text(
+                  state.locale == 'ar'
+                      ? 'يستخدم في خريطة الأسنان الخاصة بالمريض'
+                      : 'Used in the patient tooth chart',
+                  style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurfaceVariant,
+                      fontSize: 12)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => const ToothConditionsScreen())),
             ),
           ),
 
