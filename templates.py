@@ -2627,6 +2627,27 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
+    <!-- Tooth Popup Modal -->
+    <div id="tooth-popup" class="modal" style="display:none;" onclick="if(event.target===this)closeToothPopup()">
+      <div class="modal-content" style="max-width:360px;">
+        <h3 id="tooth-popup-title">—</h3>
+        <div class="form-group">
+          <label data-i18n="condition">Condition</label>
+          <select id="tooth-popup-condition"></select>
+        </div>
+        <div class="form-group">
+          <label data-i18n="notes">Note</label>
+          <input type="text" id="tooth-popup-note" autocomplete="off">
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn btn-primary" id="tooth-popup-save" data-i18n="save">Save</button>
+          <button class="btn" id="tooth-popup-log" data-i18n="log_treatment">+ Log treatment</button>
+          <button class="btn" id="tooth-popup-plan" data-i18n="add_to_plan">+ Add to plan</button>
+          <button class="btn btn-ghost" id="tooth-popup-close" data-i18n="cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <script>
         let patientsCache = [];
         let appointmentsCache = [];
@@ -5850,8 +5871,56 @@ HTML_TEMPLATE = '''
           }
         }
 
-        // Stub — replaced in Task 4
-        function openToothPopup(patientId, fdi, chart) {}
+        // Stub — replaced in Task 5
+        function openFollowupFormPrefilledTooth(patientId, fdi) {}
+        // Stub — replaced in Task 6
+        function addToothToPlan(patientId, fdi) {}
+
+        let _popupPatientId = null, _popupFdi = null;
+
+        function openToothPopup(patientId, fdi, chart) {
+          _popupPatientId = patientId; _popupFdi = fdi;
+          const entry = (chart.teeth || {})[fdi] || {};
+          document.getElementById('tooth-popup-title').textContent = `${t('tooth','Tooth')} ${fdi}`;
+          const sel = document.getElementById('tooth-popup-condition');
+          // First option = Healthy/clear (sends null).
+          sel.innerHTML = `<option value="">${t('healthy','Healthy')}</option>` +
+            currentChartConditions
+              .filter(c => c.name !== 'Healthy')
+              .map(c => `<option value="${c.id}">${(currentLanguage==='ar' && c.name_ar) ? c.name_ar : c.name}</option>`)
+              .join('');
+          sel.value = entry.condition_id ? String(entry.condition_id) : '';
+          document.getElementById('tooth-popup-note').value = entry.note || '';
+          document.getElementById('tooth-popup').style.display = 'flex';
+        }
+
+        function closeToothPopup() { document.getElementById('tooth-popup').style.display = 'none'; }
+
+        document.getElementById('tooth-popup-close').addEventListener('click', closeToothPopup);
+
+        document.getElementById('tooth-popup-save').addEventListener('click', async () => {
+          const condVal = document.getElementById('tooth-popup-condition').value;
+          await fetch(`/api/patients/${_popupPatientId}/tooth-chart`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              tooth_no: _popupFdi,
+              condition_id: condVal ? parseInt(condVal, 10) : null,   // '' → null = clear to healthy
+              note: document.getElementById('tooth-popup-note').value || null,
+            }),
+          });
+          closeToothPopup();
+          renderOdontogram(_popupPatientId);
+        });
+
+        document.getElementById('tooth-popup-log').addEventListener('click', () => {
+          closeToothPopup();
+          openFollowupFormPrefilledTooth(_popupPatientId, _popupFdi);   // Task 5
+        });
+
+        document.getElementById('tooth-popup-plan').addEventListener('click', () => {
+          closeToothPopup();
+          addToothToPlan(_popupPatientId, _popupFdi);                    // Task 6
+        });
 
         function renderFollowupsRows(followups) {
             if (!followups || !followups.length) {
