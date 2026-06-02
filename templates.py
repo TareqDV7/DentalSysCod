@@ -1963,6 +1963,22 @@ HTML_TEMPLATE = '''
                             </div>
                         </div><!-- /catalog-subtab-procedure -->
                     </div><!-- /section-card -->
+
+                    <!-- ── Tooth Conditions Admin ── -->
+                    <div class="section-card">
+                        <div class="card">
+                            <h3 data-i18n="tooth_conditions">Tooth conditions</h3>
+                            <div id="tooth-conditions-table"></div>
+                            <div class="form-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                                <input type="text" id="tc-name" placeholder="Name">
+                                <input type="text" id="tc-name-ar" placeholder="الاسم">
+                                <input type="color" id="tc-color" value="#9ca3af">
+                                <input type="number" id="tc-sort" placeholder="#" style="width:64px;">
+                                <button class="btn btn-primary" id="tc-add" data-i18n="add">Add</button>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </div><!-- /treatments -->
 
@@ -3736,7 +3752,47 @@ HTML_TEMPLATE = '''
             updateTreatmentOverviewCounts();
             // Wire date picker buttons inside the catalog section
             attachDatePickerButtons(document.getElementById('treatments'));
+            // Load tooth conditions admin
+            renderToothConditionsTable();
         }
+
+        // ── Tooth Conditions Admin ────────────────────────────────────────────────
+        async function renderToothConditionsTable() {
+          const wrap = document.getElementById('tooth-conditions-table');
+          if (!wrap) return;
+          const rows = await (await fetch('/api/tooth-conditions?all=1')).json();
+          wrap.innerHTML = `<table class="data-table"><thead><tr>
+              <th>${t('color','Color')}</th><th>${t('name','Name')}</th><th>${t('name_ar','Arabic')}</th>
+              <th>#</th><th></th></tr></thead><tbody>` +
+            rows.map(c => `<tr style="${c.active ? '' : 'opacity:.5;'}">
+              <td><i style="display:inline-block;width:16px;height:16px;border-radius:3px;background:${c.color};border:1px solid #334155;"></i></td>
+              <td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.name_ar || '')}</td><td>${c.sort_order}</td>
+              <td>${c.active ? `<button class="btn btn-ghost" onclick="deleteToothCondition(${c.id})">${t('deactivate','Deactivate')}</button>` : ''}</td>
+            </tr>`).join('') + '</tbody></table>';
+        }
+
+        async function addToothCondition() {
+          const name = document.getElementById('tc-name').value.trim();
+          if (!name) return;
+          await fetch('/api/tooth-conditions', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              name, name_ar: document.getElementById('tc-name-ar').value.trim() || null,
+              color: document.getElementById('tc-color').value,
+              sort_order: parseInt(document.getElementById('tc-sort').value, 10) || 0,
+            }),
+          });
+          document.getElementById('tc-name').value = '';
+          document.getElementById('tc-name-ar').value = '';
+          renderToothConditionsTable();
+        }
+
+        async function deleteToothCondition(id) {
+          await fetch(`/api/tooth-conditions/${id}`, { method: 'DELETE' });
+          renderToothConditionsTable();
+        }
+
+        document.getElementById('tc-add')?.addEventListener('click', addToothCondition);
 
         // openAdministrationHome / openAdministrationCatalog now route to the Catalog tab
         function openAdministrationHome(clickedBtn = null) {
