@@ -24,7 +24,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 8, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 9, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -38,6 +38,9 @@ class DatabaseService {
     'followups': 'patient_followups',
     'treatment_plans': 'treatment_plans',
     'holidays': 'holidays',
+    'tooth_conditions': 'tooth_conditions',
+    'patient_tooth_chart': 'patient_tooth_chart',
+    'treatment_plan_teeth': 'treatment_plan_teeth',
   };
   static final Map<String, String> remoteToLocalTable = {
     for (final e in localToRemoteTable.entries) e.value: e.key,
@@ -91,6 +94,48 @@ class DatabaseService {
   static const String _idxMedicalImagesPatient =
       'CREATE INDEX IF NOT EXISTS idx_medical_images_patient ON medical_images(patient_id)';
 
+  static const String _createToothConditions = '''
+    CREATE TABLE IF NOT EXISTS tooth_conditions (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      name_ar TEXT,
+      color TEXT DEFAULT '#9ca3af',
+      icon TEXT,
+      sort_order INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1,
+      updated_at TEXT,
+      is_synced INTEGER DEFAULT 0
+    )
+  ''';
+
+  static const String _createPatientToothChart = '''
+    CREATE TABLE IF NOT EXISTS patient_tooth_chart (
+      id INTEGER PRIMARY KEY,
+      patient_id INTEGER NOT NULL,
+      tooth_no TEXT NOT NULL,
+      condition_id INTEGER,
+      note TEXT,
+      updated_at TEXT,
+      is_synced INTEGER DEFAULT 0
+    )
+  ''';
+
+  static const String _idxToothChartPatient =
+      'CREATE INDEX IF NOT EXISTS idx_tooth_chart_patient ON patient_tooth_chart(patient_id)';
+
+  static const String _createTreatmentPlanTeeth = '''
+    CREATE TABLE IF NOT EXISTS treatment_plan_teeth (
+      id INTEGER PRIMARY KEY,
+      plan_id INTEGER NOT NULL,
+      tooth_no TEXT NOT NULL,
+      updated_at TEXT,
+      is_synced INTEGER DEFAULT 0
+    )
+  ''';
+
+  static const String _idxPlanTeethPlan =
+      'CREATE INDEX IF NOT EXISTS idx_plan_teeth_plan ON treatment_plan_teeth(plan_id)';
+
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await db.execute(_createTombstones);
@@ -134,6 +179,13 @@ class DatabaseService {
     if (oldVersion < 8) {
       await db.execute(_createMedicalImages);
       await db.execute(_idxMedicalImagesPatient);
+    }
+    if (oldVersion < 9) {
+      await db.execute(_createToothConditions);
+      await db.execute(_createPatientToothChart);
+      await db.execute(_idxToothChartPatient);
+      await db.execute(_createTreatmentPlanTeeth);
+      await db.execute(_idxPlanTeethPlan);
     }
   }
 
@@ -322,6 +374,11 @@ class DatabaseService {
     await db.execute(_createCreditTransactions);
     await db.execute(_createMedicalImages);
     await db.execute(_idxMedicalImagesPatient);
+    await db.execute(_createToothConditions);
+    await db.execute(_createPatientToothChart);
+    await db.execute(_idxToothChartPatient);
+    await db.execute(_createTreatmentPlanTeeth);
+    await db.execute(_idxPlanTeethPlan);
   }
 
   // ── Patients ──────────────────────────────────────────────────────────────

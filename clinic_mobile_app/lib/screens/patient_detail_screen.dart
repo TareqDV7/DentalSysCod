@@ -20,6 +20,7 @@ import 'patient_payment_history_screen.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
+import 'odontogram_view.dart';
 
 class PatientDetailScreen extends StatefulWidget {
   final Patient patient;
@@ -51,7 +52,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   void initState() {
     super.initState();
     _patient = widget.patient;
-    _tabs = TabController(length: 4, vsync: this);
+    _tabs = TabController(length: 5, vsync: this);
     _tabs.addListener(_onTabChanged);
     _load();
   }
@@ -343,13 +344,14 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     }
   }
 
-  void _addFollowup() {
+  void _addFollowup({String? initialTooth}) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _FollowupSheet(
         patientId: _patient.id!,
+        initialTooth: initialTooth,
         onSaved: (f) async {
           final state = context.read<AppState>();
           await state.patients.addFollowup(f);
@@ -581,6 +583,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
               Tab(text: t('appointments')),
               Tab(text: t('plans')),
               Tab(text: t('images')),
+              Tab(text: isArabic ? 'خريطة الأسنان' : 'Tooth chart'),
             ],
           ),
 
@@ -609,6 +612,12 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                         onOpen: _openImage,
                         onDelete: _deleteImage,
                         onRefresh: _syncImages,
+                      ),
+                      OdontogramView(
+                        patientId: _patient.id!,
+                        onLogTreatment: (fdi) =>
+                            _addFollowup(initialTooth: fdi),
+                        onAddToPlan: (_) => _addPlan(),
                       ),
                     ],
                   ),
@@ -1330,10 +1339,12 @@ class _FollowupSheet extends StatefulWidget {
   final int patientId;
   final Followup? existing;
   final Future<void> Function(Followup) onSaved;
+  final String? initialTooth;
   const _FollowupSheet({
     required this.patientId,
     required this.onSaved,
     this.existing,
+    this.initialTooth,
   });
 
   @override
@@ -1377,6 +1388,10 @@ class _FollowupSheetState extends State<_FollowupSheet> {
       _notes.text = e.notes ?? '';
     } else {
       _date = DateFormatHelper.formatDateForApi(DateTime.now());
+      // Pre-fill tooth when opened from the odontogram tap sheet.
+      if (widget.initialTooth != null) {
+        _tooth.text = widget.initialTooth!;
+      }
     }
     _loadCatalog();
   }
