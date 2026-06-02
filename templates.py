@@ -3040,7 +3040,21 @@ HTML_TEMPLATE = '''
                 expenses_empty_hint: 'Adjust the filters or add the first expense entry.',
                 or_expression: 'or expression',
                 or_percent: 'or % e.g. 20%',
-                unknown_patient: 'Unknown patient'
+                unknown_patient: 'Unknown patient',
+                odontogram: 'Tooth chart',
+                tooth: 'Tooth',
+                condition: 'Condition',
+                tooth_conditions: 'Tooth conditions',
+                healthy: 'Healthy',
+                has_plan: 'Has plan',
+                unpaid: 'Unpaid',
+                log_treatment: '+ Log treatment',
+                add_to_plan: '+ Add to plan',
+                deactivate: 'Deactivate',
+                name_ar: 'Arabic name',
+                plan_pick_hint: 'Enter a number, or a new plan name:',
+                plan_new_name: 'New plan name:',
+                plan: 'Plan'
             },
             ar: {
                 title: '{{ SYSTEM_NAME }}',
@@ -3396,7 +3410,21 @@ HTML_TEMPLATE = '''
                 expenses_empty_hint: 'عدّل الفلاتر أو أضف أول إدخال مصاريف.',
                 or_expression: 'أو تعبير',
                 or_percent: 'أو نسبة مثل ٪20',
-                unknown_patient: 'مريض غير معروف'
+                unknown_patient: 'مريض غير معروف',
+                odontogram: 'مخطط الأسنان',
+                tooth: 'سن',
+                condition: 'الحالة',
+                tooth_conditions: 'حالات الأسنان',
+                healthy: 'سليم',
+                has_plan: 'ضمن خطة',
+                unpaid: 'غير مدفوع',
+                log_treatment: '+ تسجيل علاج',
+                add_to_plan: '+ إضافة إلى خطة',
+                deactivate: 'إلغاء التفعيل',
+                name_ar: 'الاسم بالعربية',
+                plan_pick_hint: 'أدخل رقمًا، أو اسم خطة جديدة:',
+                plan_new_name: 'اسم الخطة الجديدة:',
+                plan: 'خطة'
             }
         };
 
