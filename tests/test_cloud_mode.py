@@ -24,6 +24,7 @@ def cloud(tmp_path, monkeypatch):
     monkeypatch.setattr(dental_clinic, 'DB_NAME', dental_clinic._DbPathProxy(master))
     monkeypatch.setattr(dental_clinic, 'UPLOAD_FOLDER', data_dir / 'uploads')
     (data_dir / 'uploads').mkdir(exist_ok=True)
+    monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', False)
     dental_clinic._set_request_db_path(None)
     dental_clinic._register_attempts.clear()  # rate-limit state must not leak between tests
     dental_clinic.init_database()  # builds the master DB
@@ -131,41 +132,42 @@ def test_register_disabled_when_not_cloud_mode(plain):
     assert r.status_code == 404
 
 
-def _sign_serial(serial, key, *, clinic_name='Signed Clinic', expiry_days=365):
-    """Build an offline_token in the same format serial_generator.py emits."""
-    import base64, hashlib, hmac, json
+def _make_keypair_and_patch(monkeypatch):
+    """Generate a test Ed25519 keypair and point the verifier at the public key.
+    Returns the private seed (b64) for signing test tokens."""
+    import serial_generator
+    priv_b64, pub_b64 = serial_generator.generate_keypair()
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', pub_b64)
+    return priv_b64
+
+
+def _sign_serial(serial, priv_b64, *, clinic_name='Signed Clinic', expiry_days=365):
+    """Build a v2 Ed25519 serial token (same shape serial_generator emits)."""
+    import serial_generator
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     payload = {
-        'serial': serial, 'clinic_name': clinic_name,
+        'v': 2, 'serial': serial, 'clinic_name': clinic_name, 'max_devices': 3,
         'issued_at': now.isoformat() + 'Z',
         'expires_at': (now + timedelta(days=expiry_days)).isoformat() + 'Z',
         'grace_until': (now + timedelta(days=expiry_days + 30)).isoformat() + 'Z',
     }
-    payload_json = json.dumps(payload, separators=(',', ':')).encode()
-    sig = hmac.new(key, payload_json, hashlib.sha256).digest()
-    return f'{base64.b64encode(payload_json).decode()}.{base64.b64encode(sig).decode()}'
+    return serial_generator.sign_serial_token(payload, priv_b64)
 
 
 def test_register_accepts_valid_signed_token(cloud, monkeypatch):
-    import base64, os
-    key = os.urandom(32)
-    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
-                        base64.b64encode(key).decode())
+    priv = _make_keypair_and_patch(monkeypatch)
     monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
 
     serial = 'SIGNED-AAAA-0001'
-    token = _sign_serial(serial, key)
+    token = _sign_serial(serial, priv)
     r = cloud.post('/api/clinics/register',
                    json={'serial_number': serial, 'clinic_name': 'OK', 'offline_token': token})
     assert r.status_code == 200, r.get_data(as_text=True)
 
 
 def test_register_rejects_unsigned_when_required(cloud, monkeypatch):
-    import base64, os
-    key = os.urandom(32)
-    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
-                        base64.b64encode(key).decode())
+    _make_keypair_and_patch(monkeypatch)
     monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
 
     r = cloud.post('/api/clinics/register',
@@ -175,16 +177,14 @@ def test_register_rejects_unsigned_when_required(cloud, monkeypatch):
 
 
 def test_register_rejects_tampered_token(cloud, monkeypatch):
-    import base64, os
-    key = os.urandom(32)
-    other_key = os.urandom(32)
-    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
-                        base64.b64encode(key).decode())
+    import serial_generator
+    _make_keypair_and_patch(monkeypatch)
     monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
 
     serial = 'TAMPER-AAAA-001'
-    # Token signed with the WRONG key
-    bad_token = _sign_serial(serial, other_key)
+    # Token signed with a DIFFERENT keypair (not the one patched into the verifier)
+    priv2, _pub2 = serial_generator.generate_keypair()
+    bad_token = _sign_serial(serial, priv2)
     r = cloud.post('/api/clinics/register',
                    json={'serial_number': serial, 'clinic_name': 'X', 'offline_token': bad_token})
     assert r.status_code == 403
@@ -192,14 +192,11 @@ def test_register_rejects_tampered_token(cloud, monkeypatch):
 
 
 def test_register_rejects_serial_mismatch(cloud, monkeypatch):
-    import base64, os
-    key = os.urandom(32)
-    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64',
-                        base64.b64encode(key).decode())
+    priv = _make_keypair_and_patch(monkeypatch)
     monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
 
     # Token signed for serial A — but registration uses serial B
-    token = _sign_serial('REAL-SERIAL-001', key)
+    token = _sign_serial('REAL-SERIAL-001', priv)
     r = cloud.post('/api/clinics/register',
                    json={'serial_number': 'OTHER-SERIAL-001', 'clinic_name': 'X',
                          'offline_token': token})
@@ -210,7 +207,7 @@ def test_register_rejects_serial_mismatch(cloud, monkeypatch):
 def test_register_unsigned_still_works_when_not_required(cloud, monkeypatch):
     # Default behaviour: signing isn't required, no key configured → legacy demo
     # serials still register. (This guards the rollout path.)
-    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64', '')
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', '')
     monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', False)
     r = cloud.post('/api/clinics/register',
                    json={'serial_number': 'LEGACY-DEMO-001', 'clinic_name': 'X'})
@@ -223,83 +220,87 @@ def test_register_unsigned_still_works_when_not_required(cloud, monkeypatch):
 # and malformed input. They also confirm a token straight out of
 # serial_generator.py validates against the cloud's verifier.
 
-def test_verify_serial_token_valid():
-    import os
-    key = os.urandom(32)
+def test_verify_serial_token_valid(monkeypatch):
+    priv = _make_keypair_and_patch(monkeypatch)
     serial = 'VERIFY-OK-0001'
-    token = _sign_serial(serial, key)
-    ok, reason = dental_clinic._verify_serial_token(serial, token, key)
+    token = _sign_serial(serial, priv)
+    ok, reason, _payload = dental_clinic._verify_serial_token(serial, token)
     assert ok is True, reason
     assert reason == ''
 
 
-def test_verify_serial_token_from_serial_generator():
-    # A token produced by serial_generator.generate_license_token must validate
-    # against the cloud gate (payload key 'serial', plain base64, raw-bytes key).
-    import hashlib
+def test_verify_serial_token_from_serial_generator(monkeypatch):
+    # A token produced by serial_generator.sign_serial_token must validate
+    # against the cloud gate (Ed25519, base64url wire format).
     import serial_generator
-    key = hashlib.sha256(b'integration-test-key').digest()
+    from datetime import datetime, timedelta, timezone
+    priv_b64, pub_b64 = serial_generator.generate_keypair()
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', pub_b64)
     serial = 'DENTAL-SMD-ABCDE-00001'
-    lic = serial_generator.generate_license_token(
-        serial=serial, clinic_name='Smile', device_id='DEV-1', signing_key=key)
-    ok, reason = dental_clinic._verify_serial_token(serial, lic['offline_token'], key)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    payload = {
+        'v': 2, 'serial': serial, 'clinic_name': 'Smile', 'max_devices': 1,
+        'issued_at': now.isoformat() + 'Z',
+        'expires_at': (now + timedelta(days=365)).isoformat() + 'Z',
+        'grace_until': (now + timedelta(days=395)).isoformat() + 'Z',
+    }
+    token = serial_generator.sign_serial_token(payload, priv_b64)
+    ok, reason, _payload = dental_clinic._verify_serial_token(serial, token)
     assert ok is True, reason
 
 
-def test_verify_serial_token_bad_signature():
-    import os
-    key = os.urandom(32)
-    other = os.urandom(32)
+def test_verify_serial_token_bad_signature(monkeypatch):
+    import serial_generator
+    priv_good = _make_keypair_and_patch(monkeypatch)  # public key patched in
+    # Sign with a different (unpatched) private key
+    priv_other, _pub_other = serial_generator.generate_keypair()
     serial = 'VERIFY-BAD-SIG'
-    token = _sign_serial(serial, other)  # signed with a different key
-    ok, reason = dental_clinic._verify_serial_token(serial, token, key)
+    token = _sign_serial(serial, priv_other)  # signed with a different key
+    ok, reason, _payload = dental_clinic._verify_serial_token(serial, token)
     assert ok is False
     assert 'signature' in reason
 
 
-def test_verify_serial_token_wrong_serial():
-    import os
-    key = os.urandom(32)
-    token = _sign_serial('TOKEN-SERIAL-A', key)
-    ok, reason = dental_clinic._verify_serial_token('OTHER-SERIAL-B', token, key)
+def test_verify_serial_token_wrong_serial(monkeypatch):
+    priv = _make_keypair_and_patch(monkeypatch)
+    token = _sign_serial('TOKEN-SERIAL-A', priv)
+    ok, reason, _payload = dental_clinic._verify_serial_token('OTHER-SERIAL-B', token)
     assert ok is False
     assert 'match' in reason
 
 
-def test_verify_serial_token_expired_grace():
-    import os
-    key = os.urandom(32)
+def test_verify_serial_token_expired_grace(monkeypatch):
+    priv = _make_keypair_and_patch(monkeypatch)
     serial = 'VERIFY-EXPIRED'
     # expiry_days = -60 → grace_until (expiry + 30 days) is 30 days in the past.
-    token = _sign_serial(serial, key, expiry_days=-60)
-    ok, reason = dental_clinic._verify_serial_token(serial, token, key)
+    token = _sign_serial(serial, priv, expiry_days=-60)
+    ok, reason, _payload = dental_clinic._verify_serial_token(serial, token)
     assert ok is False
     assert 'expired' in reason
 
 
-def test_verify_serial_token_malformed():
-    import os
-    key = os.urandom(32)
+def test_verify_serial_token_malformed(monkeypatch):
+    _make_keypair_and_patch(monkeypatch)
     # empty
-    assert dental_clinic._verify_serial_token('S', '', key)[0] is False
+    assert dental_clinic._verify_serial_token('S', '')[0] is False
     # no dot separator
-    ok, reason = dental_clinic._verify_serial_token('S', 'notatoken', key)
+    ok, reason, _p = dental_clinic._verify_serial_token('S', 'notatoken')
     assert ok is False and 'malformed' in reason
     # non-base64 garbage on both sides of the dot
-    ok, reason = dental_clinic._verify_serial_token('S', '!!!.@@@', key)
+    ok, reason, _p = dental_clinic._verify_serial_token('S', '!!!.@@@')
     assert ok is False
-    # valid base64 but payload isn't JSON
+    # valid base64url but payload isn't JSON
     import base64
-    junk = base64.b64encode(b'not json').decode()
-    sig = base64.b64encode(b'whatever').decode()
-    ok, reason = dental_clinic._verify_serial_token('S', f'{junk}.{sig}', key)
+    junk = base64.urlsafe_b64encode(b'not json').decode().rstrip('=')
+    sig = base64.urlsafe_b64encode(b'whatever').decode().rstrip('=')
+    ok, reason, _p = dental_clinic._verify_serial_token('S', f'{junk}.{sig}')
     assert ok is False  # signature fails before JSON parse, but either way not ok
 
 
 def test_register_500_when_required_but_no_key(cloud, monkeypatch):
     # Misconfiguration guard: enforcement requested but no signing key set must
     # fail closed with 500, never silently allow an unsigned registration.
-    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64', '')
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', '')
     monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
     r = cloud.post('/api/clinics/register',
                    json={'serial_number': 'NOKEY-SERIAL-1', 'clinic_name': 'X'})
