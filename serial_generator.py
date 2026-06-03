@@ -15,6 +15,59 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey, Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidSignature
+
+
+def _b64u(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode().rstrip('=')
+
+
+def _b64u_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+
+
+def generate_keypair():
+    """Return (private_seed_b64, public_key_b64) for a fresh Ed25519 keypair.
+    The private seed is 32 raw bytes, base64 (std) encoded."""
+    priv = Ed25519PrivateKey.generate()
+    seed = priv.private_bytes(
+        serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    pub = priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw,
+    )
+    return base64.b64encode(seed).decode(), base64.b64encode(pub).decode()
+
+
+def sign_serial_token(payload: dict, private_seed_b64: str) -> str:
+    """Return 'base64url(payload_json).base64url(ed25519_sig)'."""
+    priv = Ed25519PrivateKey.from_private_bytes(base64.b64decode(private_seed_b64))
+    payload_json = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    sig = priv.sign(payload_json)
+    return f'{_b64u(payload_json)}.{_b64u(sig)}'
+
+
+def verify_serial_token(token: str, public_key_b64: str):
+    """Return (ok: bool, payload: dict|None). Verifies the Ed25519 signature."""
+    try:
+        payload_part, sig_part = str(token).split('.', 1)
+        payload_bytes = _b64u_decode(payload_part)
+        sig = _b64u_decode(sig_part)
+    except (ValueError, base64.binascii.Error):
+        return False, None
+    try:
+        pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
+        pub.verify(sig, payload_bytes)
+        return True, json.loads(payload_bytes.decode('utf-8'))
+    except (InvalidSignature, ValueError, UnicodeDecodeError):
+        return False, None
+
+
 # Constants
 SERIAL_PREFIX = "DENTAL"
 SERIAL_SEPARATOR = "-"
