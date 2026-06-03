@@ -17,6 +17,14 @@ services:
       # HMAC-signed-serial gating for /api/clinics/register. Both vars default
       # to empty / off — set them in `cloud/.env` (gitignored) on the host to
       # turn on soft-launch (key set, REQUIRE=0) or enforcement (REQUIRE=1).
+      #
+      # NEVER commit a real key here. CLINIC_SERIAL_SIGNING_KEY is a SECRET
+      # (base64 of the same HMAC key serial_generator.py signs with) and MUST
+      # come from the host's `cloud/.env` or a secret manager, e.g.:
+      #     cloud/.env  (chmod 600, gitignored):
+      #       CLINIC_SERIAL_SIGNING_KEY=<base64-of-32-random-bytes>   # placeholder — supply the real key out of band
+      #       CLINIC_REQUIRE_SIGNED_SERIAL=1                          # flip to 1 only once every local server forwards a signed offline_token
+      # See DEPLOY_CLOUD.md ("Enabling signed-serial enforcement") for the flip procedure.
       - CLINIC_SERIAL_SIGNING_KEY=${CLINIC_SERIAL_SIGNING_KEY:-}
       - CLINIC_REQUIRE_SIGNED_SERIAL=${CLINIC_REQUIRE_SIGNED_SERIAL:-0}
 

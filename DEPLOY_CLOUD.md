@@ -99,9 +99,47 @@ Set in `cloud/docker-compose.yml` (`services.app.environment`) or the `Dockerfil
 
 The hostname for TLS lives in `cloud/Caddyfile` (`app.dentacare.tech`) — change it there if the domain changes, then `docker compose up -d caddy`.
 
+## Enabling signed-serial enforcement
+
+By default `/api/clinics/register` accepts any unique serial (≥ 8 chars). To require that every registering clinic present an HMAC-signed `offline_token` (issued by `serial_generator.py`), roll out in two stages so nothing breaks mid-flight.
+
+**Prerequisite — both the desktop *and* mobile clients must forward a signed token first.** The cloud only checks what it receives; a local server pairs via `POST /api/cloud/pair`, which forwards the `offline_token` it resolves in this order: the pair request body → `app_settings['cloud_offline_token']` → env `CLINIC_OFFLINE_TOKEN`. **Do not set `CLINIC_REQUIRE_SIGNED_SERIAL=1` until every local server (and any mobile client that registers directly) is configured with its signed token** — otherwise their pairing will be rejected with `403`.
+
+1. **Generate the signing key** (once, kept secret — this is what `serial_generator.py` signs with):
+
+   ```bash
+   openssl rand -base64 32        # → put the output in CLINIC_SERIAL_SIGNING_KEY
+   ```
+
+   Store it in `cloud/.env` on the droplet (gitignored, `chmod 600`) — **never** commit it or paste it into `docker-compose.yml`:
+
+   ```bash
+   # cloud/.env
+   CLINIC_SERIAL_SIGNING_KEY=<the base64 string above>
+   CLINIC_REQUIRE_SIGNED_SERIAL=0      # stage 1: verify-if-present, don't reject yet
+   ```
+
+2. **Issue signed tokens** for each clinic with the matching key, and load the token onto each local server:
+
+   ```bash
+   # backend_key.json holds {"key": "<same base64 string>"}
+   python serial_generator.py --clinic "Smile Dental" --code "SMD" \
+     --device "SERVER-ID" --key-file backend_key.json
+   # → copy the "Offline License Token" line; on the clinic's local server, pass it
+   #   in the /api/cloud/pair body as offline_token, OR set env CLINIC_OFFLINE_TOKEN.
+   ```
+
+   The token's `payload.serial` must equal the `serial_number` the clinic registers with, and its `grace_until` must be in the future.
+
+3. **Soft-launch (stage 1):** `docker compose up -d --build app` with `CLINIC_REQUIRE_SIGNED_SERIAL=0`. Now every register call that *includes* a token is verified (bad signatures / wrong serial / expired tokens are rejected), but tokenless legacy registrations still succeed. Watch the logs and confirm all live clients are sending valid tokens.
+
+4. **Enforce (stage 2):** once all clients forward a valid token, set `CLINIC_REQUIRE_SIGNED_SERIAL=1` in `cloud/.env` and `docker compose up -d app`. Registrations without a valid signed token now get `403`. If the key is somehow missing while `REQUIRE=1`, register returns `500` ("Server signing key not configured") rather than silently allowing anyone in.
+
+To roll back, set `CLINIC_REQUIRE_SIGNED_SERIAL=0` (or unset `CLINIC_SERIAL_SIGNING_KEY` to disable the gate entirely) and redeploy `app`.
+
 ## API surface on the cloud node
 
-- `POST /api/clinics/register` — `{serial_number, clinic_name, offline_token?}` → `{clinic_id, clinic_token, already_registered}`. Idempotent per serial. **No clinic token required.** `offline_token` is the HMAC-signed token from `serial_generator.py`; required when `CLINIC_REQUIRE_SIGNED_SERIAL=1`, otherwise optional but verified when present.
+- `POST /api/clinics/register` — `{serial_number, clinic_name, offline_token?}` → `{clinic_id, clinic_token, already_registered}`. Idempotent per serial. **No clinic token required.** `offline_token` is the HMAC-signed token from `serial_generator.py`; required when `CLINIC_REQUIRE_SIGNED_SERIAL=1`, otherwise optional but verified when present. Local servers don't call this directly — they call their own `POST /api/cloud/pair`, which forwards the `offline_token` (from the pair body, `app_settings['cloud_offline_token']`, or env `CLINIC_OFFLINE_TOKEN`). See *Enabling signed-serial enforcement*.
 - `GET /api/system/readiness` — health check. No token required.
 - Everything else under `/api/*` — requires a valid `X-Clinic-Token` (or `?clinic_token=`), routed to that clinic's DB. This includes `/api/sync/export`, `/api/sync/import`, `/api/patients`, etc.
 - Non-`/api/` paths — return a short "use your local server" notice.
@@ -137,8 +175,8 @@ Snapshots stay on the droplet — for true off-server durability (so a droplet l
 
 ## Known limitations (Phase 1)
 
-- Serial validation is currently just **uniqueness** (one clinic per serial, ≥ 8 chars). HMAC-signed-serial gating (via `serial_generator.py`'s signing key) is a follow-up.
-- `/api/clinics/register` is rate-limited per source IP (default 10/hour) and can be gated on HMAC-signed `offline_token`s via the two `CLINIC_SERIAL_SIGNING_KEY` / `CLINIC_REQUIRE_SIGNED_SERIAL` envs above (issued by `serial_generator.py --key-file …`). Other public endpoints are not rate-limited yet.
+- Serial validation defaults to **uniqueness** (one clinic per serial, ≥ 8 chars). HMAC-signed-serial gating is available and wired end-to-end (`/api/cloud/pair` forwards the token) — enable it per *Enabling signed-serial enforcement*. Default stays off.
+- `/api/clinics/register` is rate-limited per source IP (default 10/hour) and can be gated on HMAC-signed `offline_token`s via the two `CLINIC_SERIAL_SIGNING_KEY` / `CLINIC_REQUIRE_SIGNED_SERIAL` envs above (issued by `serial_generator.py --key-file …`). The rate limiter is **in-process only** — it resets on restart and is not shared across replicas; behind a single Caddy + single app container that's adequate, but a horizontally-scaled deployment would need a shared store (e.g. Redis). Other public endpoints are not rate-limited yet.
 - Backups are written to the same droplet volume as the live data (see *Backups* above). Off-server durability (DO Spaces upload) is a planned follow-up.
 - The cloud node currently shares one Flask session secret across all tenants (stored in `cloud_master.db`); the portal isn't reachable here so this is low-impact, but worth knowing.
 

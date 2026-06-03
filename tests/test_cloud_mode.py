@@ -217,6 +217,185 @@ def test_register_unsigned_still_works_when_not_required(cloud, monkeypatch):
     assert r.status_code == 200
 
 
+# --- _verify_serial_token unit tests -----------------------------------------
+# These exercise the gate's primitive directly (no HTTP), covering the cases the
+# register handler depends on: valid, bad signature, wrong serial, expired grace,
+# and malformed input. They also confirm a token straight out of
+# serial_generator.py validates against the cloud's verifier.
+
+def test_verify_serial_token_valid():
+    import os
+    key = os.urandom(32)
+    serial = 'VERIFY-OK-0001'
+    token = _sign_serial(serial, key)
+    ok, reason = dental_clinic._verify_serial_token(serial, token, key)
+    assert ok is True, reason
+    assert reason == ''
+
+
+def test_verify_serial_token_from_serial_generator():
+    # A token produced by serial_generator.generate_license_token must validate
+    # against the cloud gate (payload key 'serial', plain base64, raw-bytes key).
+    import hashlib
+    import serial_generator
+    key = hashlib.sha256(b'integration-test-key').digest()
+    serial = 'DENTAL-SMD-ABCDE-00001'
+    lic = serial_generator.generate_license_token(
+        serial=serial, clinic_name='Smile', device_id='DEV-1', signing_key=key)
+    ok, reason = dental_clinic._verify_serial_token(serial, lic['offline_token'], key)
+    assert ok is True, reason
+
+
+def test_verify_serial_token_bad_signature():
+    import os
+    key = os.urandom(32)
+    other = os.urandom(32)
+    serial = 'VERIFY-BAD-SIG'
+    token = _sign_serial(serial, other)  # signed with a different key
+    ok, reason = dental_clinic._verify_serial_token(serial, token, key)
+    assert ok is False
+    assert 'signature' in reason
+
+
+def test_verify_serial_token_wrong_serial():
+    import os
+    key = os.urandom(32)
+    token = _sign_serial('TOKEN-SERIAL-A', key)
+    ok, reason = dental_clinic._verify_serial_token('OTHER-SERIAL-B', token, key)
+    assert ok is False
+    assert 'match' in reason
+
+
+def test_verify_serial_token_expired_grace():
+    import os
+    key = os.urandom(32)
+    serial = 'VERIFY-EXPIRED'
+    # expiry_days = -60 → grace_until (expiry + 30 days) is 30 days in the past.
+    token = _sign_serial(serial, key, expiry_days=-60)
+    ok, reason = dental_clinic._verify_serial_token(serial, token, key)
+    assert ok is False
+    assert 'expired' in reason
+
+
+def test_verify_serial_token_malformed():
+    import os
+    key = os.urandom(32)
+    # empty
+    assert dental_clinic._verify_serial_token('S', '', key)[0] is False
+    # no dot separator
+    ok, reason = dental_clinic._verify_serial_token('S', 'notatoken', key)
+    assert ok is False and 'malformed' in reason
+    # non-base64 garbage on both sides of the dot
+    ok, reason = dental_clinic._verify_serial_token('S', '!!!.@@@', key)
+    assert ok is False
+    # valid base64 but payload isn't JSON
+    import base64
+    junk = base64.b64encode(b'not json').decode()
+    sig = base64.b64encode(b'whatever').decode()
+    ok, reason = dental_clinic._verify_serial_token('S', f'{junk}.{sig}', key)
+    assert ok is False  # signature fails before JSON parse, but either way not ok
+
+
+def test_register_500_when_required_but_no_key(cloud, monkeypatch):
+    # Misconfiguration guard: enforcement requested but no signing key set must
+    # fail closed with 500, never silently allow an unsigned registration.
+    monkeypatch.setattr(dental_clinic, '_SERIAL_SIGNING_KEY_B64', '')
+    monkeypatch.setattr(dental_clinic, '_REQUIRE_SIGNED_SERIAL', True)
+    r = cloud.post('/api/clinics/register',
+                   json={'serial_number': 'NOKEY-SERIAL-1', 'clinic_name': 'X'})
+    assert r.status_code == 500, r.get_data(as_text=True)
+    assert 'signing key' in r.get_json()['error'].lower()
+
+
+def test_cloud_pair_forwards_offline_token_from_body(tmp_path, monkeypatch):
+    # Local-server side: /api/cloud/pair must forward an offline_token supplied in
+    # the request body to the cloud's register call, so the HMAC gate accepts it.
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', False)
+    monkeypatch.setattr(dental_clinic, 'DB_NAME', str(tmp_path / 'clinic.db'))
+    monkeypatch.setitem(dental_clinic.CLINIC_CONFIG, 'CLINIC_NAME', 'Paired Clinic')
+    dental_clinic.init_database()
+
+    captured = {}
+
+    def fake_http(method, url, headers=None, body=None, timeout=15):
+        captured['url'] = url
+        captured['body'] = body
+        return 200, {'clinic_token': 'tok-123', 'clinic_id': 7, 'already_registered': False}
+
+    monkeypatch.setattr(dental_clinic, '_cloud_http_request', fake_http)
+    monkeypatch.setattr(dental_clinic, '_run_cloud_sync_once', lambda *a, **k: {'ok': True})
+
+    with dental_clinic.app.test_client() as c:
+        r = c.post('/api/cloud/pair', json={
+            'cloud_url': 'https://cloud.example',
+            'serial_number': 'PAIR-SERIAL-001',
+            'offline_token': 'PAYLOAD.SIG',
+        })
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert captured['body']['offline_token'] == 'PAYLOAD.SIG'
+    assert captured['body']['serial_number'] == 'PAIR-SERIAL-001'
+
+    # And it persisted the token for future re-pairs.
+    import sqlite3
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    cur = conn.cursor()
+    assert dental_clinic.read_app_setting(cur, 'cloud_offline_token', '') == 'PAYLOAD.SIG'
+    conn.close()
+
+
+def test_cloud_pair_omits_offline_token_when_none(tmp_path, monkeypatch):
+    # Default path (no token anywhere): the register body must NOT carry an
+    # offline_token key, so the cloud's unsigned-allowed path is exercised.
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', False)
+    monkeypatch.setattr(dental_clinic, 'DB_NAME', str(tmp_path / 'clinic2.db'))
+    monkeypatch.setitem(dental_clinic.CLINIC_CONFIG, 'CLINIC_NAME', 'Plain Clinic')
+    monkeypatch.delenv('CLINIC_OFFLINE_TOKEN', raising=False)
+    dental_clinic.init_database()
+
+    captured = {}
+
+    def fake_http(method, url, headers=None, body=None, timeout=15):
+        captured['body'] = body
+        return 200, {'clinic_token': 'tok-456', 'clinic_id': 8, 'already_registered': False}
+
+    monkeypatch.setattr(dental_clinic, '_cloud_http_request', fake_http)
+    monkeypatch.setattr(dental_clinic, '_run_cloud_sync_once', lambda *a, **k: {'ok': True})
+
+    with dental_clinic.app.test_client() as c:
+        r = c.post('/api/cloud/pair', json={
+            'cloud_url': 'https://cloud.example',
+            'serial_number': 'PAIR-SERIAL-002',
+        })
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert 'offline_token' not in captured['body']
+
+
+def test_cloud_pair_uses_env_offline_token(tmp_path, monkeypatch):
+    # Fallback source: env CLINIC_OFFLINE_TOKEN when nothing in body/app_settings.
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', False)
+    monkeypatch.setattr(dental_clinic, 'DB_NAME', str(tmp_path / 'clinic3.db'))
+    monkeypatch.setitem(dental_clinic.CLINIC_CONFIG, 'CLINIC_NAME', 'Env Clinic')
+    monkeypatch.setenv('CLINIC_OFFLINE_TOKEN', 'ENVPAYLOAD.ENVSIG')
+    dental_clinic.init_database()
+
+    captured = {}
+
+    def fake_http(method, url, headers=None, body=None, timeout=15):
+        captured['body'] = body
+        return 200, {'clinic_token': 'tok-789', 'clinic_id': 9, 'already_registered': False}
+
+    monkeypatch.setattr(dental_clinic, '_cloud_http_request', fake_http)
+    monkeypatch.setattr(dental_clinic, '_run_cloud_sync_once', lambda *a, **k: {'ok': True})
+
+    with dental_clinic.app.test_client() as c:
+        r = c.post('/api/cloud/pair', json={
+            'cloud_url': 'https://cloud.example',
+            'serial_number': 'PAIR-SERIAL-003',
+        })
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert captured['body']['offline_token'] == 'ENVPAYLOAD.ENVSIG'
+
+
 def test_register_rate_limit(cloud, monkeypatch):
     # Tight limit so the test runs quickly. Up to N from the same IP succeed,
     # then the next ones are 429 until the window expires.

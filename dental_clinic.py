@@ -308,6 +308,32 @@ def _resolve_clinic_token():
     return (request.headers.get('X-Clinic-Token') or request.args.get('clinic_token') or '').strip()
 
 
+def _resolve_offline_token(request_body=None):
+    """Local server: find the HMAC-signed offline_token to forward to the cloud's
+    /api/clinics/register gate, in precedence order:
+      1. the /api/cloud/pair request body  (operator pasting it once)
+      2. app_settings['cloud_offline_token']  (persisted from a prior pair)
+      3. env CLINIC_OFFLINE_TOKEN
+    Returns '' when none is configured — pairing then sends an unsigned request,
+    which the cloud accepts unless it has CLINIC_REQUIRE_SIGNED_SERIAL=1.
+    This is the token issued by serial_generator.py (signed with the cloud's
+    CLINIC_SERIAL_SIGNING_KEY), not the locally-signed offline license token."""
+    body = request_body if isinstance(request_body, dict) else {}
+    token = str(body.get('offline_token') or '').strip()
+    if token:
+        return token
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        token = str(read_app_setting(cur, 'cloud_offline_token', '') or '').strip()
+        conn.close()
+    except sqlite3.Error:
+        token = ''
+    if token:
+        return token
+    return os.environ.get('CLINIC_OFFLINE_TOKEN', '').strip()
+
+
 @app.before_request
 def _cloud_tenant_routing():
     """In cloud mode: route each /api/* request to its clinic's DB by token."""
@@ -4185,7 +4211,9 @@ def register_clinic():
                 os.remove(db_path)
         except OSError:
             pass
-        return jsonify({'error': f'Failed to initialise clinic database: {exc}'}), 500
+        # Log the real cause server-side; don't leak internals (paths, SQL) to the client.
+        app.logger.error('register_clinic: failed to initialise clinic DB: %s', exc)
+        return jsonify({'error': 'Failed to initialise clinic database'}), 500
     finally:
         _set_request_db_path(None)
     master.close()
@@ -4211,9 +4239,17 @@ def cloud_pair():
     if len(serial) < 8:
         return jsonify({'error': 'serial_number must be at least 8 characters'}), 400
     clinic_name = str(CLINIC_CONFIG.get('CLINIC_NAME') or 'Clinic')
+    # Forward the signed offline_token when one is available, so the cloud's
+    # HMAC gate accepts this pairing even with CLINIC_REQUIRE_SIGNED_SERIAL=1.
+    # Absent (the default today) → unsigned request, which the cloud still
+    # accepts while enforcement is off.
+    offline_token = _resolve_offline_token(data)
+    register_body = {'serial_number': serial, 'clinic_name': clinic_name}
+    if offline_token:
+        register_body['offline_token'] = offline_token
     try:
         status, resp = _cloud_http_request('POST', f'{cloud_url}/api/clinics/register',
-                                           body={'serial_number': serial, 'clinic_name': clinic_name})
+                                           body=register_body)
     except Exception as exc:  # noqa: BLE001 - connection error → can't reach
         return jsonify({'error': f'Could not reach the cloud node: {exc}'}), 502
     if status != 200 or not (isinstance(resp, dict) and resp.get('clinic_token')):
@@ -4224,6 +4260,10 @@ def cloud_pair():
     write_app_setting(cur, 'cloud_url', cloud_url)
     write_app_setting(cur, 'cloud_clinic_token', resp['clinic_token'])
     write_app_setting(cur, 'cloud_clinic_id', str(resp.get('clinic_id') or ''))
+    # Persist a body-supplied token so later re-pairs (e.g. after a token reset)
+    # can re-send it without the operator pasting it again.
+    if offline_token:
+        write_app_setting(cur, 'cloud_offline_token', offline_token)
     conn.commit()
     conn.close()
 
