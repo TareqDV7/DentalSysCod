@@ -173,6 +173,82 @@ cd /opt/dentacare/cloud && docker compose restart app
 
 Snapshots stay on the droplet — for true off-server durability (so a droplet loss doesn't take backups with it), pull a copy to your workstation periodically, or enable DigitalOcean snapshots on the droplet, or add Spaces-upload in a follow-up phase.
 
+## Backups & restore (standalone `backup` sidecar)
+
+In addition to the in-process backup thread above, the stack ships a **dedicated `backup` service** (`cloud/backup.py`, stdlib-only). It runs in its own container so a problem in `app` can't take backups down with it, and — critically — it mounts the live data volume **read-only** and writes snapshots to a **separate** `dentacare-backups` volume. That isolation is the whole point: the live data path and the backup path don't share a writer.
+
+**What it does** — every `BACKUP_INTERVAL_HOURS` (default 24h) it discovers every `*.db` directly under `/data` (`cloud_master.db` plus each `clinic_<id>.db`) and snapshots each one with SQLite's **online backup API** (never a raw file copy — that avoids torn writes / WAL inconsistencies on a live DB). Each run writes into a fresh timestamped directory, and snapshots are gzipped by default:
+
+```
+/backups/                          (the dentacare-backups volume)
+├── 2026-06-02T03-00-00Z/
+│   ├── cloud_master.db.gz
+│   ├── clinic_1.db.gz
+│   └── clinic_2.db.gz
+├── 2026-06-03T03-00-00Z/
+│   └── …
+└── …
+```
+
+A single corrupt/locked tenant DB is logged and skipped — it never aborts the rest of the run. If *every* DB in a run fails (or the data dir is missing) the container exits non-zero so Docker's `restart: unless-stopped` retries.
+
+**Retention / rotation** — after each run it prunes whole snapshot directories: any dir older than `BACKUP_RETENTION_DAYS` (default 14) is deleted, **except** the most-recent `BACKUP_MIN_KEEP` (default 7) directories, which are always kept regardless of age. So a clinic that goes quiet for a month still retains its last 7 snapshots. At the defaults that's at least 14 days *and* at least 7 runs of recovery history. Foreign directories (anything not in the `YYYY-MM-DDTHH-MM-SSZ` format the script writes) are never touched.
+
+**Config** (set in `cloud/docker-compose.yml` `services.backup.environment`, or via `cloud/.env`):
+
+| Var | Default | Notes |
+|---|---|---|
+| `CLINIC_DATA_DIR` | `/data` | Source dir (mounted read-only). |
+| `BACKUP_DIR` | `/backups` | Destination (the `dentacare-backups` volume). |
+| `BACKUP_RETENTION_DAYS` | `14` | Prune snapshot dirs older than this. |
+| `BACKUP_MIN_KEEP` | `7` | Always keep at least this many newest, regardless of age. |
+| `BACKUP_INTERVAL_HOURS` | `24` | Sleep between runs in `--loop` mode. |
+| `BACKUP_GZIP` | `1` | Gzip each snapshot. Set `0` to store plain `.db`. |
+
+**Pulling a backup off the droplet** — inspect the volume and copy a snapshot dir to your workstation:
+
+```bash
+ssh root@68.183.208.166
+# list snapshot dirs
+docker run --rm -v dentacare-backups:/backups alpine ls /backups
+# copy one snapshot dir into a host folder, then scp it home
+docker run --rm -v dentacare-backups:/backups -v /root/pull:/out \
+  alpine cp -r /backups/2026-06-03T03-00-00Z /out/
+# from your workstation:
+scp -r root@68.183.208.166:/root/pull/2026-06-03T03-00-00Z ./
+```
+
+**Step-by-step restore** — replace a tenant's live DB with a snapshot, then restart the app:
+
+```bash
+ssh root@68.183.208.166
+cd /opt/dentacare/cloud
+
+# 1. Stop the app so nothing is writing the live DB during the swap.
+docker compose stop app backup
+
+# 2. Pick the snapshot you want to restore from.
+docker run --rm -v dentacare-backups:/backups alpine ls /backups
+#    e.g. 2026-06-03T03-00-00Z/clinic_1.db.gz
+
+# 3. Decompress the snapshot and write it over the live file in dentacare-data.
+#    (Mount both volumes; gunzip from /backups onto /data.)
+docker run --rm \
+  -v dentacare-backups:/backups:ro -v dentacare-data:/data \
+  alpine sh -c \
+  'gunzip -c /backups/2026-06-03T03-00-00Z/clinic_1.db.gz > /data/clinic_1.db'
+#    For a non-gzipped snapshot (BACKUP_GZIP=0), use cp instead of gunzip:
+#    cp /backups/<dir>/clinic_1.db /data/clinic_1.db
+
+# 4. Bring the stack back up.
+docker compose up -d app backup
+docker compose logs -f app
+```
+
+Restoring `cloud_master.db` follows the same steps (swap `clinic_1.db` for `cloud_master.db`) — but be aware that rewinds the *registry* of clinics, so only do it if the registry itself was lost/corrupted.
+
+**Offsite copy (recommended follow-up)** — these snapshots still live on the same droplet, so a droplet loss takes them too. The local rotating snapshots delivered here are the baseline; for true off-server durability, add a periodic push of the `dentacare-backups` volume to object storage (e.g. `rclone`/`aws s3 sync` to S3 or DigitalOcean Spaces) or a scheduled `scp` of the pulled snapshot dirs to a separate host. Enabling DigitalOcean droplet snapshots is a coarser alternative.
+
 ## Known limitations (Phase 1)
 
 - Serial validation defaults to **uniqueness** (one clinic per serial, ≥ 8 chars). HMAC-signed-serial gating is available and wired end-to-end (`/api/cloud/pair` forwards the token) — enable it per *Enabling signed-serial enforcement*. Default stays off.

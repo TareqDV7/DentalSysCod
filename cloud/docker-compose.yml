@@ -41,7 +41,29 @@ services:
     depends_on:
       - app
 
+  # Standalone backup sidecar — snapshots cloud_master.db + every clinic_<id>.db
+  # from the data volume (mounted READ-ONLY so it can never corrupt live data)
+  # into the SEPARATE dentacare-backups volume. Runs independently of app/caddy.
+  # See cloud/backup.py and DEPLOY_CLOUD.md ("Backups & restore").
+  backup:
+    image: python:3.12-slim
+    restart: unless-stopped
+    volumes:
+      - dentacare-data:/data:ro       # live SQLite files — READ-ONLY
+      - dentacare-backups:/backups     # rotating timestamped snapshots
+      - ./backup.py:/app/backup.py:ro  # the stdlib-only backup script
+    working_dir: /app
+    environment:
+      - CLINIC_DATA_DIR=/data
+      - BACKUP_DIR=/backups
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
+      - BACKUP_MIN_KEEP=${BACKUP_MIN_KEEP:-7}
+      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
+      - BACKUP_GZIP=${BACKUP_GZIP:-1}
+    command: ["python", "backup.py", "--loop"]
+
 volumes:
   dentacare-data:
+  dentacare-backups:
   caddy-data:
   caddy-config:
