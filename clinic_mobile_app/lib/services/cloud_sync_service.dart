@@ -49,6 +49,32 @@ class CloudSyncService {
     );
   }
 
+  /// Link this device to a clinic the desktop already registered, using a clinic
+  /// token scanned from the desktop pairing QR. Unlike [register] this makes NO
+  /// `/api/clinics/register` call — the token is all the cloud needs to select
+  /// the tenant. Validates its inputs and returns the account info to persist.
+  ///
+  /// Throws [ApiException] if the url or token is blank/invalid.
+  CloudAccountInfo linkWithToken({
+    required String cloudUrl,
+    required String clinicToken,
+  }) {
+    final url = cloudUrl.trim();
+    final token = clinicToken.trim();
+    if (url.isEmpty) {
+      throw const ApiException('Cloud URL is required to link by token');
+    }
+    if (token.isEmpty) {
+      throw const ApiException('Clinic token is required to link by token');
+    }
+    // The clinic id isn't carried in the QR — link-by-token doesn't need it.
+    return CloudAccountInfo(
+      clinicId: null,
+      clinicToken: token,
+      alreadyRegistered: true,
+    );
+  }
+
   /// Is this URL serving the API right now? For the cloud node a clinic token is
   /// required on every `/api/*` call, so pass it when checking the cloud.
   Future<bool> isReachable(String url, {String? clinicToken}) async {

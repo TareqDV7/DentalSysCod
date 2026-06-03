@@ -304,6 +304,34 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return info;
   }
 
+  /// Link this device to a clinic the desktop already registered, using a
+  /// `{cloudUrl, clinicToken}` pair scanned from the desktop pairing QR.
+  ///
+  /// Persists into the same storage/state [pairCloud] uses, but skips the
+  /// `/api/clinics/register` call (the token already identifies the tenant),
+  /// then kicks off a first sync against the new cloud target.
+  Future<CloudAccountInfo> linkWithToken({
+    required String cloudUrl,
+    required String clinicToken,
+  }) async {
+    final info = cloud.linkWithToken(
+      cloudUrl: cloudUrl,
+      clinicToken: clinicToken,
+    );
+    await _storage.setCloudAccount(
+      cloudUrl: cloudUrl.trim(),
+      clinicToken: info.clinicToken,
+      clinicId: info.clinicId,
+    );
+    _cloudUrl = cloudUrl.trim();
+    _hasCloudAccount = true;
+    api.clinicToken = info.clinicToken;
+    notifyListeners();
+    // First sync against the freshly-linked cloud target.
+    unawaited(sync.syncNow());
+    return info;
+  }
+
   Future<void> unpairCloud() async {
     await _storage.clearCloudAccount();
     api.clinicToken = null;
