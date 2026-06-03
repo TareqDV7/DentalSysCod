@@ -189,7 +189,7 @@ DEFAULT_LICENSE_DAYS = 30
 DEFAULT_LICENSE_GRACE_DAYS = 7
 
 # Endpoints reachable on the cloud node without a clinic token.
-_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/healthz', '/logo', '/favicon.ico'}
+_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/healthz', '/logo', '/favicon.ico'}
 _CLOUD_OPEN_PREFIXES = ('/static/',)
 # Not available on the cloud node: uploads aren't part of cloud sync and the
 # folder isn't tenant-scoped; the /api/cloud/* endpoints are for a clinic's own
@@ -4240,6 +4240,79 @@ def register_clinic():
     return jsonify({
         'success': True, 'already_registered': False,
         'clinic_id': clinic_id, 'clinic_name': clinic_name, 'clinic_token': clinic_token,
+    })
+
+
+@app.route('/api/license/validate', methods=['POST'])
+def validate_license():
+    """Cloud node only: the license authority. Verify a vendor-signed serial,
+    register it on first use, enforce status/subscription/device-cap, and claim a
+    device slot. Returns {valid, reason, status, expires_at, grace_until,
+    remaining_slots, plan_name}. Business failures are HTTP 200 with valid=false."""
+    if not CLOUD_MODE:
+        return jsonify({'error': 'Not available on a local server'}), 404
+    limited = _check_register_rate_limit()
+    if limited is not None:
+        return limited
+
+    data = request.json or {}
+    token = str(data.get('serial_token') or '').strip()
+    fingerprint = str(data.get('device_fingerprint') or '').strip()
+    device_name = str(data.get('device_name') or '').strip()
+    if not token or not fingerprint:
+        return jsonify({'error': 'serial_token and device_fingerprint are required'}), 400
+
+    pub = _serial_public_key()
+    if pub is None:
+        app.logger.error('validate_license: CLINIC_SERIAL_PUBLIC_KEY not configured')
+        return jsonify({'error': 'Server signing key not configured'}), 500
+    try:
+        from cryptography.exceptions import InvalidSignature
+        payload_part, sig_part = token.split('.', 1)
+        payload_bytes = base64.urlsafe_b64decode(payload_part + '=' * (-len(payload_part) % 4))
+        sig = base64.urlsafe_b64decode(sig_part + '=' * (-len(sig_part) % 4))
+        pub.verify(sig, payload_bytes)
+        payload = json.loads(payload_bytes.decode('utf-8'))
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return jsonify({'valid': False, 'reason': 'malformed'})
+    except InvalidSignature:
+        return jsonify({'valid': False, 'reason': 'bad_signature'})
+    if not isinstance(payload, dict):
+        return jsonify({'valid': False, 'reason': 'malformed'})
+
+    serial = str(payload.get('serial') or '').strip().upper()
+    if len(serial) < 8:
+        return jsonify({'valid': False, 'reason': 'bad_serial'})
+
+    conn = sqlite3.connect(MASTER_DB_PATH)
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute(
+            'SELECT status, max_devices, expires_at, grace_until, plan_name '
+            'FROM license_serials WHERE serial = ?', (serial,)).fetchone()
+        if row is None:
+            conn.execute(
+                'INSERT INTO license_serials (serial, status, plan_name, max_devices, '
+                'issued_at, expires_at, grace_until) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (serial, 'active', payload.get('plan_name'),
+                 int(payload.get('max_devices') or 3),
+                 payload.get('issued_at'), payload.get('expires_at'),
+                 payload.get('grace_until')))
+            status = 'active'
+            max_devices = int(payload.get('max_devices') or 3)
+            expires_at = payload.get('expires_at')
+            grace_until = payload.get('grace_until')
+            plan_name = payload.get('plan_name')
+        else:
+            status, max_devices, expires_at, grace_until, plan_name = row
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({
+        'valid': True, 'status': status, 'plan_name': plan_name,
+        'expires_at': expires_at, 'grace_until': grace_until,
+        'remaining_slots': max_devices,
     })
 
 
