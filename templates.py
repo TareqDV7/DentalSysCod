@@ -697,9 +697,10 @@ HTML_TEMPLATE = '''
         }
 
         .stat-card h3 {
-            font-size: clamp(1.5rem, 3vw, 2.3rem);
+            font-size: clamp(1.3rem, 2.2vw, 1.9rem);
             margin-bottom: 6px;
-            line-height: 1.1;
+            line-height: 1.15;
+            white-space: nowrap;
         }
 
         .stat-card p { opacity: 0.92; font-size: 0.9rem; }
@@ -753,6 +754,55 @@ HTML_TEMPLATE = '''
             outline: none;
             border-color: #7bb6e2;
             box-shadow: 0 0 0 4px rgba(61, 149, 211, 0.14);
+        }
+
+        /* Searchable patient combobox: one field that filters as you type and
+           slides a list of matches down. The native <select> stays in the DOM
+           (visually hidden) as the value holder for forms and scripts. */
+        .patient-combo { position: relative; }
+        .patient-combo-native {
+            position: absolute !important;
+            width: 1px !important;
+            height: 1px !important;
+            padding: 0 !important;
+            margin: -1px !important;
+            border: 0 !important;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            clip-path: inset(50%);
+            white-space: nowrap;
+            pointer-events: none;
+        }
+        .patient-combo-input { width: 100%; }
+        .patient-combo-menu {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0; right: 0;
+            z-index: 60;
+            max-height: 260px;
+            overflow-y: auto;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            padding: 4px;
+        }
+        .patient-combo-option {
+            padding: 9px 11px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.92rem;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .patient-combo-option:hover,
+        .patient-combo-option.is-active { background: var(--bg-1); }
+        .patient-combo-empty {
+            padding: 10px 11px;
+            color: var(--muted);
+            font-size: 0.9rem;
         }
 
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
@@ -1413,6 +1463,11 @@ HTML_TEMPLATE = '''
             -webkit-overflow-scrolling: touch;
         }
         .responsive-table-wrap table { min-width: 760px; }
+        /* The patients list carries 9 columns (incl. two currency columns and a
+           3-button actions cell); give it room so nothing is cramped — it
+           scrolls horizontally on narrow windows and sits comfortably when the
+           window is wide. */
+        #patients-table { min-width: 960px; }
         .table-meta {
             display: flex;
             justify-content: space-between;
@@ -1424,11 +1479,12 @@ HTML_TEMPLATE = '''
         .table-meta .table-meta-text { color: var(--muted); font-size: 0.88rem; }
         .table-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
         .table-container tbody tr:last-child td { border-bottom: none; }
-        .table-container .numeric-cell,
-        .table-container th.numeric-cell { text-align: right; }
-        .table-container .center-cell,
-        .table-container th.center-cell { text-align: center; }
-        .table-container .actions-cell { white-space: nowrap; }
+        /* Cell utilities apply in any table wrapper (.table-container and
+           .responsive-table-wrap), so currency never wraps the ₪ onto its
+           own line and numbers stay right-aligned. */
+        .numeric-cell, th.numeric-cell { text-align: right; white-space: nowrap; }
+        .center-cell, th.center-cell { text-align: center; }
+        .actions-cell { white-space: nowrap; }
         .loading-state,
         .empty-state,
         .error-state {
@@ -4126,7 +4182,10 @@ HTML_TEMPLATE = '''
             await loadPatientsSelect('appointment-patient-select');
             if (patientId) {
                 const patientSelect = document.getElementById('appointment-patient-select');
-                if (patientSelect) patientSelect.value = String(patientId);
+                if (patientSelect) {
+                    patientSelect.value = String(patientId);
+                    patientSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                }
             }
 
             const dateInput = document.getElementById('appointment-date-input');
@@ -4205,36 +4264,134 @@ HTML_TEMPLATE = '''
             });
             select.innerHTML = optsHtml.join('');
             attachPatientSearch(select);
-            const box = select.parentNode && select.parentNode.querySelector('.patient-search-box');
-            if (box && box.value.trim()) filterPatientSelect(select, box.value);
+            if (select._comboSync) select._comboSync();
         }
 
-        // Insert a search box above a patient <select> so large patient lists stay usable.
+        // Turn a patient <select> into a single searchable combobox: one field
+        // that filters as you type and shows matches in a slide-down list. The
+        // native <select> stays in the DOM (visually hidden) as the value holder,
+        // so form submission, .value reads, and change events keep working.
         function attachPatientSearch(select) {
-            if (!select || select.dataset.searchAttached || !select.parentNode) return;
-            select.dataset.searchAttached = '1';
-            const box = document.createElement('input');
-            box.type = 'text';
-            box.className = 'patient-search-box';
-            box.placeholder = t('search_patient', 'Search patients…');
-            box.setAttribute('autocomplete', 'off');
-            box.style.marginBottom = '6px';
-            box.addEventListener('input', () => filterPatientSelect(select, box.value));
-            select.parentNode.insertBefore(box, select);
-        }
+            if (!select || select.dataset.comboAttached || !select.parentNode) return;
+            select.dataset.comboAttached = '1';
 
-        // Hide <option>s in a patient <select> that don't match the query (name or phone).
-        function filterPatientSelect(select, query) {
-            if (typeof select === 'string') select = document.getElementById(select);
-            if (!select) return;
-            const q = String(query || '').trim().toLowerCase();
-            Array.from(select.options).forEach(opt => {
-                if (!opt.value) { opt.hidden = false; return; }
-                const hay = (opt.textContent + ' ' + (opt.dataset.phone || '')).toLowerCase();
-                opt.hidden = q ? !hay.includes(q) : false;
+            const wrap = document.createElement('div');
+            wrap.className = 'patient-combo';
+            select.parentNode.insertBefore(wrap, select);
+            wrap.appendChild(select);
+            select.classList.add('patient-combo-native');
+            select.tabIndex = -1;
+            select.setAttribute('aria-hidden', 'true');
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'patient-combo-input';
+            input.placeholder = t('search_patient', 'Search patients…');
+            input.setAttribute('autocomplete', 'off');
+            input.setAttribute('role', 'combobox');
+            input.setAttribute('aria-autocomplete', 'list');
+            input.setAttribute('aria-expanded', 'false');
+            input.setAttribute('aria-label', t('patient', 'Patient'));
+
+            const menu = document.createElement('div');
+            menu.className = 'patient-combo-menu';
+            menu.setAttribute('role', 'listbox');
+            menu.hidden = true;
+
+            wrap.appendChild(input);
+            wrap.appendChild(menu);
+
+            let activeIndex = -1;
+
+            function matchesFor(query) {
+                const q = String(query || '').trim().toLowerCase();
+                return Array.from(select.options).filter(opt => {
+                    if (!opt.value) return false;
+                    if (!q) return true;
+                    const hay = (opt.textContent + ' ' + (opt.dataset.phone || '')).toLowerCase();
+                    return hay.includes(q);
+                });
+            }
+
+            function openMenu() { menu.hidden = false; input.setAttribute('aria-expanded', 'true'); }
+            function closeMenu() { menu.hidden = true; input.setAttribute('aria-expanded', 'false'); activeIndex = -1; }
+
+            function renderMenu(query) {
+                const matches = matchesFor(query);
+                activeIndex = -1;
+                if (!matches.length) {
+                    menu.innerHTML = `<div class="patient-combo-empty">${t('no_patients_found', 'No patients found')}</div>`;
+                } else {
+                    menu.innerHTML = matches.map(opt =>
+                        `<div class="patient-combo-option" role="option" data-value="${opt.value}">${escapeHtml(opt.textContent)}</div>`
+                    ).join('');
+                }
+                openMenu();
+            }
+
+            function rows() { return Array.from(menu.querySelectorAll('.patient-combo-option')); }
+
+            function highlight(idx) {
+                const list = rows();
+                if (!list.length) return;
+                activeIndex = (idx + list.length) % list.length;
+                list.forEach((el, i) => el.classList.toggle('is-active', i === activeIndex));
+                list[activeIndex].scrollIntoView({ block: 'nearest' });
+            }
+
+            function commit(value, label) {
+                select.value = value;
+                input.value = label;
+                closeMenu();
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            function syncInput() {
+                const opt = select.selectedOptions[0];
+                input.value = (opt && opt.value) ? opt.textContent : '';
+            }
+            select._comboSync = syncInput;
+
+            input.addEventListener('focus', () => { input.select(); renderMenu(''); });
+            input.addEventListener('input', () => renderMenu(input.value));
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    if (menu.hidden) renderMenu(input.value); else highlight(activeIndex + 1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    if (!menu.hidden) highlight(activeIndex - 1);
+                } else if (e.key === 'Enter') {
+                    const list = rows();
+                    let pick = -1;
+                    if (activeIndex >= 0) pick = activeIndex;
+                    else if (list.length === 1) pick = 0;
+                    if (!menu.hidden && pick >= 0 && list[pick]) {
+                        e.preventDefault();
+                        commit(list[pick].dataset.value, list[pick].textContent);
+                    }
+                } else if (e.key === 'Escape') {
+                    closeMenu();
+                }
             });
-            // If the current selection was filtered out, clear it.
-            if (select.selectedOptions[0] && select.selectedOptions[0].hidden) select.value = '';
+
+            menu.addEventListener('mousedown', (e) => {
+                const opt = e.target.closest('.patient-combo-option');
+                if (!opt) return;
+                e.preventDefault();
+                commit(opt.dataset.value, opt.textContent);
+            });
+
+            input.addEventListener('blur', () => {
+                setTimeout(() => { closeMenu(); syncInput(); }, 120);
+            });
+
+            // Resync the visible field whenever the value changes from elsewhere
+            // (programmatic .value set + dispatched change, or a form reset).
+            select.addEventListener('change', syncInput);
+            if (select.form) select.form.addEventListener('reset', () => setTimeout(syncInput, 0));
+
+            syncInput();
         }
 
         function getStatusBadgeClass(status) {
@@ -4944,8 +5101,7 @@ HTML_TEMPLATE = '''
 
         function clearBillingPatientFilter() {
             const sel = document.getElementById('billing-patient-select');
-            if (sel) sel.value = '';
-            onBillingPatientChange();
+            if (sel) { sel.value = ''; sel.dispatchEvent(new Event('change', { bubbles: true })); }
         }
 
         async function loadBillingPatientHistory(patientId) {
@@ -5645,7 +5801,7 @@ HTML_TEMPLATE = '''
             content.innerHTML = `
                 <div class="profile-stats">
                     <div class="stat-card stat-card-teal">
-                        <h3 style="font-size:1.3rem;">${patient.first_name} ${patient.last_name}</h3>
+                        <h3 style="font-size:1.3rem;white-space:normal;">${patient.first_name} ${patient.last_name}</h3>
                         <p>📞 ${patient.phone || t('no_phone', 'No phone')}</p>
                         ${profile.age != null ? `<p>🎂 ${profile.age} ${currentLanguage==='ar'?'سنة':'yrs'}${profile.birth_date_display ? ' · ' + profile.birth_date_display : ''}</p>` : ''}
                     </div>
@@ -5660,7 +5816,7 @@ HTML_TEMPLATE = '''
                     <div class="stat-card stat-card-amber">
                         <h3>₪${currentFollowupBalance.toFixed(2)}</h3>
                         <p>${t('current_balance', 'Balance Due')}</p>
-                        <p style="font-size:0.8rem;opacity:0.88;">↑ ₪${totalToPay.toFixed(2)} &nbsp;✓ ₪${totalPaid.toFixed(2)}</p>
+                        <p style="font-size:0.8rem;opacity:0.88;"><span style="white-space:nowrap;">↑ ₪${totalToPay.toFixed(2)}</span> &nbsp;<span style="white-space:nowrap;">✓ ₪${totalPaid.toFixed(2)}</span></p>
                     </div>
                     <div class="stat-card">
                         <h3>₪${(profile.credit_balance||0).toFixed(2)}</h3>
@@ -5759,12 +5915,12 @@ HTML_TEMPLATE = '''
                                 <tr>
                                     <th>${t('date','Date')}</th>
                                     <th>${t('treatment_procedure','Procedure')}</th>
-                                    <th>${t('price','Price')}</th>
-                                    <th>${t('discount','Discount')}</th>
-                                    <th>${t('lab_expense','Lab')}</th>
-                                    <th>${t('clinic_profit','Profit')}</th>
-                                    <th>${t('payment','Payment')}</th>
-                                    <th>${t('balance','Balance')}</th>
+                                    <th class="numeric-cell">${t('price','Price')}</th>
+                                    <th class="numeric-cell">${t('discount','Discount')}</th>
+                                    <th class="numeric-cell">${t('lab_expense','Lab')}</th>
+                                    <th class="numeric-cell">${t('clinic_profit','Profit')}</th>
+                                    <th class="numeric-cell">${t('payment','Payment')}</th>
+                                    <th class="numeric-cell">${t('balance','Balance')}</th>
                                     <th>${t('notes','Notes')}</th>
                                     <th>${t('actions','Actions')}</th>
                                 </tr>
@@ -6058,12 +6214,12 @@ HTML_TEMPLATE = '''
                 <tr>
                     <td>${formatDateDisplay(item.followup_date) || ''}</td>
                     <td>${item.treatment_procedure || t('no_data', 'No data')}${item.tooth_no ? ` <small style="opacity:0.7;">#${item.tooth_no}</small>` : ''}</td>
-                    <td>${fmtAmount(item.price, item.price_expr)}</td>
-                    <td>${(parseFloat(item.discount || 0) > 0 || item.discount_expr) ? fmtAmount(item.discount, item.discount_expr) : '—'}</td>
-                    <td>${fmtAmount(item.lab_expense, item.lab_expense_expr)}</td>
-                    <td>₪${(parseFloat(item.price || 0) - parseFloat(item.discount || 0) - parseFloat(item.lab_expense || 0)).toFixed(2)}</td>
-                    <td>${fmtAmount(item.payment, item.payment_expr)}</td>
-                    <td>₪${parseFloat(item.remaining_amount || 0).toFixed(2)}</td>
+                    <td class="numeric-cell">${fmtAmount(item.price, item.price_expr)}</td>
+                    <td class="numeric-cell">${(parseFloat(item.discount || 0) > 0 || item.discount_expr) ? fmtAmount(item.discount, item.discount_expr) : '—'}</td>
+                    <td class="numeric-cell">${fmtAmount(item.lab_expense, item.lab_expense_expr)}</td>
+                    <td class="numeric-cell">₪${(parseFloat(item.price || 0) - parseFloat(item.discount || 0) - parseFloat(item.lab_expense || 0)).toFixed(2)}</td>
+                    <td class="numeric-cell">${fmtAmount(item.payment, item.payment_expr)}</td>
+                    <td class="numeric-cell">₪${parseFloat(item.remaining_amount || 0).toFixed(2)}</td>
                     <td>${item.notes || ''}</td>
                     <td>
                         <button class="btn btn-warning btn-icon" onclick="deleteFollowup(${item.patient_id},${item.id})">🗑</button>
