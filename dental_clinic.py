@@ -884,6 +884,35 @@ def init_database():
         )
     ''')
 
+    # Cloud license authority (A1). Source of truth for subscription + revocation
+    # and per-serial device caps. Only populated on the cloud master DB.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS license_serials (
+            serial      TEXT PRIMARY KEY,
+            status      TEXT NOT NULL DEFAULT 'active',
+            plan_name   TEXT,
+            max_devices INTEGER NOT NULL DEFAULT 3,
+            issued_at   TEXT,
+            expires_at  TEXT,
+            grace_until TEXT,
+            clinic_id   INTEGER,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS license_device_slots (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            serial             TEXT NOT NULL,
+            device_fingerprint TEXT NOT NULL,
+            device_name        TEXT,
+            claimed_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active          INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(serial, device_fingerprint)
+        )
+    ''')
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS licenses (
             serial_number TEXT PRIMARY KEY,
