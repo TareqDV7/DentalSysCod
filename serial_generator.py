@@ -30,9 +30,10 @@ def _b64u_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
 
 
-def generate_keypair():
+def generate_keypair() -> tuple[str, str]:
     """Return (private_seed_b64, public_key_b64) for a fresh Ed25519 keypair.
-    The private seed is 32 raw bytes, base64 (std) encoded."""
+    The private seed is 32 raw bytes, base64 (std) encoded.
+    Note: keys are standard base64; the token wire format (from sign_serial_token) uses base64url."""
     priv = Ed25519PrivateKey.generate()
     seed = priv.private_bytes(
         serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
@@ -47,12 +48,12 @@ def generate_keypair():
 def sign_serial_token(payload: dict, private_seed_b64: str) -> str:
     """Return 'base64url(payload_json).base64url(ed25519_sig)'."""
     priv = Ed25519PrivateKey.from_private_bytes(base64.b64decode(private_seed_b64))
-    payload_json = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    payload_json = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8')
     sig = priv.sign(payload_json)
     return f'{_b64u(payload_json)}.{_b64u(sig)}'
 
 
-def verify_serial_token(token: str, public_key_b64: str):
+def verify_serial_token(token: str, public_key_b64: str) -> tuple[bool, dict | None]:
     """Return (ok: bool, payload: dict|None). Verifies the Ed25519 signature."""
     try:
         payload_part, sig_part = str(token).split('.', 1)
@@ -63,7 +64,10 @@ def verify_serial_token(token: str, public_key_b64: str):
     try:
         pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
         pub.verify(sig, payload_bytes)
-        return True, json.loads(payload_bytes.decode('utf-8'))
+        payload = json.loads(payload_bytes.decode('utf-8'))
+        if not isinstance(payload, dict):
+            return False, None
+        return True, payload
     except (InvalidSignature, ValueError, UnicodeDecodeError):
         return False, None
 

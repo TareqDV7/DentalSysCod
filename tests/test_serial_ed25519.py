@@ -34,3 +34,16 @@ def test_random_string_fails():
     _, pub_b64 = serial_generator.generate_keypair()
     ok, _ = serial_generator.verify_serial_token('not-a-token', pub_b64)
     assert ok is False
+
+
+def test_wrong_key_fails():
+    priv1, _ = serial_generator.generate_keypair()
+    _, pub2 = serial_generator.generate_keypair()
+    token = serial_generator.sign_serial_token({'serial': 'X'}, priv1)
+    ok, _ = serial_generator.verify_serial_token(token, pub2)
+    assert ok is False
+
+
+def test_sign_with_bad_seed_raises():
+    with pytest.raises(Exception):
+        serial_generator.sign_serial_token({'serial': 'X'}, 'not-valid-base64-seed!!')
