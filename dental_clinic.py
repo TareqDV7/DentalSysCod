@@ -4290,21 +4290,48 @@ def validate_license():
         row = conn.execute(
             'SELECT status, max_devices, expires_at, grace_until, plan_name '
             'FROM license_serials WHERE serial = ?', (serial,)).fetchone()
+        token_exp = payload.get('expires_at')
         if row is None:
+            status = 'active'
+            max_devices = int(payload.get('max_devices') or 3)
+            expires_at, grace_until, plan_name = token_exp, payload.get('grace_until'), payload.get('plan_name')
             conn.execute(
                 'INSERT INTO license_serials (serial, status, plan_name, max_devices, '
                 'issued_at, expires_at, grace_until) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                (serial, 'active', payload.get('plan_name'),
-                 int(payload.get('max_devices') or 3),
-                 payload.get('issued_at'), payload.get('expires_at'),
-                 payload.get('grace_until')))
-            status = 'active'
-            max_devices = int(payload.get('max_devices') or 3)
-            expires_at = payload.get('expires_at')
-            grace_until = payload.get('grace_until')
-            plan_name = payload.get('plan_name')
+                (serial, status, plan_name, max_devices, payload.get('issued_at'),
+                 expires_at, grace_until))
         else:
             status, max_devices, expires_at, grace_until, plan_name = row
+            # Renewal: a later-signed token extends the window and reactivates.
+            if token_exp and (not expires_at or token_exp > expires_at):
+                expires_at = token_exp
+                grace_until = payload.get('grace_until')
+                max_devices = int(payload.get('max_devices') or max_devices)
+                plan_name = payload.get('plan_name') or plan_name
+                if status == 'expired':
+                    status = 'active'
+                conn.execute(
+                    'UPDATE license_serials SET expires_at=?, grace_until=?, '
+                    'max_devices=?, plan_name=?, status=?, updated_at=CURRENT_TIMESTAMP '
+                    'WHERE serial=?',
+                    (expires_at, grace_until, max_devices, plan_name, status, serial))
+
+        # Status gate (revoked/suspended).
+        if status in ('revoked', 'suspended'):
+            conn.commit()
+            return jsonify({'valid': False, 'reason': status, 'status': status})
+
+        # Subscription gate: past grace_until -> expired.
+        if grace_until:
+            try:
+                if _naive_utc_now() > datetime.fromisoformat(str(grace_until).rstrip('Z')):
+                    conn.execute("UPDATE license_serials SET status='expired', updated_at=CURRENT_TIMESTAMP WHERE serial=?", (serial,))
+                    conn.commit()
+                    return jsonify({'valid': False, 'reason': 'expired',
+                                    'status': 'expired', 'expires_at': expires_at,
+                                    'grace_until': grace_until})
+            except ValueError:
+                pass  # unparseable stored grace -> treat as non-expiring
         conn.commit()
     finally:
         conn.close()

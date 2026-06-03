@@ -86,3 +86,36 @@ def test_validate_is_404_when_not_cloud(monkeypatch, tmp_path):
     dental_clinic.init_database()
     with dental_clinic.app.test_client() as c:
         assert c.post('/api/license/validate', json={'serial_token': 't', 'device_fingerprint': 'd'}).status_code == 404
+
+
+def _set_serial(serial, **cols):
+    conn = sqlite3.connect(dental_clinic.MASTER_DB_PATH)
+    sets = ', '.join(f'{k} = ?' for k in cols)
+    conn.execute(f'UPDATE license_serials SET {sets} WHERE serial = ?',
+                 (*cols.values(), serial))
+    conn.commit(); conn.close()
+
+
+def test_validate_blocks_revoked(cloud):
+    _validate(cloud, _sign(cloud, 'DENTAL-REV-0001'))      # register
+    _set_serial('DENTAL-REV-0001', status='revoked')
+    body = _validate(cloud, _sign(cloud, 'DENTAL-REV-0001')).get_json()
+    assert body['valid'] is False and body['reason'] == 'revoked'
+
+
+def test_validate_expired_past_grace(cloud):
+    tok = _sign(cloud, 'DENTAL-EXP-0001', expiry_days=-60)  # expired 60d ago, grace 14d
+    body = _validate(cloud, tok).get_json()
+    assert body['valid'] is False and body['reason'] == 'expired'
+
+
+def test_validate_within_grace_ok(cloud):
+    tok = _sign(cloud, 'DENTAL-GRC-0001', expiry_days=-5)   # expired 5d ago, still in 14d grace
+    assert _validate(cloud, tok).get_json()['valid'] is True
+
+
+def test_validate_renewal_extends_and_reactivates(cloud):
+    _validate(cloud, _sign(cloud, 'DENTAL-RENEW-1', expiry_days=-60))  # expired
+    assert _validate(cloud, _sign(cloud, 'DENTAL-RENEW-1', expiry_days=-60)).get_json()['reason'] == 'expired'
+    body = _validate(cloud, _sign(cloud, 'DENTAL-RENEW-1', expiry_days=365)).get_json()  # renew
+    assert body['valid'] is True and body['status'] == 'active'
