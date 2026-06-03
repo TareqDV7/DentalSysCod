@@ -13,6 +13,7 @@ import '../services/local_storage_service.dart';
 import 'catalog_screen.dart';
 import 'tooth_conditions_screen.dart';
 import 'pairing_screen.dart';
+import 'scan_pairing_screen.dart';
 import '../utils/app_strings.dart';
 import '../utils/bt_error_message.dart';
 import '../utils/date_format_helper.dart';
@@ -120,6 +121,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() => _cloudStatus = 'Pairing failed: $e');
     } finally {
       if (mounted) setState(() => _pairingCloud = false);
+    }
+  }
+
+  Future<void> _scanToLink() async {
+    final isArabic = context.read<AppState>().isArabic;
+    final linked = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const ScanPairingScreen()),
+    );
+    if (!mounted) return;
+    if (linked == true) {
+      setState(() => _cloudStatus =
+          isArabic ? 'تم الربط عبر مسح الرمز.' : 'Linked by scanning the QR.');
+      await _loadLastSync();
     }
   }
 
@@ -249,6 +263,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     loading: _pairingCloud,
                     onPressed: _pairingCloud ? null : _pairCloud,
                     width: double.infinity,
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _pairingCloud ? null : _scanToLink,
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: Text(state.locale == 'ar'
+                        ? 'مسح رمز QR للربط'
+                        : 'Scan QR to link'),
                   ),
                 ] else ...[
                   const SizedBox(height: 12),

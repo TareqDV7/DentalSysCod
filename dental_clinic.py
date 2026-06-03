@@ -36,7 +36,10 @@ def check_and_install_dependencies():
     required_packages = {
         'flask': 'Flask',
         'flask_cors': 'Flask-CORS',
-        'waitress': 'waitress'
+        'waitress': 'waitress',
+        # Pure-Python QR generator for the one-tap phone-pairing QR (SVG factory,
+        # no Pillow). PyInstaller bundles it fine since it has no native deps.
+        'qrcode': 'qrcode',
     }
 
     print("Checking dependencies...")
@@ -1694,7 +1697,8 @@ def _safe_next_url(target):
 # Browser-facing endpoints that require a logged-in staff session. The data/sync
 # REST API and mobile/license/pairing endpoints are intentionally left open so the
 # offline-first mobile app keeps working unchanged.
-_AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure'}
+_AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure',
+                        '/api/cloud/pairing-qr'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 
@@ -4296,6 +4300,57 @@ def cloud_status():
     }
     conn.close()
     return jsonify(info)
+
+
+# Compact pairing payload version. v1 = {"v":1,"u":<cloud_url>,"t":<clinic_token>}.
+_PAIRING_QR_VERSION = 1
+
+
+@app.route('/api/cloud/pairing-qr')
+def cloud_pairing_qr():
+    """Local server only: render the cloud-pairing payload as a QR (SVG) so a
+    phone can scan it and link instantly — no typing the URL/serial again.
+
+    SECURITY: the QR embeds this clinic's cloud token. That is acceptable here
+    because the route is gated behind the staff portal login (the same
+    `session['uid']` gate as the other authed portal routes, also listed in
+    `_AUTH_REQUIRED_EXACT`). An already-authenticated staff user on the local
+    portal is at the same trust level as the desktop, which already holds the
+    token — so showing it back to them in a QR exposes nothing new. The token
+    is never returned by the public `/api/cloud/status`.
+    """
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not applicable on the cloud node'}), 404
+    # Defence in depth: the before_request gate already requires a session for
+    # this path, but check here too so the auth contract is local to the route.
+    if not session.get('uid'):
+        return jsonify({'error': 'Authentication required'}), 401
+
+    cloud_url, clinic_token, _interval = _cloud_sync_config()
+    if not (cloud_url and clinic_token):
+        return jsonify({'error': 'Not paired with the cloud yet — pair this clinic first.'}), 400
+
+    payload = json.dumps(
+        {'v': _PAIRING_QR_VERSION, 'u': cloud_url, 't': clinic_token},
+        separators=(',', ':'),
+    )
+    try:
+        import qrcode
+        import qrcode.image.svg
+        import io
+        # SvgPathImage needs no Pillow — pure-Python SVG path output.
+        img = qrcode.make(payload, image_factory=qrcode.image.svg.SvgPathImage)
+        buf = io.BytesIO()
+        img.save(buf)
+        svg = buf.getvalue()
+    except Exception as exc:  # noqa: BLE001 - report cleanly instead of 500 HTML
+        app.logger.error('cloud_pairing_qr: failed to render QR: %s', exc)
+        return jsonify({'error': 'Could not generate the pairing QR'}), 500
+
+    resp = app.response_class(svg, mimetype='image/svg+xml')
+    # The token must not be cached by intermediaries or the browser.
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 @app.route('/api/cloud/sync-now', methods=['POST'])

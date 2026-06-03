@@ -2421,7 +2421,15 @@ HTML_TEMPLATE = '''
                     </div>
                     <div id="cloud-paired-actions" style="display:none;">
                         <button class="btn btn-primary" type="button" onclick="cloudSyncNow(this)" data-en="Sync now" data-ar="مزامنة الآن">Sync now</button>
+                        <button class="btn btn-secondary" type="button" onclick="cloudShowPairingQr()" data-en="Link a phone" data-ar="ربط هاتف">Link a phone</button>
                         <button class="btn btn-warning" type="button" onclick="cloudUnpair()" data-en="Unpair" data-ar="إلغاء الربط">Unpair</button>
+                        <div id="cloud-pairing-qr" style="display:none;margin-top:14px;">
+                            <p style="margin:0 0 10px;color:var(--muted);font-size:0.9em;line-height:1.6;"
+                               data-en="Open the mobile app, then Settings, then Scan QR."
+                               data-ar="افتح تطبيق الهاتف، ثم الإعدادات، ثم مسح رمز QR.">Open the mobile app, then Settings, then Scan QR.</p>
+                            <img id="cloud-pairing-qr-img" alt="Pairing QR"
+                                 style="width:220px;height:220px;background:#fff;padding:10px;border-radius:8px;border:1px solid var(--border,#d8e0e2);">
+                        </div>
                     </div>
                 </div>
 
@@ -5657,6 +5665,17 @@ HTML_TEMPLATE = '''
                 alert(_ar() ? 'تم إلغاء الربط.' : 'Unpaired from the cloud.');
             } catch (_) {}
             await loadCloudSyncSettings();
+        }
+
+        // Reveal the phone-pairing QR. The image src points at the authed
+        // /api/cloud/pairing-qr endpoint; a ts cache-buster forces a fresh
+        // render each click so a stale (e.g. post-unpair) image never lingers.
+        function cloudShowPairingQr() {
+            const wrap = document.getElementById('cloud-pairing-qr');
+            const img = document.getElementById('cloud-pairing-qr-img');
+            if (!wrap || !img) return;
+            img.src = '/api/cloud/pairing-qr?ts=' + Date.now();
+            wrap.style.display = '';
         }
 
         // ── Bluetooth Sync (Settings → Bluetooth Sync) ────────────────────────
