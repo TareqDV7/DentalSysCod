@@ -4332,6 +4332,28 @@ def validate_license():
                                     'grace_until': grace_until})
             except ValueError:
                 pass  # unparseable stored grace -> treat as non-expiring
+
+        # Device slot — idempotent re-claim, else enforce the cap. Still inside
+        # the BEGIN IMMEDIATE transaction so count-then-insert can't race.
+        slot = conn.execute(
+            'SELECT id FROM license_device_slots WHERE serial=? AND device_fingerprint=?',
+            (serial, fingerprint)).fetchone()
+        if slot is not None:
+            conn.execute('UPDATE license_device_slots SET last_seen_at=CURRENT_TIMESTAMP, '
+                         'is_active=1, device_name=? WHERE id=?', (device_name, slot[0]))
+        else:
+            active = conn.execute(
+                'SELECT COUNT(*) FROM license_device_slots WHERE serial=? AND is_active=1',
+                (serial,)).fetchone()[0]
+            if active >= int(max_devices):
+                conn.commit()
+                return jsonify({'valid': False, 'reason': 'device_cap_reached',
+                                'status': status, 'max_devices': int(max_devices)})
+            conn.execute('INSERT INTO license_device_slots (serial, device_fingerprint, device_name) '
+                         'VALUES (?, ?, ?)', (serial, fingerprint, device_name))
+        used = conn.execute(
+            'SELECT COUNT(*) FROM license_device_slots WHERE serial=? AND is_active=1',
+            (serial,)).fetchone()[0]
         conn.commit()
     finally:
         conn.close()
@@ -4339,7 +4361,7 @@ def validate_license():
     return jsonify({
         'valid': True, 'status': status, 'plan_name': plan_name,
         'expires_at': expires_at, 'grace_until': grace_until,
-        'remaining_slots': max_devices,
+        'remaining_slots': max(0, int(max_devices) - used),
     })
 
 

@@ -119,3 +119,36 @@ def test_validate_renewal_extends_and_reactivates(cloud):
     assert _validate(cloud, _sign(cloud, 'DENTAL-RENEW-1', expiry_days=-60)).get_json()['reason'] == 'expired'
     body = _validate(cloud, _sign(cloud, 'DENTAL-RENEW-1', expiry_days=365)).get_json()  # renew
     assert body['valid'] is True and body['status'] == 'active'
+
+
+def test_device_cap_claims_and_blocks(cloud):
+    s = 'DENTAL-CAP-0001'
+    assert _validate(cloud, _sign(cloud, s, max_devices=2), fp='d1').get_json()['valid'] is True
+    assert _validate(cloud, _sign(cloud, s, max_devices=2), fp='d2').get_json()['valid'] is True
+    body = _validate(cloud, _sign(cloud, s, max_devices=2), fp='d3').get_json()
+    assert body['valid'] is False and body['reason'] == 'device_cap_reached'
+
+
+def test_device_reclaim_is_idempotent(cloud):
+    s = 'DENTAL-CAP-0002'
+    _validate(cloud, _sign(cloud, s, max_devices=1), fp='same')
+    body = _validate(cloud, _sign(cloud, s, max_devices=1), fp='same').get_json()
+    assert body['valid'] is True and body['remaining_slots'] == 0
+
+
+def test_device_cap_atomic_under_concurrency(cloud):
+    import threading
+    s = 'DENTAL-CAP-0003'
+    _validate(cloud, _sign(cloud, s, max_devices=2), fp='warm')  # create serial row (cap 2, 1 used)
+    results = []
+    def hit(i):
+        with dental_clinic.app.test_client() as c:
+            c.priv_b64 = cloud.priv_b64
+            results.append(_validate(c, _sign(c, s, max_devices=2), fp=f'race-{i}').get_json()['valid'])
+    threads = [threading.Thread(target=hit, args=(i,)) for i in range(8)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    conn = sqlite3.connect(dental_clinic.MASTER_DB_PATH)
+    active = conn.execute("SELECT COUNT(*) FROM license_device_slots WHERE serial=? AND is_active=1", (s,)).fetchone()[0]
+    conn.close()
+    assert active <= 2, f'cap exceeded: {active} active slots'
