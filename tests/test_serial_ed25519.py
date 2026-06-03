@@ -47,3 +47,41 @@ def test_wrong_key_fails():
 def test_sign_with_bad_seed_raises():
     with pytest.raises(Exception):
         serial_generator.sign_serial_token({'serial': 'X'}, 'not-valid-base64-seed!!')
+
+
+import dental_clinic
+
+
+def test_dental_verifier_accepts_valid_token(monkeypatch):
+    priv_b64, pub_b64 = serial_generator.generate_keypair()
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', pub_b64)
+    token = serial_generator.sign_serial_token(
+        {'serial': 'DENTAL-AAAA-0001', 'max_devices': 3,
+         'grace_until': '2999-01-01T00:00:00Z'}, priv_b64)
+    ok, reason, payload = dental_clinic._verify_serial_token('DENTAL-AAAA-0001', token)
+    assert ok is True, reason
+    assert payload['max_devices'] == 3
+
+
+def test_dental_verifier_rejects_random(monkeypatch):
+    _, pub_b64 = serial_generator.generate_keypair()
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', pub_b64)
+    ok, reason, payload = dental_clinic._verify_serial_token('DENTAL-AAAA-0001', 'garbage')
+    assert ok is False and payload is None
+
+
+def test_dental_verifier_rejects_serial_mismatch(monkeypatch):
+    priv_b64, pub_b64 = serial_generator.generate_keypair()
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', pub_b64)
+    token = serial_generator.sign_serial_token({'serial': 'OTHER-0002'}, priv_b64)
+    ok, reason, _ = dental_clinic._verify_serial_token('DENTAL-AAAA-0001', token)
+    assert ok is False
+
+
+def test_dental_verifier_malformed_grace_is_rejected(monkeypatch):
+    priv_b64, pub_b64 = serial_generator.generate_keypair()
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', pub_b64)
+    token = serial_generator.sign_serial_token(
+        {'serial': 'DENTAL-AAAA-0001', 'grace_until': 'never'}, priv_b64)
+    ok, reason, _ = dental_clinic._verify_serial_token('DENTAL-AAAA-0001', token)
+    assert ok is False  # malformed grace must hard-fail, not silently pass

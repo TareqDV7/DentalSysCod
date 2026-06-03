@@ -212,71 +212,60 @@ except (TypeError, ValueError):
 _register_attempts = {}  # ip -> list[timestamps]; sliding window
 _register_attempts_lock = threading.Lock()
 
-# Optional HMAC-signed-serial gating for /api/clinics/register. When the env
-# CLINIC_SERIAL_SIGNING_KEY is set (base64-encoded HMAC key matching the one
-# used by serial_generator.py), the register handler will accept an
-# `offline_token` field in the body and verify it. With CLINIC_REQUIRE_SIGNED_SERIAL=1,
-# unsigned / invalid registrations are rejected outright; otherwise (default)
-# the signature is verified when present but not required, so legacy demo
-# serials still register. Off entirely when the key isn't configured.
-_SERIAL_SIGNING_KEY_B64 = os.environ.get('CLINIC_SERIAL_SIGNING_KEY', '').strip()
-_REQUIRE_SIGNED_SERIAL = os.environ.get('CLINIC_REQUIRE_SIGNED_SERIAL', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+# Ed25519 public key used to verify vendor-signed serials. Base64 (std) of the
+# 32-byte raw public key. The matching private seed never leaves the vendor
+# machine (serial_generator.py). When unset, the signature gate can't run.
+_SERIAL_PUBLIC_KEY_B64 = os.environ.get('CLINIC_SERIAL_PUBLIC_KEY', '').strip()
+_REQUIRE_SIGNED_SERIAL = os.environ.get('CLINIC_REQUIRE_SIGNED_SERIAL', '1').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def _serial_signing_key():
-    """Decoded HMAC key, or None if not configured."""
-    if not _SERIAL_SIGNING_KEY_B64:
+def _serial_public_key():
+    """Return an Ed25519PublicKey, or None if not configured."""
+    if not _SERIAL_PUBLIC_KEY_B64:
         return None
     try:
-        return base64.b64decode(_SERIAL_SIGNING_KEY_B64)
-    except (ValueError, binascii.Error):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        return Ed25519PublicKey.from_public_bytes(base64.b64decode(_SERIAL_PUBLIC_KEY_B64))
+    except Exception:  # noqa: BLE001
         return None
 
 
-def _verify_serial_token(serial, token, key):
-    """Return (ok, reason). Verifies that ``token`` is a valid offline-license
-    token (payload.signature, both base64-url or base64) issued by a holder of
-    ``key`` and that its payload's ``serial`` field equals ``serial`` and the
-    license isn't expired past its grace period."""
+def _verify_serial_token(serial, token):
+    """Return (ok, reason, payload). Verifies the Ed25519 vendor signature on
+    ``token`` (payload.signature, base64url), that its payload's ``serial`` equals
+    ``serial``, and that grace_until (if present) is in the future and well-formed."""
     if not token:
-        return False, 'offline_token required'
+        return False, 'serial token required', None
+    pub = _serial_public_key()
+    if pub is None:
+        return False, 'server signing key not configured', None
     try:
-        payload_part, signature_part = str(token).split('.', 1)
-    except ValueError:
-        return False, 'malformed offline_token'
-    # serial_generator.py uses plain base64; tolerate urlsafe too.
-    def _decode(s):
-        try:
-            return base64.b64decode(s + '=' * (-len(s) % 4))
-        except (ValueError, binascii.Error):
-            try:
-                return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
-            except (ValueError, binascii.Error):
-                return None
-    payload_bytes = _decode(payload_part)
-    sig_bytes = _decode(signature_part)
-    if payload_bytes is None or sig_bytes is None:
-        return False, 'malformed offline_token'
-    expected = hmac.new(key, payload_bytes, hashlib.sha256).digest()
-    if not hmac.compare_digest(expected, sig_bytes):
-        return False, 'invalid offline_token signature'
+        from cryptography.exceptions import InvalidSignature
+        payload_part, sig_part = str(token).split('.', 1)
+        payload_bytes = base64.urlsafe_b64decode(payload_part + '=' * (-len(payload_part) % 4))
+        sig = base64.urlsafe_b64decode(sig_part + '=' * (-len(sig_part) % 4))
+    except (ValueError, binascii.Error):
+        return False, 'malformed serial token', None
+    try:
+        pub.verify(sig, payload_bytes)
+    except InvalidSignature:
+        return False, 'invalid serial token signature', None
     try:
         payload = json.loads(payload_bytes.decode('utf-8'))
     except (ValueError, UnicodeDecodeError):
-        return False, 'malformed offline_token payload'
-    token_serial = str(payload.get('serial') or '').strip().upper()
-    if token_serial != serial.strip().upper():
-        return False, 'offline_token does not match this serial'
-    # Honour grace_until > today if present (datetime.utcnow()-equivalent).
+        return False, 'malformed serial token payload', None
+    if not isinstance(payload, dict):
+        return False, 'malformed serial token payload', None
+    if str(payload.get('serial') or '').strip().upper() != serial.strip().upper():
+        return False, 'serial token does not match this serial', None
     grace = str(payload.get('grace_until') or '').strip()
     if grace:
         try:
-            grace_dt = datetime.fromisoformat(grace.rstrip('Z'))
-            if _naive_utc_now() > grace_dt:
-                return False, 'offline_token has expired'
+            if _naive_utc_now() > datetime.fromisoformat(grace.rstrip('Z')):
+                return False, 'serial token has expired', None
         except ValueError:
-            pass  # malformed grace value — don't block on it
-    return True, ''
+            return False, 'malformed grace_until in serial token', None  # hard-fail
+    return True, '', payload
 
 
 def _client_ip():
@@ -4156,18 +4145,15 @@ def register_clinic():
     if not clinic_name:
         return jsonify({'error': 'clinic_name is required'}), 400
 
-    # HMAC-signed-serial gate (opt-in). When CLINIC_SERIAL_SIGNING_KEY is set,
-    # we verify an offline_token if present; with CLINIC_REQUIRE_SIGNED_SERIAL=1,
-    # registration without a valid signed token is rejected. This lets the cloud
-    # roll out signing without breaking already-issued demo serials.
-    signing_key = _serial_signing_key()
-    if signing_key is not None and (offline_token or _REQUIRE_SIGNED_SERIAL):
-        ok, reason = _verify_serial_token(serial_number, offline_token, signing_key)
+    # Ed25519 vendor-signature gate. Mandatory by default (A1). The validate
+    # endpoint is the primary authority; register still verifies for safety.
+    pub = _serial_public_key()
+    if _REQUIRE_SIGNED_SERIAL or offline_token:
+        if pub is None:
+            return jsonify({'error': 'Server signing key not configured'}), 500
+        ok, reason, _payload = _verify_serial_token(serial_number, offline_token)
         if not ok:
             return jsonify({'error': reason}), 403
-    elif _REQUIRE_SIGNED_SERIAL and signing_key is None:
-        # Misconfiguration: enforcement requested but no key set.
-        return jsonify({'error': 'Server signing key not configured'}), 500
 
     master = sqlite3.connect(MASTER_DB_PATH)
     master.row_factory = sqlite3.Row
