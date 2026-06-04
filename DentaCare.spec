@@ -28,6 +28,11 @@ COMMON_HIDDEN = [
     'click',
     'serial',
     'serial.tools.list_ports',
+    # Ed25519 vendor-serial verification (cloud license authority).
+    'cryptography',
+    'cryptography.exceptions',
+    'cryptography.hazmat.primitives.asymmetric.ed25519',
+    'cryptography.hazmat.backends.openssl',
     'sqlite3',
     'hmac',
     'hashlib',

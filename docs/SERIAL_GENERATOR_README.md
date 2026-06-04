@@ -19,10 +19,10 @@ This is a standalone tool separate from the main Dental Clinic system. It genera
    └── DENTAL-[CLINIC_CODE]-[DEVICE_HASH]-[COUNTER]
       Example: DENTAL-SMD-LAPTO-00001
 
-4. Offline License Token
-   ├── Payload: JSON with serial + device_id + clinic_name + expiry
-   ├── Signature: HMAC-SHA256 of payload
-   └── Format: base64(payload).base64(signature)
+4. Offline License Token (v2)
+   ├── Payload: JSON with serial + clinic_name + plan + max_devices + expiry/grace
+   ├── Signature: Ed25519 (vendor private key signs; cloud public key verifies)
+   └── Format: base64url(payload).base64url(signature)
 
 5. Security: Each serial is locked to ONE device
    ├── Serial DENTAL-SMD-LAPTO-00001 → locked to LAPTOP-DOCTOR-001
@@ -34,14 +34,29 @@ This is a standalone tool separate from the main Dental Clinic system. It genera
 ## Installation
 
 ```bash
-# No additional dependencies needed! Already uses Python stdlib:
-# - hmac, hashlib, base64, json, csv, argparse, datetime
+# Requires the `cryptography` package for Ed25519 signing:
+pip install -r requirements.txt   # (or: pip install "cryptography>=42.0")
 
-# Just copy serial_generator.py to your clinic directory
-cp serial_generator.py /path/to/clinic/
+# Then copy serial_generator.py to wherever you run the vendor tooling
+cp serial_generator.py /path/to/vendor/
 ```
 
 ## Usage
+
+### 0. Generate the vendor keypair (one time)
+
+Signing is **mandatory** — there is no demo/default key. Create the Ed25519
+keypair once and keep the private seed offline:
+
+```bash
+python serial_generator.py --genkey            # → backend_ed25519_key.json
+# prints the public key; set it on the cloud node so /api/license/validate
+# can verify the serials you sign:
+#   export CLINIC_SERIAL_PUBLIC_KEY=<printed public key>
+```
+
+`backend_ed25519_key.json` holds the private seed — it is git-ignored and must
+never be committed or shared. Anyone with it can mint valid serials.
 
 ### 1. Generate Single Device Serial
 ```bash
@@ -49,7 +64,8 @@ python serial_generator.py \
   --clinic "Smile Dental Clinic" \
   --code "SMD" \
   --device "LAPTOP-DOCTOR-001" \
-  --expiry 365
+  --expiry 365 \
+  --key-file backend_ed25519_key.json
 ```
 
 Output:
@@ -76,7 +92,8 @@ python serial_generator.py \
   --code "SMD" \
   --devices-file devices.txt \
   --expiry 365 \
-  --output serials.csv
+  --output serials.csv \
+  --key-file backend_ed25519_key.json
 ```
 
 Output file: `serials.csv` with columns:
@@ -88,19 +105,20 @@ Output file: `serials.csv` with columns:
 - Expires At
 - Offline Token
 
-### 3. Using Custom Backend Signing Key (Optional)
-```bash
-# Export signing key from backend database first:
-# SELECT key FROM app_settings WHERE key_name = 'license_signing_key'
+### 3. The signing key (`--key-file`) is required
 
+```bash
 python serial_generator.py \
   --clinic "Smile Dental Clinic" \
   --code "SMD" \
   --device "LAPTOP-DOCTOR-001" \
-  --key-file backend_signing_key.json
+  --key-file backend_ed25519_key.json
 ```
 
-**Note**: If no key-file provided, tool uses default signing key. For production, export the backend's signing key to ensure tokens match.
+**Note**: There is **no** default/demo key. If `--key-file` is missing or
+malformed the tool exits with an error telling you to run `--genkey` first. The
+matching public key must be set as `CLINIC_SERIAL_PUBLIC_KEY` on the cloud node,
+otherwise the cloud will reject every serial you sign.
 
 ## Device Identification Methods
 
@@ -190,8 +208,8 @@ Already has these functions:
 
 ## Security Features
 
-✓ **Device Locking**: Each serial tied to one device_id
-✓ **HMAC Signature**: Token can't be modified without signing key
+✓ **Device Locking**: Each serial carries a device_id; the cloud authority caps active devices per serial via per-device fingerprints
+✓ **Ed25519 Signature**: Token can't be modified or forged without the vendor private seed
 ✓ **Expiry Window**: Active license + 30-day grace period
 ✓ **Offline Verification**: No network needed after initial activation
 ✓ **External Generation**: Serials created separately from main system
@@ -244,13 +262,13 @@ python serial_generator.py \
 ### "Wrong clinic code length"
 → Use max 4 characters for clinic code (e.g., SMD not SMILE)
 
-### "Can't load signing key from backend"
-→ Normal - tool will use default signing key
-→ For production, export backend key first:
-  ```sql
-  SELECT key FROM app_settings 
-  WHERE key_name = 'license_signing_key'
+### "Signing key file not found"
+→ The key is mandatory — there is no default/demo fallback.
+→ Generate one first, then pass it with `--key-file`:
+  ```bash
+  python serial_generator.py --genkey        # writes backend_ed25519_key.json
   ```
+→ Set the printed public key on the cloud node as `CLINIC_SERIAL_PUBLIC_KEY`.
 
 ## File Format Reference
 
@@ -271,11 +289,11 @@ DENTAL-SMD-LAPTO-00002,LAPTOP-RECEPTIONIST-001,Smile Dental,Standard,...,eyJ...
 
 ## Licensing & Security Notes
 
-- ⚠️ **Keep signing keys secure** - If backend key is exposed, anyone can generate valid tokens
-- 🔒 **Store generated serials securely** - CSVs contain offline tokens
-- 🔑 **Backup signing key** - If lost, can't generate compatible serials
+- ⚠️ **Keep the private seed secure** - `backend_ed25519_key.json` is the only thing standing between you and forged serials; keep it offline and git-ignored
+- 🔒 **Store generated serials securely** - CSVs contain signed offline tokens
+- 🔑 **Backup the private seed** - If lost, you can't sign serials the cloud will accept (you'd have to roll a new keypair and re-issue)
 - 📝 **Log serial issuance** - Track which serial went to which clinic/device
-- ♻️ **Revoke on device problems** - If device compromised, change the key in backend
+- ♻️ **Revoke without rotating keys** - Use the cloud admin endpoint (`POST /api/license/admin/revoke`, `X-Admin-Token` gated) to revoke/suspend a serial or release a device slot — no need to change the signing key
 
 ## FAQ
 
@@ -297,5 +315,6 @@ A: Generate new serial with later expiry date. Old serial stops working on grace
 ---
 
 **Created**: 2026-05-01
-**Version**: 1.0
+**Updated**: 2026-06-04 — migrated HMAC-SHA256 → Ed25519 vendor signing (cloud license authority A1)
+**Version**: 2.0
 **Status**: Production Ready
