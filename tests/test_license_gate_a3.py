@@ -70,3 +70,49 @@ def test_gate_endpoint_reports_active(local):
     body = local.get('/api/license/gate').get_json()
     assert body['state'] == 'active'
     assert body['serial_number'] == 'DENTAL-A3-GATE'
+
+
+def _login(local):
+    with local.session_transaction() as sess:
+        sess['uid'] = 1
+        sess['uname'] = 'tester'
+
+
+def test_view_only_blocks_clinical_write(local):
+    _seed_license('DENTAL-A3-VO', days=-60)   # view_only
+    _login(local)
+    r = local.post('/api/patients', json={'name': 'X'})
+    assert r.status_code == 403
+    assert r.get_json()['reason'] == 'view_only'
+
+
+def test_view_only_allows_reads(local):
+    _seed_license('DENTAL-A3-VO2', days=-60)
+    _login(local)
+    assert local.get('/api/patients').status_code == 200
+
+
+def test_view_only_allows_license_endpoints(local):
+    _seed_license('DENTAL-A3-VO3', days=-60)
+    _login(local)
+    # license activate must NOT be blocked by the guard (it reaches its own handler).
+    r = local.post('/api/license/activate', json={})
+    assert r.status_code in (400, 403)
+    assert (r.get_json() or {}).get('reason') != 'view_only'
+
+
+def test_active_allows_clinical_write(local):
+    _seed_license('DENTAL-A3-OK', days=365)   # active
+    _login(local)
+    r = local.post('/api/patients', json={'first_name': 'Jane', 'last_name': 'Active', 'phone': '0590000000'})
+    assert r.status_code in (200, 201)
+
+
+def test_write_guard_fails_open_on_error(local, monkeypatch):
+    _seed_license('DENTAL-A3-FO', days=-60)
+    _login(local)
+    def boom(_cur):
+        raise RuntimeError('gate exploded')
+    monkeypatch.setattr(dental_clinic, '_license_gate_state', boom)
+    r = local.post('/api/patients', json={'first_name': 'FailOpen', 'last_name': 'Test', 'phone': '0590000001'})
+    assert r.status_code in (200, 201)   # a licensing bug must never brick data entry

@@ -1861,6 +1861,35 @@ def _require_login_for_portal():
     return redirect(url_for('login_page', next=path))
 
 
+# Endpoints that stay writable even in view-only mode: licensing (so you can renew),
+# auth (login/logout), cloud connectivity, and health. Everything else clinical is
+# read-only once the subscription lapses.
+_VIEW_ONLY_WRITE_ALLOW_PREFIXES = ('/api/license/', '/api/auth/', '/api/cloud/')
+_VIEW_ONLY_WRITE_ALLOW_EXACT = {'/healthz'}
+
+
+@app.before_request
+def _enforce_view_only():
+    if request.method in ('GET', 'HEAD', 'OPTIONS'):
+        return None
+    path = request.path or '/'
+    if not path.startswith('/api/'):
+        return None
+    if path in _VIEW_ONLY_WRITE_ALLOW_EXACT or path.startswith(_VIEW_ONLY_WRITE_ALLOW_PREFIXES):
+        return None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        state = _license_gate_state(cur)['state']
+        conn.close()
+    except Exception:  # noqa: BLE001 - fail OPEN: never brick data entry over a licensing bug
+        return None
+    if state == 'view_only':
+        return jsonify({'error': 'License expired — view only. Renew to make changes.',
+                        'reason': 'view_only'}), 403
+    return None
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     next_url = _safe_next_url(request.values.get('next', ''))
