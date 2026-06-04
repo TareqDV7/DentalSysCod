@@ -152,3 +152,25 @@ def test_device_cap_atomic_under_concurrency(cloud):
     active = conn.execute("SELECT COUNT(*) FROM license_device_slots WHERE serial=? AND is_active=1", (s,)).fetchone()[0]
     conn.close()
     assert active <= 2, f'cap exceeded: {active} active slots'
+
+
+def test_admin_revoke_requires_token(cloud, monkeypatch):
+    monkeypatch.setattr(dental_clinic, '_ADMIN_API_TOKEN', 'secret')
+    _validate(cloud, _sign(cloud, 'DENTAL-ADM-0001'))
+    no_tok = cloud.post('/api/license/admin/revoke', json={'serial': 'DENTAL-ADM-0001', 'status': 'revoked'})
+    assert no_tok.status_code == 401
+    ok = cloud.post('/api/license/admin/revoke',
+                    headers={'X-Admin-Token': 'secret'},
+                    json={'serial': 'DENTAL-ADM-0001', 'status': 'revoked'})
+    assert ok.status_code == 200
+    assert _validate(cloud, _sign(cloud, 'DENTAL-ADM-0001')).get_json()['reason'] == 'revoked'
+
+
+def test_admin_release_frees_slot(cloud, monkeypatch):
+    monkeypatch.setattr(dental_clinic, '_ADMIN_API_TOKEN', 'secret')
+    s = 'DENTAL-ADM-0002'
+    _validate(cloud, _sign(cloud, s, max_devices=1), fp='phone-A')
+    assert _validate(cloud, _sign(cloud, s, max_devices=1), fp='phone-B').get_json()['reason'] == 'device_cap_reached'
+    cloud.post('/api/license/admin/revoke', headers={'X-Admin-Token': 'secret'},
+               json={'serial': s, 'device_fingerprint': 'phone-A', 'release': True})
+    assert _validate(cloud, _sign(cloud, s, max_devices=1), fp='phone-B').get_json()['valid'] is True

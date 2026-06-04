@@ -189,7 +189,7 @@ DEFAULT_LICENSE_DAYS = 30
 DEFAULT_LICENSE_GRACE_DAYS = 7
 
 # Endpoints reachable on the cloud node without a clinic token.
-_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/healthz', '/logo', '/favicon.ico'}
+_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/api/license/admin/revoke', '/healthz', '/logo', '/favicon.ico'}
 _CLOUD_OPEN_PREFIXES = ('/static/',)
 # Not available on the cloud node: uploads aren't part of cloud sync and the
 # folder isn't tenant-scoped; the /api/cloud/* endpoints are for a clinic's own
@@ -217,6 +217,9 @@ _register_attempts_lock = threading.Lock()
 # machine (serial_generator.py). When unset, the signature gate can't run.
 _SERIAL_PUBLIC_KEY_B64 = os.environ.get('CLINIC_SERIAL_PUBLIC_KEY', '').strip()
 _REQUIRE_SIGNED_SERIAL = os.environ.get('CLINIC_REQUIRE_SIGNED_SERIAL', '1').strip().lower() in ('1', 'true', 'yes', 'on')
+# Shared secret for the cloud license admin endpoint (revoke/suspend/release a
+# device slot). When unset, the admin endpoint is closed (every call → 401).
+_ADMIN_API_TOKEN = os.environ.get('CLINIC_ADMIN_API_TOKEN', '').strip()
 
 
 def _serial_public_key():
@@ -4363,6 +4366,37 @@ def validate_license():
         'expires_at': expires_at, 'grace_until': grace_until,
         'remaining_slots': max(0, int(max_devices) - used),
     })
+
+
+@app.route('/api/license/admin/revoke', methods=['POST'])
+def license_admin():
+    """Cloud node only, admin-token gated. Set a serial's status (revoked/suspended/
+    active), or release a device slot (release=true frees one fingerprint)."""
+    if not CLOUD_MODE:
+        return jsonify({'error': 'Not available on a local server'}), 404
+    supplied = (request.headers.get('X-Admin-Token') or '').strip()
+    if not _ADMIN_API_TOKEN or not hmac.compare_digest(supplied, _ADMIN_API_TOKEN):
+        return jsonify({'error': 'admin token required'}), 401
+    data = request.json or {}
+    serial = str(data.get('serial') or '').strip().upper()
+    if len(serial) < 8:
+        return jsonify({'error': 'serial is required'}), 400
+    conn = sqlite3.connect(MASTER_DB_PATH)
+    try:
+        if data.get('release') and data.get('device_fingerprint'):
+            conn.execute('UPDATE license_device_slots SET is_active=0 '
+                         'WHERE serial=? AND device_fingerprint=?',
+                         (serial, str(data['device_fingerprint']).strip()))
+        else:
+            status = str(data.get('status') or 'revoked').strip()
+            if status not in ('active', 'revoked', 'suspended'):
+                return jsonify({'error': 'invalid status'}), 400
+            conn.execute('UPDATE license_serials SET status=?, updated_at=CURRENT_TIMESTAMP '
+                         'WHERE serial=?', (status, serial))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True})
 
 
 @app.route('/api/cloud/pair', methods=['POST'])
