@@ -1750,6 +1750,44 @@ def fetch_license_record(cursor, serial_number):
     }
 
 
+def _license_gate_state(cursor):
+    """Single source of truth for the licensing gate. Returns a dict with 'state'
+    in {unlicensed, active, grace, view_only} plus the window fields, derived from
+    the A2-cached license row. Offline-tolerant: it reads cached state only."""
+    active_serial = str(read_app_setting(cursor, 'active_serial_number', '') or '').strip()
+    if not active_serial:
+        cursor.execute("SELECT serial_number FROM licenses WHERE status='active' "
+                       "ORDER BY updated_at DESC, activated_at DESC LIMIT 1")
+        row = cursor.fetchone()
+        active_serial = row[0] if row else ''
+    if not active_serial:
+        return {'state': 'unlicensed', 'licensed': False}
+
+    record = fetch_license_record(cursor, active_serial)
+    if not record:
+        return {'state': 'unlicensed', 'licensed': False}
+
+    validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
+    status = str(record['status'] or '')
+    if status in ('revoked', 'suspended') or not validity['licensed']:
+        state = 'view_only'
+    elif validity['in_grace']:
+        state = 'grace'
+    else:
+        state = 'active'
+    return {
+        'state': state,
+        'licensed': state in ('active', 'grace'),
+        'status': status,
+        'serial_number': record['serial_number'],
+        'clinic_name': record['clinic_name'],
+        'plan_name': record['plan_name'],
+        'expires_at': record['expires_at'],
+        'grace_until': record['grace_until'],
+        'in_grace': bool(validity['in_grace']),
+    }
+
+
 def get_mobile_download_options(cursor):
     android_setting = str(read_app_setting(cursor, 'mobile_android_download_url', '') or '').strip()
     ios_setting = str(read_app_setting(cursor, 'mobile_ios_download_url', '') or '').strip()
