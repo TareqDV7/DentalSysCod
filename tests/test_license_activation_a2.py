@@ -212,3 +212,27 @@ def test_status_without_device_answers_from_state(local):
     _activate(local, _sign(local, s))
     body = local.get('/api/license/status').get_json()   # desktop portal
     assert body['licensed'] is True
+
+
+# ── Task 9: server-fingerprint binding + no-500 fuzz ───────────────────────
+
+def test_server_fingerprint_is_stable_and_client_cannot_override(local):
+    s = 'DENTAL-A2-FP'
+    _activate(local, _sign(local, s, max_devices=3), device_id='attacker-claims-this')
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    fp = conn.execute("SELECT value FROM app_settings WHERE key='device_fingerprint'").fetchone()[0]
+    # The desktop's own slot is bound to the server fingerprint, never the client claim.
+    rows = [r[0] for r in conn.execute(
+        'SELECT device_id FROM license_devices WHERE serial_number=?', (s,)).fetchall()]
+    conn.close()
+    assert fp in rows
+    assert 'attacker-claims-this' not in rows
+
+
+@pytest.mark.parametrize('body', [
+    {}, {'serial_token': ''}, {'serial_token': 'x' * 5000},
+    {'serial_number': 'DENTAL-A2-FUZZ'}, {'serial_number': 'DENTAL-A2-FUZZ', 'device_id': 'd' * 5000},
+])
+def test_activate_never_500s(local, body):
+    r = local.post('/api/license/activate', json=body)
+    assert r.status_code in (200, 400, 403)
