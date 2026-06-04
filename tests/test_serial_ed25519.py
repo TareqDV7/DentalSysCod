@@ -85,3 +85,17 @@ def test_dental_verifier_malformed_grace_is_rejected(monkeypatch):
         {'serial': 'DENTAL-AAAA-0001', 'grace_until': 'never'}, priv_b64)
     ok, reason, _ = dental_clinic._verify_serial_token('DENTAL-AAAA-0001', token)
     assert ok is False  # malformed grace must hard-fail, not silently pass
+
+
+def test_load_private_seed(tmp_path):
+    import json
+    priv_b64, _ = serial_generator.generate_keypair()
+    f = tmp_path / 'key.json'
+    f.write_text(json.dumps({'alg': 'ed25519', 'private': priv_b64}))
+    assert serial_generator.load_private_seed(str(f)) == priv_b64
+
+
+def test_no_demo_key_fallback(tmp_path):
+    # A missing key file must NOT silently sign with a baked-in demo key.
+    with pytest.raises((SystemExit, FileNotFoundError, ValueError)):
+        serial_generator.load_private_seed(str(tmp_path / 'nope.json'))

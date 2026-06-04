@@ -8,8 +8,6 @@ Each serial is tied to a specific device (hardware-locked)
 import os
 import sys
 import json
-import hmac
-import hashlib
 import base64
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -109,62 +107,48 @@ def generate_license_token(
     plan_name: str = "Standard",
     max_devices: int = 1,
     expiry_days: int = 365,
-    signing_key: bytes = None
+    private_seed_b64: str = None,
 ) -> dict:
     """
-    Generate offline license token with device binding
-    
+    Generate a vendor-signed (Ed25519) v2 license token.
+
     Args:
         serial: Serial number
         clinic_name: Clinic name
-        device_id: Device identifier (hardware-locked)
+        device_id: Device identifier (informational; the cloud authority caps
+            devices via per-device fingerprints, not this field)
         plan_name: Plan type (Standard, Premium, etc.)
-        max_devices: Maximum devices (typically 1 for device-locked)
+        max_devices: Maximum devices the cloud authority will admit for this serial
         expiry_days: Days until expiry
-        signing_key: HMAC signing key (generated if not provided)
-    
+        private_seed_b64: base64 Ed25519 private seed (from load_private_seed /
+            generate_keypair). REQUIRED — there is NO demo-key fallback.
+
     Returns:
         Dictionary with token and metadata
     """
-    if signing_key is None:
-        # Generate a default signing key for demo (in production, use backend key)
-        signing_key = hashlib.sha256(b"DENTAL_CLINIC_SIGN_KEY_DEMO").digest()
-    
+    if not private_seed_b64:
+        raise ValueError('private_seed_b64 is required (no demo-key fallback)')
+
     now_utc = datetime.now(timezone.utc)
     issued_at = now_utc.replace(tzinfo=None).isoformat() + "Z"
     expires_at = (now_utc + timedelta(days=expiry_days)).replace(tzinfo=None).isoformat() + "Z"
     grace_until = (now_utc + timedelta(days=expiry_days + 30)).replace(tzinfo=None).isoformat() + "Z"
-    
-    # Build payload
+
+    # v2 payload — the shape the cloud authority's /api/license/validate reads.
     payload = {
+        "v": 2,
         "serial": serial,
         "clinic_name": clinic_name,
         "plan_name": plan_name,
-        "device_id": device_id,  # <-- DEVICE LOCK
-        "status": "active",
+        "device_id": device_id,
         "max_devices": max_devices,
         "issued_at": issued_at,
         "expires_at": expires_at,
         "grace_until": grace_until,
-        "licensed": True,
-        "in_grace": False
     }
-    
-    # Encode payload to JSON and base64
-    payload_json = json.dumps(payload, separators=(',', ':'))
-    payload_b64 = base64.b64encode(payload_json.encode()).decode()
-    
-    # Create HMAC signature
-    signature = hmac.new(
-        signing_key,
-        payload_json.encode(),
-        hashlib.sha256
-    ).digest()
-    signature_b64 = base64.b64encode(signature).decode()
-    
-    # Combine: payload.signature
-    offline_token = f"{payload_b64}.{signature_b64}"
-    
+
+    offline_token = sign_serial_token(payload, private_seed_b64)
+
     return {
         "serial": serial,
         "offline_token": offline_token,
@@ -174,23 +158,17 @@ def generate_license_token(
     }
 
 
-def load_signing_key(signing_key_file):
-    """Return decoded HMAC key bytes from a backend_key.json file, or None.
-    Prints a warning on failure; missing file is treated as None."""
-    if not signing_key_file:
-        return None
-    if not os.path.exists(signing_key_file):
-        print(f"⚠️  Warning: Signing key file not found: {signing_key_file}")
-        print("    Using default signing key instead\n")
-        return None
-    try:
-        with open(signing_key_file, 'r') as f:
-            key_data = json.load(f)
-        return base64.b64decode(key_data.get('key', ''))
-    except Exception as e:
-        print(f"⚠️  Warning: Could not load signing key from {signing_key_file}: {e}")
-        print("    Using default signing key instead\n")
-        return None
+def load_private_seed(key_file: str) -> str:
+    """Return the base64 Ed25519 private seed from a key file. Fails loudly if the
+    file is missing or malformed — there is NO demo-key fallback."""
+    if not key_file or not os.path.exists(key_file):
+        raise FileNotFoundError(f'Signing key file not found: {key_file}')
+    with open(key_file, 'r') as f:
+        data = json.load(f)
+    seed = str(data.get('private') or '').strip()
+    if not seed:
+        raise ValueError('Key file has no "private" seed')
+    return seed
 
 
 def create_serial_batch(
@@ -217,10 +195,10 @@ def create_serial_batch(
     Returns:
         List of generated license records
     """
-    signing_key = load_signing_key(signing_key_file)
-    
+    private_seed_b64 = load_private_seed(signing_key_file)
+
     licenses = []
-    
+
     for idx, device_id in enumerate(devices, 1):
         serial = generate_device_serial_number(clinic_code, device_id, idx)
         license_data = generate_license_token(
@@ -230,7 +208,7 @@ def create_serial_batch(
             plan_name=plan_name,
             max_devices=1,  # Device-locked
             expiry_days=expiry_days,
-            signing_key=signing_key
+            private_seed_b64=private_seed_b64,
         )
         licenses.append(license_data)
         
@@ -265,24 +243,48 @@ def create_serial_batch(
 
 
 def main():
+    # The pretty-print below uses ✓/✗ glyphs; a stock Windows console is cp1252
+    # and would raise UnicodeEncodeError on them. Make the streams tolerant.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding='utf-8')
+        except (AttributeError, ValueError):
+            pass
+
+    # Keypair generation is a standalone subcommand — it doesn't take the
+    # --clinic/--code args the rest of the CLI requires, so handle it first.
+    if len(sys.argv) >= 2 and sys.argv[1] == '--genkey':
+        priv_b64, pub_b64 = generate_keypair()
+        out = sys.argv[2] if len(sys.argv) >= 3 else 'backend_ed25519_key.json'
+        with open(out, 'w') as f:
+            json.dump({'alg': 'ed25519', 'private': priv_b64}, f)
+        print(f'Private seed written to {out} (KEEP SAFE, gitignored).')
+        print(f'Public key (set CLINIC_SERIAL_PUBLIC_KEY on the cloud):\n{pub_b64}')
+        return 0
+
     parser = argparse.ArgumentParser(
         description='Generate device-locked activation serials for Dental Clinic',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  # Generate single serial
-  python serial_generator.py --clinic "Smile Dental" --code "SMD" --device "LAPTOP-ABC123"
-  
+  # One-time: generate the vendor Ed25519 keypair
+  python serial_generator.py --genkey                 # → backend_ed25519_key.json
+  #   then set CLINIC_SERIAL_PUBLIC_KEY (printed above) on the cloud node
+
+  # Generate single serial (signing key required — no demo-key fallback)
+  python serial_generator.py --clinic "Smile Dental" --code "SMD" \\
+    --device "LAPTOP-ABC123" --key-file backend_ed25519_key.json
+
   # Generate batch from file
   python serial_generator.py --clinic "Smile Dental" --code "SMD" \\
-    --devices-file devices.txt --output serials.csv
-  
-  # Generate with custom expiry and signing key
+    --devices-file devices.txt --output serials.csv --key-file backend_ed25519_key.json
+
+  # Generate with custom expiry
   python serial_generator.py --clinic "Smile Dental" --code "SMD" \\
-    --device "DEVICE-ID" --expiry 730 --key-file backend_key.json
+    --device "DEVICE-ID" --expiry 730 --key-file backend_ed25519_key.json
         '''
     )
-    
+
     parser.add_argument('--clinic', required=True, help='Clinic name')
     parser.add_argument('--code', required=True, help='Clinic code (max 4 chars) for serial')
     parser.add_argument('--device', help='Single device ID to generate serial for')
@@ -290,18 +292,25 @@ Examples:
     parser.add_argument('--plan', default='Standard', help='License plan (default: Standard)')
     parser.add_argument('--expiry', type=int, default=365, help='Days until expiry (default: 365)')
     parser.add_argument('--output', help='Output CSV file for batch generation')
-    parser.add_argument('--key-file', help='Backend signing key file (backend_key.json)')
+    parser.add_argument('--key-file', help='Vendor Ed25519 signing key file (backend_ed25519_key.json from --genkey)')
     parser.add_argument('--json', action='store_true', help='Output as JSON instead of CSV')
-    
+
     args = parser.parse_args()
-    
+
     # Validate inputs
     if not args.device and not args.devices_file:
         parser.error('Must provide either --device or --devices-file')
-    
+
     if args.code and len(args.code) > 4:
         parser.error('Clinic code must be max 4 characters')
-    
+
+    # The signing key is mandatory now — load it up front so a missing/bad key
+    # fails fast with a clear hint instead of mid-batch.
+    try:
+        private_seed_b64 = load_private_seed(args.key_file)
+    except (FileNotFoundError, ValueError) as e:
+        parser.error(f'{e}. Generate one first: python serial_generator.py --genkey')
+
     print(f"\n{'='*60}")
     print(f"   DENTAL CLINIC - SERIAL LICENSE GENERATOR")
     print(f"{'='*60}\n")
@@ -321,7 +330,7 @@ Examples:
             device_id=args.device,
             plan_name=args.plan,
             expiry_days=args.expiry,
-            signing_key=load_signing_key(args.key_file),
+            private_seed_b64=private_seed_b64,
         )
         
         print(f"✓ SERIAL NUMBER: {serial}\n")

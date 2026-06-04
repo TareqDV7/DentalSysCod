@@ -70,6 +70,7 @@ batch_serials.csv
 serials_*.csv
 serials_*.json
 backend_key.json
+backend_ed25519_key.json
 *.key
 
 # Cloud deploy secrets (host-only, never committed)
