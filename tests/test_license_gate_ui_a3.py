@@ -34,7 +34,13 @@ def test_template_scripts_pass_node_check():
         fh.write(blob)
         path = fh.name
     try:
-        proc = subprocess.run(['node', '--check', path], capture_output=True, text=True)
+        proc = subprocess.run(
+            ['node', '--check', path],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         assert proc.returncode == 0, proc.stderr
     finally:
         os.unlink(path)
