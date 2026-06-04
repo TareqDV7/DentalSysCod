@@ -1658,9 +1658,38 @@ HTML_TEMPLATE = '''
         [data-theme="dark"] path[stroke="#94a3b8"] { stroke: #475569; }
         [dir="rtl"] .tooth-row { transform: scaleX(-1); }
         [dir="rtl"] .tooth-num { transform: scaleX(-1); transform-origin: center; }
+        .hidden { display:none; }
+        .license-banner { display:flex; gap:12px; align-items:center; padding:10px 16px;
+          background:#fff4ce; color:#5c4400; font-size:.9rem; }
+        .license-banner--warn { background:#ffe2e5; color:#8d1f33; }
+        .license-overlay { position:fixed; inset:0; background:rgba(15,23,42,.78);
+          display:flex; align-items:center; justify-content:center; z-index:9999; }
+        .license-overlay__card { background:#fff; padding:28px; border-radius:14px;
+          width:min(440px,92vw); box-shadow:0 24px 60px rgba(0,0,0,.35); }
+        .license-overlay__card textarea { width:100%; margin:12px 0; font-family:monospace; }
+        .license-overlay__status { margin-top:10px; min-height:18px; font-size:.85rem; }
+        body.view-only [data-write] { pointer-events:none; opacity:.5; }
     </style>
 </head>
 <body>
+    <div id="license-renew-banner" class="license-banner hidden">
+      <span id="license-renew-text"></span>
+      <button type="button" onclick="openLicenseActivation()">Renew</button>
+      <button type="button" onclick="dismissRenewBanner()">Dismiss</button>
+    </div>
+    <div id="license-viewonly-banner" class="license-banner license-banner--warn hidden">
+      <span>License inactive — view only. Renew to make changes.</span>
+      <button type="button" onclick="openLicenseActivation()">Renew</button>
+    </div>
+    <div id="license-gate-overlay" class="license-overlay hidden">
+      <div class="license-overlay__card">
+        <h2>Activate this clinic</h2>
+        <p>Paste the serial token from your vendor to activate.</p>
+        <textarea id="license-gate-token" rows="4" placeholder="serial token"></textarea>
+        <button type="button" onclick="submitLicenseActivation()">Activate</button>
+        <div id="license-gate-status" class="license-overlay__status"></div>
+      </div>
+    </div>
     <div class="container">
         <div class="header">
             <div class="header-accent-line"></div>
@@ -6918,6 +6947,51 @@ HTML_TEMPLATE = '''
 
         // Load dashboard on page load
         loadDashboard();
+
+        // License gate functions
+        async function applyLicenseGate() {
+            try {
+                const res = await fetch('/api/license/gate');
+                const g = await res.json();
+                const state = g.state || 'active';
+                const overlay = document.getElementById('license-gate-overlay');
+                const renew = document.getElementById('license-renew-banner');
+                const vo = document.getElementById('license-viewonly-banner');
+                document.body.classList.toggle('view-only', state === 'view_only');
+                overlay.classList.toggle('hidden', state !== 'unlicensed');
+                vo.classList.toggle('hidden', state !== 'view_only');
+                if (state === 'grace') {
+                    document.getElementById('license-renew-text').textContent =
+                        'Subscription expired — in grace period until ' + (g.grace_until || '') + '. Renew to avoid interruption.';
+                    renew.classList.remove('hidden');
+                } else {
+                    renew.classList.add('hidden');
+                }
+            } catch (e) { /* offline: leave the app usable, never gate on a fetch error */ }
+        }
+        function openLicenseActivation() {
+            document.getElementById('license-gate-overlay').classList.remove('hidden');
+        }
+        function dismissRenewBanner() {
+            document.getElementById('license-renew-banner').classList.add('hidden');
+        }
+        async function submitLicenseActivation() {
+            const token = (document.getElementById('license-gate-token').value || '').trim();
+            const status = document.getElementById('license-gate-status');
+            if (!token) { status.textContent = 'Please paste your serial token.'; return; }
+            status.textContent = 'Activating...';
+            try {
+                const res = await fetch('/api/license/activate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ serial_token: token })
+                });
+                const body = await res.json();
+                if (!res.ok) { status.textContent = body.error || 'Activation failed.'; return; }
+                window.location.reload();
+            } catch (e) { status.textContent = 'Network error during activation.'; }
+        }
+        document.addEventListener('DOMContentLoaded', applyLicenseGate);
     </script>
 
     <!-- Doctor name edit popover: direct body child to escape backdrop-filter containment -->
