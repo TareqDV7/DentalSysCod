@@ -4563,27 +4563,17 @@ def license_admin():
     return jsonify({'success': True})
 
 
-@app.route('/api/cloud/pair', methods=['POST'])
-def cloud_pair():
-    """Local server only: register this clinic with the cloud node and remember
-    the returned token, then do an immediate first sync. Body: {cloud_url, serial_number}.
-    (cloud_url may be omitted if CLINIC_CLOUD_URL is set in the environment.)"""
-    if CLOUD_MODE:
-        return jsonify({'error': 'Not applicable on the cloud node'}), 400
-    data = request.json or {}
-    cloud_url = str(data.get('cloud_url') or os.environ.get('CLINIC_CLOUD_URL')
-                    or _BAKED_CLOUD_BASE_URL or '').strip().rstrip('/')
-    serial = str(data.get('serial_number') or '').strip().upper()
+def _link_clinic_to_cloud(cloud_url, serial, offline_token):
+    """Register this clinic with the cloud node, persist the returned token, and
+    run a first sync. Returns (response_dict, None) on success or (error_dict,
+    status_code) on failure. Shared by /api/cloud/pair and /api/cloud/enable."""
+    cloud_url = (cloud_url or '').strip().rstrip('/')
+    serial = (serial or '').strip().upper()
     if not cloud_url:
-        return jsonify({'error': 'cloud_url is required'}), 400
+        return {'error': 'No cloud server configured'}, 400
     if len(serial) < 8:
-        return jsonify({'error': 'serial_number must be at least 8 characters'}), 400
+        return {'error': 'serial_number must be at least 8 characters'}, 400
     clinic_name = str(CLINIC_CONFIG.get('CLINIC_NAME') or 'Clinic')
-    # Forward the signed offline_token when one is available, so the cloud's
-    # Ed25519 signature gate accepts this pairing even with
-    # CLINIC_REQUIRE_SIGNED_SERIAL=1 (now the cloud default). Absent → unsigned
-    # request, which a default cloud rejects unless enforcement is turned off.
-    offline_token = _resolve_offline_token(data)
     register_body = {'serial_number': serial, 'clinic_name': clinic_name}
     if offline_token:
         register_body['offline_token'] = offline_token
@@ -4591,9 +4581,9 @@ def cloud_pair():
         status, resp = _cloud_http_request('POST', f'{cloud_url}/api/clinics/register',
                                            body=register_body)
     except Exception as exc:  # noqa: BLE001 - connection error → can't reach
-        return jsonify({'error': f'Could not reach the cloud node: {exc}'}), 502
+        return {'error': f'Could not reach the cloud node: {exc}'}, 502
     if status != 200 or not (isinstance(resp, dict) and resp.get('clinic_token')):
-        return jsonify({'error': f'Cloud registration failed (HTTP {status})', 'detail': resp}), 502
+        return {'error': f'Cloud registration failed (HTTP {status})', 'detail': resp}, 502
 
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -4608,13 +4598,33 @@ def cloud_pair():
     conn.close()
 
     first_sync = _run_cloud_sync_once(cloud_url, resp['clinic_token'])
-    return jsonify({
+    return {
         'success': True,
         'cloud_url': cloud_url,
         'clinic_id': resp.get('clinic_id'),
         'already_registered': resp.get('already_registered'),
         'first_sync': first_sync,
-    })
+    }, None
+
+
+@app.route('/api/cloud/pair', methods=['POST'])
+def cloud_pair():
+    """Local server only: register this clinic with the cloud node and remember
+    the returned token, then do an immediate first sync. Body: {cloud_url, serial_number}.
+    (cloud_url may be omitted if CLINIC_CLOUD_URL is set in the environment.)"""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not applicable on the cloud node'}), 400
+    data = request.json or {}
+    cloud_url = str(data.get('cloud_url') or os.environ.get('CLINIC_CLOUD_URL')
+                    or _BAKED_CLOUD_BASE_URL or '').strip().rstrip('/')
+    serial = str(data.get('serial_number') or '').strip().upper()
+    # Forward the signed offline_token when one is available, so the cloud's
+    # Ed25519 signature gate accepts this pairing even with
+    # CLINIC_REQUIRE_SIGNED_SERIAL=1 (now the cloud default). Absent → unsigned
+    # request, which a default cloud rejects unless enforcement is turned off.
+    offline_token = _resolve_offline_token(data)
+    result, err = _link_clinic_to_cloud(cloud_url, serial, offline_token)
+    return jsonify(result), (err or 200)
 
 
 @app.route('/api/cloud/status')
