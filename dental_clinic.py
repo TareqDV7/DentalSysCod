@@ -231,7 +231,13 @@ _register_attempts_lock = threading.Lock()
 # Ed25519 public key used to verify vendor-signed serials. Base64 (std) of the
 # 32-byte raw public key. The matching private seed never leaves the vendor
 # machine (serial_generator.py). When unset, the signature gate can't run.
-_SERIAL_PUBLIC_KEY_B64 = os.environ.get('CLINIC_SERIAL_PUBLIC_KEY', '').strip()
+# Real vendor Ed25519 public key, baked into the build so the desktop can verify
+# vendor serials with zero env setup. PUBLIC key only — it verifies, never mints.
+# Generate the keypair with `python serial_generator.py --genkey` and paste the
+# printed public key here. The private seed (backend_ed25519_key.json) stays on the
+# vendor machine and is NEVER committed.
+_BAKED_SERIAL_PUBLIC_KEY = 'REPLACE_WITH_REAL_VENDOR_PUBLIC_KEY_BASE64'
+_SERIAL_PUBLIC_KEY_B64 = os.environ.get('CLINIC_SERIAL_PUBLIC_KEY', '').strip() or _BAKED_SERIAL_PUBLIC_KEY
 _REQUIRE_SIGNED_SERIAL = os.environ.get('CLINIC_REQUIRE_SIGNED_SERIAL', '1').strip().lower() in ('1', 'true', 'yes', 'on')
 # Shared secret for the cloud license admin endpoint (revoke/suspend/release a
 # device slot). When unset, the admin endpoint is closed (every call → 401).
@@ -570,6 +576,46 @@ def serialize_offline_license(record, validity, signing_key, device_id=''):
     payload = build_offline_license_payload(record, validity, device_id=device_id)
     token = encode_offline_license_token(payload, signing_key)
     return payload, token
+
+
+def _get_or_create_device_fingerprint(cursor):
+    fp = str(read_app_setting(cursor, 'device_fingerprint', '') or '').strip()
+    if fp:
+        return fp
+    fp = secrets.token_hex(16)
+    write_app_setting(cursor, 'device_fingerprint', fp)
+    return fp
+
+
+def _iso_to_window_date(value):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    try:
+        return datetime.fromisoformat(text.rstrip('Z')).strftime('%Y-%m-%d')
+    except ValueError:
+        return ''
+
+
+def _license_cloud_url():
+    url = os.environ.get('CLINIC_LICENSE_CLOUD_URL', '').strip()
+    if not url:
+        url = _cloud_sync_config()[0] or ''
+    return (url.rstrip('/') or None)
+
+
+def _validate_with_cloud(serial_token, fingerprint, device_name=''):
+    base = _license_cloud_url()
+    if not base:
+        return None
+    body = {'serial_token': serial_token, 'device_fingerprint': fingerprint}
+    if device_name:
+        body['device_name'] = device_name
+    try:
+        _status, payload = _cloud_http_request('POST', f'{base}/api/license/validate', None, body)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def verify_offline_license_token(token, signing_key):
@@ -4732,116 +4778,167 @@ def bt_configure():
 @app.route('/api/license/activate', methods=['POST'])
 def activate_license():
     data = request.json or {}
-    serial_number = str(data.get('serial_number') or '').strip().upper()
-    clinic_name = str(data.get('clinic_name') or '').strip()
-    device_id = str(data.get('device_id') or '').strip()
+    serial_token = str(data.get('serial_token') or '').strip()
     device_name = str(data.get('device_name') or '').strip()
+    if serial_token:
+        return _activate_primary(serial_token, device_name)
+    return _activate_lan_attach(data)
 
+
+def _activate_primary(serial_token, device_name):
+    payload, why = _decode_signed_serial_token(serial_token)
+    if payload is None:
+        msg = {
+            'missing': 'serial token required',
+            'no_key': 'server signing key not configured',
+            'malformed': 'malformed serial token',
+            'bad_signature': 'invalid serial token signature',
+        }.get(why, 'invalid serial token')
+        return jsonify({'error': msg, 'reason': why or 'invalid'}), 403
+
+    serial_number = str(payload.get('serial') or '').strip().upper()
     if len(serial_number) < 8:
         return jsonify({'error': 'Serial number must be at least 8 characters'}), 400
-
+    clinic_name = str(payload.get('clinic_name') or '').strip()
+    plan_name = str(payload.get('plan_name') or 'starter').strip() or 'starter'
     try:
-        max_devices = int(data.get('max_devices', 2))
+        max_devices = max(1, int(payload.get('max_devices') or 1))
     except (TypeError, ValueError):
-        return jsonify({'error': 'max_devices must be a number'}), 400
-
-    if max_devices < 1:
-        return jsonify({'error': 'max_devices must be at least 1'}), 400
-
-    plan_name = str(data.get('plan_name') or 'starter').strip() or 'starter'
-    now_dt = _naive_utc_now()
-    expires_at = (now_dt + timedelta(days=DEFAULT_LICENSE_DAYS)).strftime('%Y-%m-%d')
-    grace_until = (datetime.strptime(expires_at, '%Y-%m-%d') + timedelta(days=DEFAULT_LICENSE_GRACE_DAYS)).strftime('%Y-%m-%d')
+        max_devices = 1
+    status = 'active'
+    expires_at = _iso_to_window_date(payload.get('expires_at'))
+    grace_until = _iso_to_window_date(payload.get('grace_until')) or expires_at
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT serial_number, status, max_devices, expires_at, grace_until FROM licenses WHERE serial_number = ?', (serial_number,))
-    existing = cursor.fetchone()
+    fingerprint = _get_or_create_device_fingerprint(cursor)
 
-    if existing:
-        existing_status = str(existing[1] or 'active')
-        if existing_status in ('revoked', 'suspended'):
+    cloud = _validate_with_cloud(serial_token, fingerprint, device_name)
+    if cloud is not None:
+        if not cloud.get('valid'):
             conn.close()
-            return jsonify({'error': f'License is {existing_status}'}), 403
-
-        cursor.execute('''
-            UPDATE licenses
-            SET clinic_name = ?, plan_name = ?, status = 'active',
-                max_devices = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE serial_number = ?
-        ''', (clinic_name, plan_name, max_devices, serial_number))
-        expires_at = existing[3] or expires_at
-        grace_until = existing[4] or grace_until
+            return jsonify({'error': 'License rejected by server',
+                            'reason': str(cloud.get('reason') or 'invalid')}), 403
+        status = str(cloud.get('status') or 'active')
+        expires_at = _iso_to_window_date(cloud.get('expires_at')) or expires_at
+        grace_until = _iso_to_window_date(cloud.get('grace_until')) or grace_until
+        plan_name = str(cloud.get('plan_name') or plan_name).strip() or plan_name
+        try:
+            max_devices = max(1, int(cloud.get('max_devices') or max_devices))
+        except (TypeError, ValueError):
+            pass
     else:
-        cursor.execute('''
-            INSERT INTO licenses (
-                serial_number, clinic_name, plan_name, status,
-                max_devices, expires_at, grace_until, activated_at, updated_at
-            )
-            VALUES (?, ?, ?, 'active', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ''', (serial_number, clinic_name, plan_name, max_devices, expires_at, grace_until))
+        window = evaluate_license_window(status, expires_at, grace_until)
+        if not window['licensed']:
+            conn.close()
+            return jsonify({'error': 'License expired', 'reason': 'expired'}), 403
 
-    if device_id:
-        cursor.execute('SELECT max_devices FROM licenses WHERE serial_number = ?', (serial_number,))
-        license_row = cursor.fetchone()
-        limit_count = int(license_row[0] or 1)
+    cursor.execute('''
+        INSERT INTO licenses (
+            serial_number, clinic_name, plan_name, status,
+            max_devices, expires_at, grace_until, activated_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(serial_number) DO UPDATE SET
+            clinic_name = excluded.clinic_name,
+            plan_name   = excluded.plan_name,
+            status      = excluded.status,
+            max_devices = excluded.max_devices,
+            expires_at  = excluded.expires_at,
+            grace_until = excluded.grace_until,
+            updated_at  = CURRENT_TIMESTAMP
+    ''', (serial_number, clinic_name, plan_name, status, max_devices, expires_at, grace_until))
 
-        cursor.execute('''
-            SELECT 1 FROM license_devices
-            WHERE serial_number = ? AND device_id = ?
-        ''', (serial_number, device_id))
-        existing_binding = cursor.fetchone()
-
-        if not existing_binding:
-            cursor.execute('''
-                SELECT COUNT(*) FROM license_devices
-                WHERE serial_number = ? AND is_active = 1
-            ''', (serial_number,))
-            active_device_count = int(cursor.fetchone()[0] or 0)
-            if active_device_count >= limit_count:
-                conn.close()
-                return jsonify({'error': f'Max active devices reached ({limit_count})'}), 403
-
-        cursor.execute('''
-            INSERT INTO license_devices (serial_number, device_id, device_name, first_seen_at, last_seen_at, is_active)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
-            ON CONFLICT(serial_number, device_id) DO UPDATE SET
-                device_name = excluded.device_name,
-                last_seen_at = CURRENT_TIMESTAMP,
-                is_active = 1
-        ''', (serial_number, device_id, device_name))
+    cursor.execute('''
+        INSERT INTO license_devices (serial_number, device_id, device_name, first_seen_at, last_seen_at, is_active)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
+        ON CONFLICT(serial_number, device_id) DO UPDATE SET
+            device_name = excluded.device_name,
+            last_seen_at = CURRENT_TIMESTAMP,
+            is_active = 1
+    ''', (serial_number, fingerprint, device_name or 'clinic-server'))
 
     write_app_setting(cursor, 'active_serial_number', serial_number)
     append_audit_log(cursor, 'activate', 'license', None, {
-        'serial_number': serial_number,
-        'clinic_name': clinic_name,
-        'plan_name': plan_name,
-        'device_id': device_id
+        'serial_number': serial_number, 'clinic_name': clinic_name,
+        'plan_name': plan_name, 'device_id': fingerprint,
+        'source': 'cloud' if cloud is not None else 'offline-token',
     })
-    # Create a device-bound offline license token (if possible)
+
     signing_key = get_or_create_license_signing_key(cursor)
     record = fetch_license_record(cursor, serial_number)
     offline_license_token = ''
     offline_license_payload = {}
     if record:
         validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
-        offline_license_payload, offline_license_token = serialize_offline_license(record, validity, signing_key, device_id=device_id)
+        offline_license_payload, offline_license_token = serialize_offline_license(
+            record, validity, signing_key, device_id=fingerprint)
 
     conn.commit()
     conn.close()
 
-    resp = {
-        'success': True,
-        'serial_number': serial_number,
-        'plan_name': plan_name,
-        'expires_at': expires_at,
-        'grace_until': grace_until
-    }
+    resp = {'success': True, 'serial_number': serial_number, 'plan_name': plan_name,
+            'expires_at': expires_at, 'grace_until': grace_until}
     if offline_license_token:
         resp['offline_license_token'] = offline_license_token
         resp['offline_license'] = offline_license_payload
-
     return jsonify(resp)
+
+
+def _activate_lan_attach(data):
+    serial_number = str(data.get('serial_number') or '').strip().upper()
+    device_id = str(data.get('device_id') or '').strip()
+    device_name = str(data.get('device_name') or '').strip()
+    if len(serial_number) < 8:
+        return jsonify({'error': 'Serial number must be at least 8 characters'}), 400
+    if not device_id:
+        return jsonify({'error': 'device_id is required to attach a device'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    record = fetch_license_record(cursor, serial_number)
+    if not record:
+        conn.close()
+        return jsonify({'error': 'Activate on the clinic server first',
+                        'reason': 'not_activated'}), 403
+
+    validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
+    if not validity['licensed']:
+        conn.close()
+        return jsonify({'error': 'License is not active', 'status': record['status']}), 403
+
+    limit_count = max(1, int(record['max_devices'] or 1))
+    cursor.execute('SELECT 1 FROM license_devices WHERE serial_number = ? AND device_id = ?',
+                   (serial_number, device_id))
+    is_member = cursor.fetchone() is not None
+    if not is_member:
+        cursor.execute('SELECT COUNT(*) FROM license_devices WHERE serial_number = ? AND is_active = 1',
+                       (serial_number,))
+        if int(cursor.fetchone()[0] or 0) >= limit_count:
+            conn.close()
+            return jsonify({'error': f'Max active devices reached ({limit_count})'}), 403
+
+    cursor.execute('''
+        INSERT INTO license_devices (serial_number, device_id, device_name, first_seen_at, last_seen_at, is_active)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
+        ON CONFLICT(serial_number, device_id) DO UPDATE SET
+            device_name = excluded.device_name,
+            last_seen_at = CURRENT_TIMESTAMP,
+            is_active = 1
+    ''', (serial_number, device_id, device_name))
+    append_audit_log(cursor, 'attach', 'license', None,
+                     {'serial_number': serial_number, 'device_id': device_id})
+
+    signing_key = get_or_create_license_signing_key(cursor)
+    record = fetch_license_record(cursor, serial_number)
+    validity = evaluate_license_window(record['status'], record['expires_at'], record['grace_until'])
+    offline_license_payload, offline_license_token = serialize_offline_license(
+        record, validity, signing_key, device_id=device_id)
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'serial_number': serial_number,
+                    'offline_license_token': offline_license_token,
+                    'offline_license': offline_license_payload})
 
 
 @app.route('/api/license/login', methods=['POST'])
