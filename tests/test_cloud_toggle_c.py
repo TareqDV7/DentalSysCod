@@ -38,3 +38,32 @@ def test_cloud_pair_still_works(local, monkeypatch):
     conn = sqlite3.connect(dental_clinic.DB_NAME)
     assert conn.execute("SELECT value FROM app_settings WHERE key='cloud_clinic_token'").fetchone()[0] == 'tok-xyz'
     conn.close()
+
+
+def _set_setting(key, value):
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+    conn.commit(); conn.close()
+
+
+def test_enable_without_license_409(local):
+    r = local.post('/api/cloud/enable')
+    assert r.status_code == 409
+    assert r.get_json()['reason'] == 'not_activated'
+
+
+def test_enable_uses_active_serial_and_baked_url(local, monkeypatch):
+    sink = {}
+    _stub_cloud_ok(monkeypatch, sink)
+    _set_setting('active_serial_number', 'DENTAL-C-EN1')
+    _set_setting('active_serial_token', 'signed.token.here')
+    r = local.post('/api/cloud/enable')
+    assert r.status_code == 200
+    # registered against the baked base, with the active serial + retained token forwarded
+    assert sink['url'].startswith(dental_clinic._BAKED_CLOUD_BASE_URL)
+    assert sink['body']['serial_number'] == 'DENTAL-C-EN1'
+    assert sink['body']['offline_token'] == 'signed.token.here'
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    assert conn.execute("SELECT value FROM app_settings WHERE key='cloud_clinic_token'").fetchone()[0] == 'tok-xyz'
+    conn.close()

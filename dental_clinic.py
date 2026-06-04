@@ -4627,6 +4627,25 @@ def cloud_pair():
     return jsonify(result), (err or 200)
 
 
+@app.route('/api/cloud/enable', methods=['POST'])
+def cloud_enable():
+    """Toggle-on: link to the cloud using the already-activated serial + retained
+    signed token and the baked/configured URL. Zero inputs — sync only, no license
+    change."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not applicable on the cloud node'}), 400
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    serial = str(read_app_setting(cur, 'active_serial_number', '') or '').strip().upper()
+    token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
+    conn.close()
+    if not serial:
+        return jsonify({'error': 'Activate a license first', 'reason': 'not_activated'}), 409
+    cloud_url = _license_cloud_url()
+    result, err = _link_clinic_to_cloud(cloud_url, serial, token)
+    return jsonify(result), (err or 200)
+
+
 @app.route('/api/cloud/status')
 def cloud_status():
     conn = sqlite3.connect(DB_NAME)
