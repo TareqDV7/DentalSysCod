@@ -70,6 +70,12 @@ from markupsafe import escape
 
 
 app = Flask(__name__)
+from werkzeug.middleware.proxy_fix import ProxyFix
+# One proxy hop (Caddy) in the cloud deployment. Makes request.remote_addr and
+# the register/validate rate limiter trust only the last hop's X-Forwarded-For
+# entry, not a client-spoofed one. Harmless on the local server (no proxy →
+# no X-Forwarded-For → remote_addr is the direct peer as before).
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # CORS is only needed where a browser on a different origin would call the
 # JSON API — that's only the local clinic server (mobile uses the HTTP API
 # without a browser, so CORS doesn't apply to it). The staff web portal is
@@ -272,9 +278,9 @@ def _verify_serial_token(serial, token):
 
 
 def _client_ip():
-    fwd = request.headers.get('X-Forwarded-For', '')
-    if fwd:
-        return fwd.split(',')[0].strip()
+    # ProxyFix (wired at import) has already rewritten remote_addr from the
+    # trusted proxy's X-Forwarded-For, so trust it directly. Parsing the raw
+    # header here would re-open spoofing of the leading entry.
     return request.remote_addr or 'unknown'
 
 

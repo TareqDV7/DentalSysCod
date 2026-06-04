@@ -174,3 +174,21 @@ def test_admin_release_frees_slot(cloud, monkeypatch):
     cloud.post('/api/license/admin/revoke', headers={'X-Admin-Token': 'secret'},
                json={'serial': s, 'device_fingerprint': 'phone-A', 'release': True})
     assert _validate(cloud, _sign(cloud, s, max_devices=1), fp='phone-B').get_json()['valid'] is True
+
+
+def test_proxyfix_is_wired():
+    # The WSGI app must be wrapped in ProxyFix so request.remote_addr is taken
+    # from the trusted proxy's X-Forwarded-For (one hop) on real requests.
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    assert isinstance(dental_clinic.app.wsgi_app, ProxyFix)
+
+
+def test_client_ip_trusts_remote_addr_not_spoofed_xff():
+    # ProxyFix corrects request.remote_addr to the real client. _client_ip must
+    # trust that corrected value, NOT a client-spoofable leading X-Forwarded-For
+    # entry (which would let an attacker evade the register/validate rate limit).
+    with dental_clinic.app.test_request_context(
+            '/api/license/validate',
+            environ_overrides={'HTTP_X_FORWARDED_FOR': '1.2.3.4',   # attacker-supplied
+                               'REMOTE_ADDR': '203.0.113.9'}):       # proxy-corrected
+        assert dental_clinic._client_ip() == '203.0.113.9'
