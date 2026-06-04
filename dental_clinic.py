@@ -70,12 +70,21 @@ from markupsafe import escape
 
 
 app = Flask(__name__)
-from werkzeug.middleware.proxy_fix import ProxyFix
-# One proxy hop (Caddy) in the cloud deployment. Makes request.remote_addr and
-# the register/validate rate limiter trust only the last hop's X-Forwarded-For
-# entry, not a client-spoofed one. Harmless on the local server (no proxy →
-# no X-Forwarded-For → remote_addr is the direct peer as before).
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+
+def _wrap_proxyfix_if_cloud(flask_app, cloud_mode):
+    """In cloud mode the app sits behind one Caddy hop, so wrap the WSGI app in
+    ProxyFix(x_for=1): request.remote_addr (and the register/validate rate
+    limiter) then trust the proxy's X-Forwarded-For, not a client-spoofed one.
+    Local servers get NO ProxyFix, so a direct peer can't forge remote_addr via a
+    self-supplied X-Forwarded-For. Returns the (possibly wrapped) wsgi callable."""
+    if not cloud_mode:
+        return flask_app.wsgi_app
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    return ProxyFix(flask_app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+
+# ProxyFix is wired once CLOUD_MODE is known (see below).
 # CORS is only needed where a browser on a different origin would call the
 # JSON API — that's only the local clinic server (mobile uses the HTTP API
 # without a browser, so CORS doesn't apply to it). The staff web portal is
@@ -154,6 +163,7 @@ _DATA_DIR.mkdir(parents=True, exist_ok=True)
 # every existing `sqlite3.connect(DB_NAME)` handler works unchanged. Off (the
 # default — i.e. the clinic's own local server), none of this is active.
 CLOUD_MODE = os.environ.get('CLINIC_CLOUD_MODE', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+app.wsgi_app = _wrap_proxyfix_if_cloud(app, CLOUD_MODE)
 MASTER_DB_PATH = str(_DATA_DIR / 'cloud_master.db')
 _request_state = threading.local()
 
@@ -229,42 +239,64 @@ _ADMIN_API_TOKEN = os.environ.get('CLINIC_ADMIN_API_TOKEN', '').strip()
 
 
 def _serial_public_key():
-    """Return an Ed25519PublicKey, or None if not configured."""
+    """Return an Ed25519PublicKey, or None if not configured / unparseable."""
     if not _SERIAL_PUBLIC_KEY_B64:
         return None
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         return Ed25519PublicKey.from_public_bytes(base64.b64decode(_SERIAL_PUBLIC_KEY_B64))
-    except Exception:  # noqa: BLE001
+    except (ValueError, binascii.Error) as exc:
+        # Key is set but malformed (bad base64 / wrong length) — log it so the
+        # operator sees a real cause instead of a misleading "not configured".
+        app.logger.error('CLINIC_SERIAL_PUBLIC_KEY is set but invalid: %s', exc)
         return None
 
 
-def _verify_serial_token(serial, token):
-    """Return (ok, reason, payload). Verifies the Ed25519 vendor signature on
-    ``token`` (payload.signature, base64url), that its payload's ``serial`` equals
-    ``serial``, and that grace_until (if present) is in the future and well-formed."""
+def _decode_signed_serial_token(token):
+    """Decode + Ed25519-verify a vendor serial token (``payload.signature``,
+    base64url). Returns (payload|None, reason) where reason is '' on success or
+    one of 'missing' / 'no_key' / 'malformed' / 'bad_signature'. Callers layer
+    their own serial-match / grace / status policy on the verified payload. This
+    is the single source of truth for token verification (used by both
+    _verify_serial_token and the /api/license/validate endpoint)."""
     if not token:
-        return False, 'serial token required', None
+        return None, 'missing'
     pub = _serial_public_key()
     if pub is None:
-        return False, 'server signing key not configured', None
+        return None, 'no_key'
     try:
         from cryptography.exceptions import InvalidSignature
         payload_part, sig_part = str(token).split('.', 1)
         payload_bytes = base64.urlsafe_b64decode(payload_part + '=' * (-len(payload_part) % 4))
         sig = base64.urlsafe_b64decode(sig_part + '=' * (-len(sig_part) % 4))
     except (ValueError, binascii.Error):
-        return False, 'malformed serial token', None
+        return None, 'malformed'
     try:
         pub.verify(sig, payload_bytes)
     except InvalidSignature:
-        return False, 'invalid serial token signature', None
+        return None, 'bad_signature'
     try:
         payload = json.loads(payload_bytes.decode('utf-8'))
     except (ValueError, UnicodeDecodeError):
-        return False, 'malformed serial token payload', None
+        return None, 'malformed'
     if not isinstance(payload, dict):
-        return False, 'malformed serial token payload', None
+        return None, 'malformed'
+    return payload, ''
+
+
+def _verify_serial_token(serial, token):
+    """Return (ok, reason, payload). Verifies the Ed25519 vendor signature on
+    ``token``, that its payload's ``serial`` equals ``serial``, and that
+    grace_until (if present) is in the future and well-formed."""
+    payload, why = _decode_signed_serial_token(token)
+    if payload is None:
+        reason = {
+            'missing': 'serial token required',
+            'no_key': 'server signing key not configured',
+            'malformed': 'malformed serial token',
+            'bad_signature': 'invalid serial token signature',
+        }.get(why, 'invalid serial token')
+        return False, reason, None
     if str(payload.get('serial') or '').strip().upper() != serial.strip().upper():
         return False, 'serial token does not match this serial', None
     grace = str(payload.get('grace_until') or '').strip()
@@ -310,15 +342,17 @@ def _resolve_clinic_token():
 
 
 def _resolve_offline_token(request_body=None):
-    """Local server: find the HMAC-signed offline_token to forward to the cloud's
-    /api/clinics/register gate, in precedence order:
+    """Local server: find the Ed25519 vendor-signed offline_token to forward to
+    the cloud's /api/clinics/register gate, in precedence order:
       1. the /api/cloud/pair request body  (operator pasting it once)
       2. app_settings['cloud_offline_token']  (persisted from a prior pair)
       3. env CLINIC_OFFLINE_TOKEN
-    Returns '' when none is configured — pairing then sends an unsigned request,
-    which the cloud accepts unless it has CLINIC_REQUIRE_SIGNED_SERIAL=1.
-    This is the token issued by serial_generator.py (signed with the cloud's
-    CLINIC_SERIAL_SIGNING_KEY), not the locally-signed offline license token."""
+    Returns '' when none is configured. The cloud now requires a signed serial by
+    default (CLINIC_REQUIRE_SIGNED_SERIAL=1), so an unsigned pairing request is
+    rejected unless the cloud operator has explicitly turned enforcement off.
+    This is the token issued by serial_generator.py (signed with the vendor's
+    Ed25519 private seed; the cloud verifies it with CLINIC_SERIAL_PUBLIC_KEY),
+    not the locally-signed offline license token."""
     body = request_body if isinstance(request_body, dict) else {}
     token = str(body.get('offline_token') or '').strip()
     if token:
@@ -4270,24 +4304,17 @@ def validate_license():
     device_name = str(data.get('device_name') or '').strip()
     if not token or not fingerprint:
         return jsonify({'error': 'serial_token and device_fingerprint are required'}), 400
+    if len(fingerprint) > 256 or len(device_name) > 256:
+        return jsonify({'error': 'device_fingerprint / device_name too long'}), 400
 
-    pub = _serial_public_key()
-    if pub is None:
-        app.logger.error('validate_license: CLINIC_SERIAL_PUBLIC_KEY not configured')
+    payload, why = _decode_signed_serial_token(token)
+    if why == 'no_key':
+        app.logger.error('validate_license: CLINIC_SERIAL_PUBLIC_KEY not configured/invalid')
         return jsonify({'error': 'Server signing key not configured'}), 500
-    try:
-        from cryptography.exceptions import InvalidSignature
-        payload_part, sig_part = token.split('.', 1)
-        payload_bytes = base64.urlsafe_b64decode(payload_part + '=' * (-len(payload_part) % 4))
-        sig = base64.urlsafe_b64decode(sig_part + '=' * (-len(sig_part) % 4))
-        pub.verify(sig, payload_bytes)
-        payload = json.loads(payload_bytes.decode('utf-8'))
-    except (ValueError, binascii.Error, UnicodeDecodeError):
-        return jsonify({'valid': False, 'reason': 'malformed'})
-    except InvalidSignature:
-        return jsonify({'valid': False, 'reason': 'bad_signature'})
-    if not isinstance(payload, dict):
-        return jsonify({'valid': False, 'reason': 'malformed'})
+    if payload is None:
+        # 'malformed' or 'bad_signature' — a 200 with valid=false, by contract
+        # (the mobile/local client always reads the body's `valid` flag).
+        return jsonify({'valid': False, 'reason': why})
 
     serial = str(payload.get('serial') or '').strip().upper()
     if len(serial) < 8:
@@ -4311,8 +4338,11 @@ def validate_license():
                  expires_at, grace_until))
         else:
             status, max_devices, expires_at, grace_until, plan_name = row
-            # Renewal: a later-signed token extends the window and reactivates.
-            if token_exp and (not expires_at or token_exp > expires_at):
+            # Renewal: a later-signed token extends the window and reactivates an
+            # expired serial. A revoked/suspended serial is never touched or
+            # reactivated by a renewal — the status gate below blocks it.
+            if (status not in ('revoked', 'suspended')
+                    and token_exp and (not expires_at or token_exp > expires_at)):
                 expires_at = token_exp
                 grace_until = payload.get('grace_until')
                 max_devices = int(payload.get('max_devices') or max_devices)
@@ -4380,8 +4410,15 @@ def license_admin():
     active), or release a device slot (release=true frees one fingerprint)."""
     if not CLOUD_MODE:
         return jsonify({'error': 'Not available on a local server'}), 404
-    supplied = (request.headers.get('X-Admin-Token') or '').strip()
-    if not _ADMIN_API_TOKEN or not hmac.compare_digest(supplied, _ADMIN_API_TOKEN):
+    limited = _check_register_rate_limit()
+    if limited is not None:
+        return limited
+    # Compare as bytes: hmac.compare_digest raises TypeError on non-ASCII str
+    # (which Flask would turn into a 500). Encoding both sides keeps the
+    # comparison constant-time and always returns a clean 401 on mismatch.
+    supplied = (request.headers.get('X-Admin-Token') or '').strip().encode('utf-8', 'replace')
+    expected = _ADMIN_API_TOKEN.encode('utf-8') if _ADMIN_API_TOKEN else b''
+    if not expected or not hmac.compare_digest(supplied, expected):
         return jsonify({'error': 'admin token required'}), 401
     data = request.json or {}
     serial = str(data.get('serial') or '').strip().upper()
@@ -4421,9 +4458,9 @@ def cloud_pair():
         return jsonify({'error': 'serial_number must be at least 8 characters'}), 400
     clinic_name = str(CLINIC_CONFIG.get('CLINIC_NAME') or 'Clinic')
     # Forward the signed offline_token when one is available, so the cloud's
-    # HMAC gate accepts this pairing even with CLINIC_REQUIRE_SIGNED_SERIAL=1.
-    # Absent (the default today) → unsigned request, which the cloud still
-    # accepts while enforcement is off.
+    # Ed25519 signature gate accepts this pairing even with
+    # CLINIC_REQUIRE_SIGNED_SERIAL=1 (now the cloud default). Absent → unsigned
+    # request, which a default cloud rejects unless enforcement is turned off.
     offline_token = _resolve_offline_token(data)
     register_body = {'serial_number': serial, 'clinic_name': clinic_name}
     if offline_token:

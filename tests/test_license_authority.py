@@ -152,6 +152,9 @@ def test_device_cap_atomic_under_concurrency(cloud):
     active = conn.execute("SELECT COUNT(*) FROM license_device_slots WHERE serial=? AND is_active=1", (s,)).fetchone()[0]
     conn.close()
     assert active <= 2, f'cap exceeded: {active} active slots'
+    # Exactly one racer should win the single remaining slot (1 pre-used, cap 2);
+    # this also proves the gate didn't vacuously reject everyone.
+    assert results.count(True) == 1, f'expected exactly 1 winner, got {results.count(True)}'
 
 
 def test_admin_revoke_requires_token(cloud, monkeypatch):
@@ -176,11 +179,32 @@ def test_admin_release_frees_slot(cloud, monkeypatch):
     assert _validate(cloud, _sign(cloud, s, max_devices=1), fp='phone-B').get_json()['valid'] is True
 
 
-def test_proxyfix_is_wired():
-    # The WSGI app must be wrapped in ProxyFix so request.remote_addr is taken
-    # from the trusted proxy's X-Forwarded-For (one hop) on real requests.
+def test_validate_revoked_ignores_newer_token(cloud, monkeypatch):
+    # A revoked serial must NOT be reactivated (or silently extended) by a
+    # later-signed renewal token — the status gate wins.
+    monkeypatch.setattr(dental_clinic, '_ADMIN_API_TOKEN', 'secret')
+    s = 'DENTAL-REVNEW-1'
+    _validate(cloud, _sign(cloud, s, expiry_days=10))      # register, active
+    cloud.post('/api/license/admin/revoke', headers={'X-Admin-Token': 'secret'},
+               json={'serial': s, 'status': 'revoked'})
+    body = _validate(cloud, _sign(cloud, s, expiry_days=365)).get_json()   # renewal attempt
+    assert body['valid'] is False and body['reason'] == 'revoked'
+    conn = sqlite3.connect(dental_clinic.MASTER_DB_PATH)
+    status, expires_at = conn.execute(
+        "SELECT status, expires_at FROM license_serials WHERE serial=?", (s,)).fetchone()
+    conn.close()
+    assert status == 'revoked'  # not flipped back to active by the newer token
+
+
+def test_proxyfix_wraps_only_in_cloud_mode():
+    # Cloud (behind Caddy) → ProxyFix wraps the WSGI app so remote_addr is
+    # proxy-corrected. Local (no proxy) → NOT wrapped, so a direct client can't
+    # forge remote_addr via a self-supplied X-Forwarded-For.
     from werkzeug.middleware.proxy_fix import ProxyFix
-    assert isinstance(dental_clinic.app.wsgi_app, ProxyFix)
+    from flask import Flask
+    probe = Flask('proxyfix-probe')
+    assert not isinstance(dental_clinic._wrap_proxyfix_if_cloud(probe, False), ProxyFix)
+    assert isinstance(dental_clinic._wrap_proxyfix_if_cloud(probe, True), ProxyFix)
 
 
 def test_client_ip_trusts_remote_addr_not_spoofed_xff():

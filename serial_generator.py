@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import base64
+import binascii
 import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,7 +58,7 @@ def verify_serial_token(token: str, public_key_b64: str) -> tuple[bool, dict | N
         payload_part, sig_part = str(token).split('.', 1)
         payload_bytes = _b64u_decode(payload_part)
         sig = _b64u_decode(sig_part)
-    except (ValueError, base64.binascii.Error):
+    except (ValueError, binascii.Error):
         return False, None
     try:
         pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
@@ -163,7 +164,7 @@ def load_private_seed(key_file: str) -> str:
     file is missing or malformed — there is NO demo-key fallback."""
     if not key_file or not os.path.exists(key_file):
         raise FileNotFoundError(f'Signing key file not found: {key_file}')
-    with open(key_file, 'r') as f:
+    with open(key_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     seed = str(data.get('private') or '').strip()
     if not seed:
@@ -256,7 +257,7 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] == '--genkey':
         priv_b64, pub_b64 = generate_keypair()
         out = sys.argv[2] if len(sys.argv) >= 3 else 'backend_ed25519_key.json'
-        with open(out, 'w') as f:
+        with open(out, 'w', encoding='utf-8') as f:
             json.dump({'alg': 'ed25519', 'private': priv_b64}, f)
         print(f'Private seed written to {out} (KEEP SAFE, gitignored).')
         print(f'Public key (set CLINIC_SERIAL_PUBLIC_KEY on the cloud):\n{pub_b64}')
