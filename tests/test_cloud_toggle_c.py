@@ -67,3 +67,33 @@ def test_enable_uses_active_serial_and_baked_url(local, monkeypatch):
     conn = sqlite3.connect(dental_clinic.DB_NAME)
     assert conn.execute("SELECT value FROM app_settings WHERE key='cloud_clinic_token'").fetchone()[0] == 'tok-xyz'
     conn.close()
+
+
+def _license_count():
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    n = conn.execute("SELECT COUNT(*) FROM licenses").fetchone()[0]
+    conn.close()
+    return n
+
+
+def dental_clinic_active_serial():
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    row = conn.execute("SELECT value FROM app_settings WHERE key='active_serial_number'").fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def test_enable_does_not_touch_license(local, monkeypatch):
+    sink = {}
+    _stub_cloud_ok(monkeypatch, sink)
+    _set_setting('active_serial_number', 'DENTAL-C-DEC')
+    before = _license_count()
+    local.post('/api/cloud/enable')
+    assert _license_count() == before                  # enable never writes licenses
+    assert dental_clinic_active_serial() == 'DENTAL-C-DEC'
+
+
+def test_unpair_does_not_touch_license(local):
+    _set_setting('active_serial_number', 'DENTAL-C-DEC2')
+    local.post('/api/cloud/unpair')
+    assert dental_clinic_active_serial() == 'DENTAL-C-DEC2'   # unpair leaves the license alone
