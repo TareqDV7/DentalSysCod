@@ -5099,6 +5099,16 @@ def license_status():
         conn.close()
         return jsonify({'licensed': False, 'message': 'Active serial not found'})
 
+    device_id = str(request.args.get('device_id') or '').strip()
+    if device_id:
+        cursor.execute(
+            'SELECT 1 FROM license_devices WHERE serial_number = ? AND device_id = ? AND is_active = 1',
+            (record['serial_number'], device_id))
+        if cursor.fetchone() is None:
+            conn.close()
+            return jsonify({'licensed': False, 'reason': 'device_not_recognized',
+                            'serial_number': record['serial_number']})
+
     cursor.execute('''
         SELECT COUNT(*)
         FROM license_devices
