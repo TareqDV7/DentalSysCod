@@ -102,13 +102,16 @@ python serial_generator.py \
 
 ---
 
-### Example 4: Using Backend Signing Key
+### Example 4: Signing key (required — Ed25519)
 ```bash
+# one-time: generate the vendor keypair
+python serial_generator.py --genkey            # → backend_ed25519_key.json (+ prints public key)
+
 python serial_generator.py \
   --clinic "Smile Dental" \
   --code "SMD" \
   --device "LAPTOP-001" \
-  --key-file backend_key.json
+  --key-file backend_ed25519_key.json
 ```
 
 ---
@@ -168,9 +171,9 @@ All generated tokens are valid and include:
 
 ## 🔐 Security Notes
 
-- Each serial locked to ONE device (non-transferable)
-- Tokens are HMAC-signed (can't be forged)
-- Keep backend signing key secure
+- Each serial carries a device_id; the cloud caps active devices per serial
+- Tokens are Ed25519-signed (can't be forged without the vendor private seed)
+- Keep `backend_ed25519_key.json` (the private seed) secure and offline
 - Don't share CSV files publicly
 - Document which serial went to which clinic/device
 

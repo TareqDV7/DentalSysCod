@@ -64,8 +64,10 @@ curl -s https://app.dentacare.tech/api/system/readiness
 # register a clinic (returns clinic_id + clinic_token — store the token on that clinic's local server):
 curl -s -X POST https://app.dentacare.tech/api/clinics/register \
   -H 'Content-Type: application/json' \
-  -d '{"serial_number":"SERIAL-XXXX-0001","clinic_name":"Demo Clinic"}'
+  -d '{"serial_number":"SERIAL-XXXX-0001","clinic_name":"Demo Clinic","offline_token":"<ed25519 token>"}'
 ```
+
+> With the signed-serial gate on (the default — `CLINIC_REQUIRE_SIGNED_SERIAL=1`), registration requires a valid `offline_token`; a bare request returns `403`. Generate the keypair + a token first (see *Signed serials* below), or set `CLINIC_REQUIRE_SIGNED_SERIAL=0` for an unsigned smoke test.
 
 ## Updating the app
 
@@ -92,54 +94,83 @@ Set in `cloud/docker-compose.yml` (`services.app.environment`) or the `Dockerfil
 | `CLINIC_BACKUP_RETENTION` | `20` | Most recent N snapshots kept per tenant subfolder; older ones are pruned. |
 | `CLINIC_REGISTER_RATE_LIMIT` | `10` | Max successful + failed `/api/clinics/register` attempts per source IP within the rate window. Set `0` to disable. |
 | `CLINIC_REGISTER_RATE_WINDOW` | `3600` | Rate-limit window for the above, in seconds. |
-| `CLINIC_SERIAL_SIGNING_KEY` | _(unset)_ | Base64-encoded HMAC key matching the one used by `serial_generator.py`. When set, registration verifies an `offline_token` if the client sends one. |
-| `CLINIC_REQUIRE_SIGNED_SERIAL` | `0` | If `1`, **rejects** registration unless a valid `offline_token` (signed by the key above) is provided. Default off so existing demo serials keep registering during rollout. |
+| `CLINIC_SERIAL_PUBLIC_KEY` | _(unset)_ | Base64 Ed25519 **public** key from `serial_generator.py --genkey`. The cloud verifies vendor-signed serials with it (the matching private seed never leaves the vendor machine). Required whenever the signed-serial gate is on. |
+| `CLINIC_REQUIRE_SIGNED_SERIAL` | `1` | On by default: `/api/clinics/register` and `/api/license/validate` **reject** serials without a valid Ed25519 signature. Set `0` only to accept unsigned serials (e.g. a transitional rollout — see below). |
+| `CLINIC_ADMIN_API_TOKEN` | _(unset)_ | Shared secret gating `POST /api/license/admin/revoke` (sent as `X-Admin-Token`). Unset → the admin endpoint is **closed** (every call returns `401`). Use a high-entropy value, e.g. `openssl rand -base64 32`. |
 
 > The cloud node intentionally does **not** seed a staff admin user — the staff portal isn't served here, so `CLINIC_ADMIN_PASSWORD` is unused in `CLINIC_CLOUD_MODE=1`.
 
 The hostname for TLS lives in `cloud/Caddyfile` (`app.dentacare.tech`) — change it there if the domain changes, then `docker compose up -d caddy`.
 
-## Enabling signed-serial enforcement
+> **`X-Forwarded-For` / client IP.** In cloud mode the app wraps its WSGI stack in `ProxyFix(x_for=1)`, so `request.remote_addr` (and the register/validate rate limiter) reflect the real client behind Caddy. This assumes exactly **one** proxy hop and that Caddy **appends** the connecting IP to `X-Forwarded-For` — which is `reverse_proxy`'s default. Do **not** configure a `header_up X-Forwarded-For` that passes the client's header through unchanged, or a client could spoof its source IP and evade the rate limit.
 
-By default `/api/clinics/register` accepts any unique serial (≥ 8 chars). To require that every registering clinic present an HMAC-signed `offline_token` (issued by `serial_generator.py`), roll out in two stages so nothing breaks mid-flight.
+## Signed serials (Ed25519) — keys and rollout
 
-**Prerequisite — both the desktop *and* mobile clients must forward a signed token first.** The cloud only checks what it receives; a local server pairs via `POST /api/cloud/pair`, which forwards the `offline_token` it resolves in this order: the pair request body → `app_settings['cloud_offline_token']` → env `CLINIC_OFFLINE_TOKEN`. **Do not set `CLINIC_REQUIRE_SIGNED_SERIAL=1` until every local server (and any mobile client that registers directly) is configured with its signed token** — otherwise their pairing will be rejected with `403`.
+Signed serials are **on by default** (`CLINIC_REQUIRE_SIGNED_SERIAL=1`): `/api/clinics/register` and the `/api/license/validate` authority reject any serial not accompanied by a valid Ed25519-signed token. The vendor signs serials with a **private seed**; the cloud verifies them with the matching **public key**. There is no demo/default key — a missing key fails loudly.
 
-1. **Generate the signing key** (once, kept secret — this is what `serial_generator.py` signs with):
+1. **Generate the vendor keypair** (once, on the vendor machine — *not* the droplet):
 
    ```bash
-   openssl rand -base64 32        # → put the output in CLINIC_SERIAL_SIGNING_KEY
+   python serial_generator.py --genkey        # → backend_ed25519_key.json (the PRIVATE seed)
+   # also prints the public key on stdout
    ```
 
-   Store it in `cloud/.env` on the droplet (gitignored, `chmod 600`) — **never** commit it or paste it into `docker-compose.yml`:
+   Keep `backend_ed25519_key.json` offline and secret (it's git-ignored). Anyone who holds it can mint valid serials.
+
+2. **Set the public key on the cloud.** Put only the printed **public** key in `cloud/.env` on the droplet (gitignored, `chmod 600`) — never the private seed:
 
    ```bash
    # cloud/.env
-   CLINIC_SERIAL_SIGNING_KEY=<the base64 string above>
-   CLINIC_REQUIRE_SIGNED_SERIAL=0      # stage 1: verify-if-present, don't reject yet
+   CLINIC_SERIAL_PUBLIC_KEY=<the public key printed by --genkey>
+   CLINIC_REQUIRE_SIGNED_SERIAL=1                  # the default
+   CLINIC_ADMIN_API_TOKEN=<openssl rand -base64 32>
    ```
 
-2. **Issue signed tokens** for each clinic with the matching key, and load the token onto each local server:
+3. **Issue signed serials** with the private seed, and load each token onto its clinic's local server:
 
    ```bash
-   # backend_key.json holds {"key": "<same base64 string>"}
    python serial_generator.py --clinic "Smile Dental" --code "SMD" \
-     --device "SERVER-ID" --key-file backend_key.json
+     --device "SERVER-ID" --key-file backend_ed25519_key.json
    # → copy the "Offline License Token" line; on the clinic's local server, pass it
    #   in the /api/cloud/pair body as offline_token, OR set env CLINIC_OFFLINE_TOKEN.
    ```
 
    The token's `payload.serial` must equal the `serial_number` the clinic registers with, and its `grace_until` must be in the future.
 
-3. **Soft-launch (stage 1):** `docker compose up -d --build app` with `CLINIC_REQUIRE_SIGNED_SERIAL=0`. Now every register call that *includes* a token is verified (bad signatures / wrong serial / expired tokens are rejected), but tokenless legacy registrations still succeed. Watch the logs and confirm all live clients are sending valid tokens.
+4. **Deploy:** `docker compose up -d --build app`. With the public key set and the gate on, only validly-signed serials register / validate; everything else gets `403` (register) or `{valid:false}` (validate). If the public key is missing while the gate is on, those endpoints return `500` ("Server signing key not configured") rather than silently letting anyone in.
 
-4. **Enforce (stage 2):** once all clients forward a valid token, set `CLINIC_REQUIRE_SIGNED_SERIAL=1` in `cloud/.env` and `docker compose up -d app`. Registrations without a valid signed token now get `403`. If the key is somehow missing while `REQUIRE=1`, register returns `500` ("Server signing key not configured") rather than silently allowing anyone in.
+### Migrating from an unsigned deployment
 
-To roll back, set `CLINIC_REQUIRE_SIGNED_SERIAL=0` (or unset `CLINIC_SERIAL_SIGNING_KEY` to disable the gate entirely) and redeploy `app`.
+If clinics are already registered with unsigned serials, roll out in two stages so nothing breaks mid-flight — the cloud only checks what it receives, and a local server forwards its `offline_token` (pair body → `app_settings['cloud_offline_token']` → env `CLINIC_OFFLINE_TOKEN`):
+
+1. **Soft-launch:** deploy with `CLINIC_SERIAL_PUBLIC_KEY` set but `CLINIC_REQUIRE_SIGNED_SERIAL=0`. A register call that *includes* a token is verified (bad signature / wrong serial / expired → rejected), but tokenless legacy registrations still succeed. Issue + load signed tokens onto every local server; watch the logs until all live clients send valid tokens.
+2. **Enforce:** flip `CLINIC_REQUIRE_SIGNED_SERIAL=1` (the default) and `docker compose up -d app`.
+
+To roll back, set `CLINIC_REQUIRE_SIGNED_SERIAL=0` and redeploy `app`.
+
+### Revoking / suspending a serial
+
+With `CLINIC_ADMIN_API_TOKEN` set, the cloud exposes `POST /api/license/admin/revoke` (gated by the `X-Admin-Token` header):
+
+```bash
+# revoke (or status=suspended / status=active to re-enable):
+curl -sX POST https://app.dentacare.tech/api/license/admin/revoke \
+  -H "X-Admin-Token: $CLINIC_ADMIN_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"serial":"DENTAL-SMD-...","status":"revoked"}'
+
+# free one device slot so a replacement device can claim it:
+curl -sX POST https://app.dentacare.tech/api/license/admin/revoke \
+  -H "X-Admin-Token: $CLINIC_ADMIN_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"serial":"DENTAL-SMD-...","device_fingerprint":"<fp>","release":true}'
+```
+
+A revoked serial then fails `/api/license/validate` with `{valid:false, reason:"revoked"}` and is never reactivated by a newer (renewal) token.
 
 ## API surface on the cloud node
 
-- `POST /api/clinics/register` — `{serial_number, clinic_name, offline_token?}` → `{clinic_id, clinic_token, already_registered}`. Idempotent per serial. **No clinic token required.** `offline_token` is the HMAC-signed token from `serial_generator.py`; required when `CLINIC_REQUIRE_SIGNED_SERIAL=1`, otherwise optional but verified when present. Local servers don't call this directly — they call their own `POST /api/cloud/pair`, which forwards the `offline_token` (from the pair body, `app_settings['cloud_offline_token']`, or env `CLINIC_OFFLINE_TOKEN`). See *Enabling signed-serial enforcement*.
+- `POST /api/clinics/register` — `{serial_number, clinic_name, offline_token?}` → `{clinic_id, clinic_token, already_registered}`. Idempotent per serial. **No clinic token required.** `offline_token` is the **Ed25519** vendor-signed serial from `serial_generator.py`, verified with `CLINIC_SERIAL_PUBLIC_KEY`; required when `CLINIC_REQUIRE_SIGNED_SERIAL=1` (the default), otherwise verified when present. Local servers don't call this directly — they call their own `POST /api/cloud/pair`, which forwards the `offline_token` (from the pair body, `app_settings['cloud_offline_token']`, or env `CLINIC_OFFLINE_TOKEN`). See *Signed serials*.
+- `POST /api/license/validate` — the license authority. `{serial_token, device_fingerprint, device_name?}` → `{valid, reason?, status, plan_name, expires_at, grace_until, remaining_slots}`. Verifies the Ed25519 signature, registers the serial on first use, enforces status/subscription/renewal, and atomically claims a device slot up to `max_devices`. **No clinic token required** (self-authenticates via the signature). Rate-limited per IP.
+- `POST /api/license/admin/revoke` — admin only, gated by `X-Admin-Token` = `CLINIC_ADMIN_API_TOKEN`. Revoke/suspend/re-activate a serial, or release a device slot. **No clinic token required**; `401` when the admin token is unset or wrong. Rate-limited per IP. See *Revoking / suspending a serial*.
 - `GET /api/system/readiness` — health check. No token required.
 - Everything else under `/api/*` — requires a valid `X-Clinic-Token` (or `?clinic_token=`), routed to that clinic's DB. This includes `/api/sync/export`, `/api/sync/import`, `/api/patients`, etc.
 - Non-`/api/` paths — return a short "use your local server" notice.
@@ -251,8 +282,8 @@ Restoring `cloud_master.db` follows the same steps (swap `clinic_1.db` for `clou
 
 ## Known limitations (Phase 1)
 
-- Serial validation defaults to **uniqueness** (one clinic per serial, ≥ 8 chars). HMAC-signed-serial gating is available and wired end-to-end (`/api/cloud/pair` forwards the token) — enable it per *Enabling signed-serial enforcement*. Default stays off.
-- `/api/clinics/register` is rate-limited per source IP (default 10/hour) and can be gated on HMAC-signed `offline_token`s via the two `CLINIC_SERIAL_SIGNING_KEY` / `CLINIC_REQUIRE_SIGNED_SERIAL` envs above (issued by `serial_generator.py --key-file …`). The rate limiter is **in-process only** — it resets on restart and is not shared across replicas; behind a single Caddy + single app container that's adequate, but a horizontally-scaled deployment would need a shared store (e.g. Redis). Other public endpoints are not rate-limited yet.
+- Serial validation requires an **Ed25519-signed serial** by default (`CLINIC_REQUIRE_SIGNED_SERIAL=1`); set it to `0` to fall back to uniqueness-only (one clinic per serial, ≥ 8 chars). The gate is wired end-to-end (`/api/cloud/pair` forwards the token). See *Signed serials*.
+- `/api/clinics/register` and `/api/license/validate` are rate-limited per source IP (default 10/hour) and verify the Ed25519 `offline_token`/`serial_token` against `CLINIC_SERIAL_PUBLIC_KEY` (issued by `serial_generator.py --genkey` / `--key-file`). The rate limiter is **in-process only** — it resets on restart and is not shared across replicas; behind a single Caddy + single app container that's adequate, but a horizontally-scaled deployment would need a shared store (e.g. Redis). Other public endpoints beyond the license ones are not rate-limited yet.
 - Backups are written to the same droplet volume as the live data (see *Backups* above). Off-server durability (DO Spaces upload) is a planned follow-up.
 - The cloud node currently shares one Flask session secret across all tenants (stored in `cloud_master.db`); the portal isn't reachable here so this is low-impact, but worth knowing.
 
