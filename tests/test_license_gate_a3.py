@@ -15,7 +15,7 @@ def local(tmp_path, monkeypatch):
         yield c
 
 
-def _seed_license(serial, status='active', days=365, grace_extra=14):
+def _seed_license(serial, status='active', days=365, grace_extra=14, token=None):
     today = datetime.now(timezone.utc).date()
     expires = (today + timedelta(days=days)).strftime('%Y-%m-%d')
     grace = (today + timedelta(days=days + grace_extra)).strftime('%Y-%m-%d')
@@ -25,6 +25,9 @@ def _seed_license(serial, status='active', days=365, grace_extra=14):
                  (serial, 'C', 'standard', status, 3, expires, grace))
     conn.execute("INSERT INTO app_settings (key, value) VALUES ('active_serial_number', ?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (serial,))
+    if token is not None:
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('active_serial_token', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (token,))
     conn.commit(); conn.close()
 
 
@@ -152,7 +155,8 @@ def _license_status_value(serial):
 
 
 def test_recheck_applies_cloud_revocation(local, monkeypatch):
-    _seed_license('DENTAL-A3-RC', status='active', days=365)
+    # token must be non-empty so the empty-token guard does not skip the cloud call
+    _seed_license('DENTAL-A3-RC', status='active', days=365, token='test-token-sentinel')
     monkeypatch.setattr(dental_clinic, '_validate_with_cloud',
                         lambda *a, **k: {'valid': False, 'reason': 'revoked'})
     dental_clinic.license_recheck_once()

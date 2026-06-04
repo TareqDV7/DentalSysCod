@@ -6322,7 +6322,7 @@ def license_recheck_once(http=None):
         if not serial:
             conn.close()
             return
-        result = _validate_with_cloud(token, fingerprint)
+        result = _validate_with_cloud(token, fingerprint) if token else None
         if not isinstance(result, dict):
             write_app_setting(cur, 'license_last_recheck_at', utc_now_iso())
             write_app_setting(cur, 'license_last_recheck_result', 'offline')
