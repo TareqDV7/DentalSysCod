@@ -116,3 +116,29 @@ def test_write_guard_fails_open_on_error(local, monkeypatch):
     monkeypatch.setattr(dental_clinic, '_license_gate_state', boom)
     r = local.post('/api/patients', json={'first_name': 'FailOpen', 'last_name': 'Test', 'phone': '0590000001'})
     assert r.status_code in (200, 201)   # a licensing bug must never brick data entry
+
+
+def _has_cloud_setting(key):
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    row = conn.execute('SELECT value FROM app_settings WHERE key=?', (key,)).fetchone()
+    conn.close()
+    return bool(row and str(row[0] or '').strip())
+
+
+def test_activation_does_not_enable_cloud_sync(local, monkeypatch):
+    # Even a fully successful cloud-validated activation must not write the sync keys.
+    import serial_generator
+    priv, pub = serial_generator.generate_keypair()
+    monkeypatch.setattr(dental_clinic, '_SERIAL_PUBLIC_KEY_B64', pub)
+    monkeypatch.setattr(dental_clinic, '_validate_with_cloud',
+                        lambda *a, **k: {'valid': True, 'status': 'active'})
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    payload = {'v': 2, 'serial': 'DENTAL-A3-DECOUP', 'clinic_name': 'C', 'plan_name': 'standard',
+               'max_devices': 3, 'issued_at': now.isoformat() + 'Z',
+               'expires_at': (now + timedelta(days=365)).isoformat() + 'Z',
+               'grace_until': (now + timedelta(days=379)).isoformat() + 'Z'}
+    token = serial_generator.sign_serial_token(payload, priv)
+    r = local.post('/api/license/activate', json={'serial_token': token})
+    assert r.status_code == 200
+    assert not _has_cloud_setting('cloud_url')
+    assert not _has_cloud_setting('cloud_clinic_token')
