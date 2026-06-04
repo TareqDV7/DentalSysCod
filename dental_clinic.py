@@ -4571,7 +4571,8 @@ def cloud_pair():
     if CLOUD_MODE:
         return jsonify({'error': 'Not applicable on the cloud node'}), 400
     data = request.json or {}
-    cloud_url = str(data.get('cloud_url') or os.environ.get('CLINIC_CLOUD_URL') or '').strip().rstrip('/')
+    cloud_url = str(data.get('cloud_url') or os.environ.get('CLINIC_CLOUD_URL')
+                    or _BAKED_CLOUD_BASE_URL or '').strip().rstrip('/')
     serial = str(data.get('serial_number') or '').strip().upper()
     if not cloud_url:
         return jsonify({'error': 'cloud_url is required'}), 400
