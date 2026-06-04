@@ -184,7 +184,11 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: switch (_gate) {
               GateUnlicensed() => _buildUnlicensedBlock(),
-              _ => IndexedStack(index: _index, children: _screens),
+              GateActive() ||
+              GateGrace() ||
+              GateViewOnly() ||
+              GateUnknown() =>
+                IndexedStack(index: _index, children: _screens),
             },
           ),
         ],
