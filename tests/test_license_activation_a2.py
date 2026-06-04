@@ -172,3 +172,43 @@ def test_lan_attach_returns_offline_token(local):
     r = local.post('/api/license/activate', json={'serial_number': s, 'device_id': 'phone-9'})
     assert r.status_code == 200
     assert r.get_json()['offline_license_token']
+
+
+# ── Task 7: device-membership gate on /api/license/login ───────────────────
+
+def test_login_rejects_unknown_device(local):
+    s = 'DENTAL-A2-LOGIN'
+    _activate(local, _sign(local, s, max_devices=3))     # desktop enrolled
+    local.post('/api/license/activate', json={'serial_number': s, 'device_id': 'phone-known'})
+    ok = local.post('/api/license/login', json={'serial_number': s, 'device_id': 'phone-known'})
+    assert ok.status_code == 200
+    bad = local.post('/api/license/login', json={'serial_number': s, 'device_id': 'phone-stranger'})
+    assert bad.status_code == 403
+    assert bad.get_json()['reason'] == 'device_not_recognized'
+
+
+def test_login_without_device_is_authority(local):
+    s = 'DENTAL-A2-LOGIN2'
+    _activate(local, _sign(local, s))
+    r = local.post('/api/license/login', json={'serial_number': s})   # desktop portal, no device_id
+    assert r.status_code == 200
+
+
+# ── Task 8: device-membership gate on /api/license/status ──────────────────
+
+def test_status_rejects_unknown_device(local):
+    s = 'DENTAL-A2-STAT'
+    _activate(local, _sign(local, s, max_devices=3))
+    local.post('/api/license/activate', json={'serial_number': s, 'device_id': 'phone-ok'})
+    known = local.get('/api/license/status?device_id=phone-ok').get_json()
+    assert known['licensed'] is True
+    stranger = local.get('/api/license/status?device_id=phone-nope').get_json()
+    assert stranger['licensed'] is False
+    assert stranger['reason'] == 'device_not_recognized'
+
+
+def test_status_without_device_answers_from_state(local):
+    s = 'DENTAL-A2-STAT2'
+    _activate(local, _sign(local, s))
+    body = local.get('/api/license/status').get_json()   # desktop portal
+    assert body['licensed'] is True

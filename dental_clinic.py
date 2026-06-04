@@ -4965,6 +4965,16 @@ def license_login():
             'grace_until': record['grace_until']
         }), 403
 
+    device_id = str(data.get('device_id') or '').strip()
+    if device_id:
+        cursor.execute(
+            'SELECT 1 FROM license_devices WHERE serial_number = ? AND device_id = ? AND is_active = 1',
+            (serial_number, device_id))
+        if cursor.fetchone() is None:
+            conn.close()
+            return jsonify({'error': 'Device not enrolled',
+                            'reason': 'device_not_recognized'}), 403
+
     downloads = get_mobile_download_options(cursor)
     write_app_setting(cursor, 'active_serial_number', serial_number)
     append_audit_log(cursor, 'login', 'license', None, {'serial_number': serial_number, 'portal': 'mobile-download'})
