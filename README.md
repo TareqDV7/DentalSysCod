@@ -255,7 +255,7 @@ clinic/
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   ├── backup.py             #   tenant-DB backup sidecar (RO data mount → backups volume, rotation)
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 321 tests across 37 suites
+├── tests/                    # 346 tests across 38 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -273,6 +273,7 @@ clinic/
 │   ├── test_cloud_mode.py           # Cloud-mode routing, isolation, rate limit, HMAC gate + hardened register errors
 │   ├── test_cloud_pairing_qr.py     # /api/cloud/pairing-qr endpoint (auth gate, unpaired 400, SVG payload)
 │   ├── test_cloud_sync_worker.py    # Local ⇄ cloud background sync round-trip
+│   ├── test_license_activation_a2.py # Local-server activation hardening: signature gate, token-sourced fields, grace-bypass fix, cloud-authoritative + offline fallback, LAN-attach device cap, login/status device-membership gates, server-fingerprint binding, no-500 fuzz
 │   ├── test_license_authority.py    # Cloud license authority: /api/license/validate (signature, register-on-first-use, status/subscription/renewal, atomic device-cap, concurrency) + admin revoke/release + ProxyFix gating
 │   ├── test_serial_ed25519.py       # Ed25519 keypair + serial-token sign/verify, the dental_clinic verifier, load_private_seed, no demo-key fallback
 │   ├── test_credit_balance.py       # Patient credit derivation + Credit Used
