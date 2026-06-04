@@ -1688,6 +1688,13 @@ HTML_TEMPLATE = '''
         <textarea id="license-gate-token" rows="4" placeholder="serial token"></textarea>
         <button type="button" onclick="submitLicenseActivation()">Activate</button>
         <div id="license-gate-status" class="license-overlay__status"></div>
+        <div id="license-link-panel" class="hidden">
+          <h2>Enable secure cloud backup?</h2>
+          <p>Back up this clinic to the cloud. You can do this later in Settings.</p>
+          <button type="button" id="license-link-cloud" onclick="linkCloud()">Enable secure cloud backup</button>
+          <button type="button" id="license-link-skip" onclick="skipCloudLink()">Not now</button>
+          <div id="license-link-status" class="license-overlay__status"></div>
+        </div>
       </div>
     </div>
     <div class="container">
@@ -6988,8 +6995,38 @@ HTML_TEMPLATE = '''
                 });
                 const body = await res.json();
                 if (!res.ok) { status.textContent = body.error || 'Activation failed.'; return; }
-                window.location.reload();
+                window.__activeSerial = (body.serial_number || '');
+                showCloudLinkPanel();
             } catch (e) { status.textContent = 'Network error during activation.'; }
+        }
+        function showCloudLinkPanel() {
+            document.querySelector('#license-gate-overlay h2').classList.add('hidden');
+            document.getElementById('license-gate-token').classList.add('hidden');
+            document.getElementById('license-gate-status').textContent = '';
+            document.getElementById('license-link-panel').classList.remove('hidden');
+        }
+        async function linkCloud() {
+            const status = document.getElementById('license-link-status');
+            status.textContent = 'Linking...';
+            try {
+                const res = await fetch('/api/onboarding/state');
+                const st = await res.json();
+                const serial = st.serial_number || (window.__activeSerial || '');
+                const res2 = await fetch('/api/cloud/pair', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ serial_number: serial })
+                });
+                const body = await res2.json();
+                if (!res2.ok) { status.textContent = body.error || 'Could not reach the cloud — you can enable backup later in Settings.'; return; }
+                window.location.reload();
+            } catch (e) { status.textContent = 'Could not reach the cloud — you can enable backup later in Settings.'; }
+        }
+        async function skipCloudLink() {
+            try {
+                await fetch('/api/onboarding/dismiss-cloud-link', { method: 'POST' });
+            } catch (e) { /* best-effort */ }
+            window.location.reload();
         }
         document.addEventListener('DOMContentLoaded', applyLicenseGate);
     </script>

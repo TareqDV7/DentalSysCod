@@ -1872,7 +1872,7 @@ def _require_login_for_portal():
 # Endpoints that stay writable even in view-only mode: licensing (so you can renew),
 # auth (login/logout), cloud connectivity, and health. Everything else clinical is
 # read-only once the subscription lapses.
-_VIEW_ONLY_WRITE_ALLOW_PREFIXES = ('/api/license/', '/api/auth/', '/api/cloud/')
+_VIEW_ONLY_WRITE_ALLOW_PREFIXES = ('/api/license/', '/api/auth/', '/api/cloud/', '/api/onboarding/')
 _VIEW_ONLY_WRITE_ALLOW_EXACT = {'/healthz'}
 
 
@@ -5237,6 +5237,16 @@ def onboarding_state():
         'cloud_linked': cloud_linked,
         'needs_onboarding': needs_onboarding,
     })
+
+
+@app.route('/api/onboarding/dismiss-cloud-link', methods=['POST'])
+def onboarding_dismiss_cloud_link():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    write_app_setting(cursor, 'cloud_link_dismissed', '1')
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 
 @app.route('/api/clinic-settings', methods=['GET', 'POST'])
