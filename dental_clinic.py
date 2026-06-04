@@ -4926,6 +4926,7 @@ def _activate_primary(serial_token, device_name):
     ''', (serial_number, fingerprint, device_name or 'clinic-server'))
 
     write_app_setting(cursor, 'active_serial_number', serial_number)
+    write_app_setting(cursor, 'active_serial_token', serial_token)
     append_audit_log(cursor, 'activate', 'license', None, {
         'serial_number': serial_number, 'clinic_name': clinic_name,
         'plan_name': plan_name, 'device_id': fingerprint,
@@ -5523,6 +5524,11 @@ try:
     CLOUD_SYNC_INTERVAL_MINUTES = max(1.0, float(os.environ.get('CLINIC_CLOUD_SYNC_INTERVAL_MINUTES', '15')))
 except ValueError:
     CLOUD_SYNC_INTERVAL_MINUTES = 15.0
+
+try:
+    LICENSE_RECHECK_HOURS = float(os.environ.get('CLINIC_LICENSE_RECHECK_HOURS', '24') or 24)
+except ValueError:
+    LICENSE_RECHECK_HOURS = 24.0
 
 
 # ── Bluetooth-SPP wire protocol ─────────────────────────────────────────────
@@ -6303,6 +6309,61 @@ def cloud_sync_worker():
         time.sleep(max(60.0, interval * 60.0))
 
 
+def license_recheck_once(http=None):
+    """Refresh the cached license status from the cloud authority, decoupled from
+    cloud sync. Offline (no URL / network down) is a no-op — offline NEVER downgrades
+    a clinic to view-only. Never raises."""
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        serial = str(read_app_setting(cur, 'active_serial_number', '') or '').strip()
+        token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
+        fingerprint = _get_or_create_device_fingerprint(cur)
+        if not serial:
+            conn.close()
+            return
+        result = _validate_with_cloud(token, fingerprint)
+        if not isinstance(result, dict):
+            write_app_setting(cur, 'license_last_recheck_at', utc_now_iso())
+            write_app_setting(cur, 'license_last_recheck_result', 'offline')
+            conn.commit(); conn.close()
+            return
+        if result.get('valid'):
+            status = str(result.get('status') or 'active')
+            expires_at = _iso_to_window_date(result.get('expires_at'))
+            grace_until = _iso_to_window_date(result.get('grace_until'))
+            sets, vals = ['status = ?'], [status]
+            if expires_at:
+                sets.append('expires_at = ?'); vals.append(expires_at)
+            if grace_until:
+                sets.append('grace_until = ?'); vals.append(grace_until)
+            vals.append(serial)
+            cur.execute(f"UPDATE licenses SET {', '.join(sets)}, updated_at=CURRENT_TIMESTAMP "
+                        f"WHERE serial_number = ?", vals)
+        else:
+            reason = str(result.get('reason') or 'revoked')
+            new_status = 'suspended' if reason == 'suspended' else 'revoked'
+            cur.execute("UPDATE licenses SET status=?, updated_at=CURRENT_TIMESTAMP "
+                        "WHERE serial_number = ?", (new_status, serial))
+        write_app_setting(cur, 'license_last_recheck_at', utc_now_iso())
+        write_app_setting(cur, 'license_last_recheck_result', 'ok')
+        conn.commit(); conn.close()
+    except Exception as exc:  # noqa: BLE001 - a re-check failure must never crash the server
+        try:
+            app.logger.warning('license_recheck_once failed: %s', exc)
+        except Exception:
+            pass
+
+
+def license_recheck_worker():
+    """Background loop: re-check the license every CLINIC_LICENSE_RECHECK_HOURS.
+    Runs independently of cloud sync (it starts even when sync is unpaired)."""
+    interval = max(1.0, LICENSE_RECHECK_HOURS) * 3600.0
+    while True:
+        license_recheck_once()
+        time.sleep(interval)
+
+
 if __name__ == '__main__':
     # Windows defaults stdout/stderr to the locale code page (cp1252 on
     # most English installs), which crashes the moment we print an emoji.
@@ -6366,6 +6427,7 @@ if __name__ == '__main__':
     cloud_sync_on = (not CLOUD_MODE) and (not debug_mode)
     if cloud_sync_on:
         threading.Thread(target=cloud_sync_worker, daemon=True).start()
+        threading.Thread(target=license_recheck_worker, daemon=True).start()
 
     # Background Bluetooth-SPP listener. Local clinic server only. Runs in
     # *both* production and debug — but in debug, only inside the Werkzeug

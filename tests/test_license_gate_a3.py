@@ -142,3 +142,35 @@ def test_activation_does_not_enable_cloud_sync(local, monkeypatch):
     assert r.status_code == 200
     assert not _has_cloud_setting('cloud_url')
     assert not _has_cloud_setting('cloud_clinic_token')
+
+
+def _license_status_value(serial):
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    row = conn.execute('SELECT status FROM licenses WHERE serial_number=?', (serial.upper(),)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def test_recheck_applies_cloud_revocation(local, monkeypatch):
+    _seed_license('DENTAL-A3-RC', status='active', days=365)
+    monkeypatch.setattr(dental_clinic, '_validate_with_cloud',
+                        lambda *a, **k: {'valid': False, 'reason': 'revoked'})
+    dental_clinic.license_recheck_once()
+    # Cached status now maps to view_only.
+    assert _license_status_value('DENTAL-A3-RC') in ('revoked', 'suspended')
+    conn = sqlite3.connect(dental_clinic.DB_NAME); cur = conn.cursor()
+    assert dental_clinic._license_gate_state(cur)['state'] == 'view_only'
+    conn.close()
+
+
+def test_recheck_offline_does_not_downgrade(local, monkeypatch):
+    _seed_license('DENTAL-A3-RC2', status='active', days=365)
+    monkeypatch.setattr(dental_clinic, '_validate_with_cloud', lambda *a, **k: None)  # offline
+    dental_clinic.license_recheck_once()
+    assert _license_status_value('DENTAL-A3-RC2') == 'active'   # unchanged
+
+
+def test_recheck_noops_without_license(local, monkeypatch):
+    monkeypatch.setattr(dental_clinic, '_validate_with_cloud', lambda *a, **k: {'valid': False})
+    # Must not raise when there is no active serial.
+    dental_clinic.license_recheck_once()
