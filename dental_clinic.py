@@ -5219,6 +5219,26 @@ def license_gate():
     return jsonify(state)
 
 
+@app.route('/api/onboarding/state')
+def onboarding_state():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    gate = _license_gate_state(cursor)
+    cloud_url = str(read_app_setting(cursor, 'cloud_url', '') or '').strip()
+    cloud_token = str(read_app_setting(cursor, 'cloud_clinic_token', '') or '').strip()
+    dismissed = str(read_app_setting(cursor, 'cloud_link_dismissed', '') or '').strip() in ('1', 'true', 'yes')
+    conn.close()
+    cloud_linked = bool(cloud_url and cloud_token)
+    state = gate.get('state', 'unlicensed')
+    licensed = state in ('active', 'grace')
+    needs_onboarding = (state == 'unlicensed') or (licensed and not cloud_linked and not dismissed)
+    return jsonify({
+        'licensed_state': state,
+        'cloud_linked': cloud_linked,
+        'needs_onboarding': needs_onboarding,
+    })
+
+
 @app.route('/api/clinic-settings', methods=['GET', 'POST'])
 def clinic_settings():
     conn = get_db_connection(with_row_factory=True)

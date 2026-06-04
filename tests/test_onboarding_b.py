@@ -1,6 +1,7 @@
 # tests/test_onboarding_b.py
 import sqlite3
 import pytest
+from datetime import datetime, timedelta, timezone
 import dental_clinic
 
 
@@ -40,3 +41,54 @@ def test_pair_uses_baked_url_when_omitted(local, monkeypatch):
     val = conn.execute("SELECT value FROM app_settings WHERE key='cloud_url'").fetchone()[0]
     conn.close()
     assert val == dental_clinic._BAKED_CLOUD_BASE_URL.rstrip('/')
+
+
+def _seed_active_license(serial='DENTAL-B-ONB'):
+    today = datetime.now(timezone.utc).date()
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn.execute('''INSERT INTO licenses (serial_number, clinic_name, plan_name, status,
+                    max_devices, expires_at, grace_until) VALUES (?,?,?,?,?,?,?)''',
+                 (serial, 'C', 'standard', 'active', 3,
+                  (today + timedelta(days=365)).strftime('%Y-%m-%d'),
+                  (today + timedelta(days=379)).strftime('%Y-%m-%d')))
+    conn.execute("INSERT INTO app_settings (key, value) VALUES ('active_serial_number', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (serial,))
+    conn.commit(); conn.close()
+
+
+def _set_setting(key, value):
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+    conn.commit(); conn.close()
+
+
+def test_onboarding_fresh_install(local):
+    b = local.get('/api/onboarding/state').get_json()
+    assert b['licensed_state'] == 'unlicensed'
+    assert b['cloud_linked'] is False
+    assert b['needs_onboarding'] is True
+
+
+def test_onboarding_licensed_unlinked_needs_onboarding(local):
+    _seed_active_license()
+    b = local.get('/api/onboarding/state').get_json()
+    assert b['licensed_state'] == 'active'
+    assert b['cloud_linked'] is False
+    assert b['needs_onboarding'] is True
+
+
+def test_onboarding_linked(local):
+    _seed_active_license()
+    _set_setting('cloud_url', 'https://cloud.example.test')
+    _set_setting('cloud_clinic_token', 'tok')
+    b = local.get('/api/onboarding/state').get_json()
+    assert b['cloud_linked'] is True
+    assert b['needs_onboarding'] is False
+
+
+def test_onboarding_dismissed(local):
+    _seed_active_license()
+    _set_setting('cloud_link_dismissed', '1')
+    b = local.get('/api/onboarding/state').get_json()
+    assert b['needs_onboarding'] is False   # licensed + dismissed → done
