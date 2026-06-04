@@ -5171,6 +5171,15 @@ def license_status():
     })
 
 
+@app.route('/api/license/gate')
+def license_gate():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    state = _license_gate_state(cursor)
+    conn.close()
+    return jsonify(state)
+
+
 @app.route('/api/clinic-settings', methods=['GET', 'POST'])
 def clinic_settings():
     conn = get_db_connection(with_row_factory=True)

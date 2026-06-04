@@ -58,3 +58,15 @@ def test_state_view_only_past_grace(local):
 def test_state_view_only_when_revoked(local):
     _seed_license('DENTAL-A3-REV', status='revoked', days=365)
     assert _state(local)['state'] == 'view_only'
+
+
+def test_gate_endpoint_reports_unlicensed(local):
+    body = local.get('/api/license/gate').get_json()
+    assert body['state'] == 'unlicensed' and body['licensed'] is False
+
+
+def test_gate_endpoint_reports_active(local):
+    _seed_license('DENTAL-A3-GATE', days=365)
+    body = local.get('/api/license/gate').get_json()
+    assert body['state'] == 'active'
+    assert body['serial_number'] == 'DENTAL-A3-GATE'
