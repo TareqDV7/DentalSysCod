@@ -2444,21 +2444,15 @@ HTML_TEMPLATE = '''
                        data-en="Mirror this clinic's data to the cloud node so it stays reachable online and from mobile when off the local network. Staff keep using this local server — syncing runs in the background."
                        data-ar="انسخ بيانات هذه العيادة إلى الخادم السحابي لتبقى متاحة عبر الإنترنت ومن الهاتف خارج الشبكة المحلية. يستمر الموظفون باستخدام هذا الخادم المحلي — تتم المزامنة في الخلفية.">Mirror this clinic's data to the cloud node so it stays reachable online and from mobile when off the local network. Staff keep using this local server — syncing runs in the background.</p>
                     <div id="cloud-status-line" style="font-size:0.92em;line-height:1.7;margin-bottom:14px;color:var(--text,#1f2d2f);"></div>
-                    <div id="cloud-pair-form" style="display:none;">
-                        <div class="form-group">
-                            <label data-en="Cloud server URL" data-ar="رابط الخادم السحابي">Cloud server URL</label>
-                            <input type="text" id="cloud-url-input" placeholder="https://app.dentacare.tech">
-                        </div>
-                        <div class="form-group">
-                            <label data-en="Serial number" data-ar="الرقم التسلسلي">Serial number</label>
-                            <input type="text" id="cloud-serial-input" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off">
-                        </div>
-                        <button class="btn btn-primary" type="button" onclick="cloudPair(this)" data-en="Pair with cloud" data-ar="الربط بالسحابة">Pair with cloud</button>
+                    <div class="cloud-toggle-row bt-toggle-row">
+                        <label>
+                            <input type="checkbox" id="cloud-enabled" onchange="cloudToggle(this.checked)"/>
+                            <span data-en="Cloud backup" data-ar="النسخ الاحتياطي السحابي">Cloud backup</span>
+                        </label>
                     </div>
-                    <div id="cloud-paired-actions" style="display:none;">
-                        <button class="btn btn-primary" type="button" onclick="cloudSyncNow(this)" data-en="Sync now" data-ar="مزامنة الآن">Sync now</button>
+                    <div id="cloud-secondary" style="display:none;margin-top:12px;">
+                        <button class="btn btn-secondary" type="button" onclick="cloudSyncNow(this)" data-en="Sync now" data-ar="مزامنة الآن">Sync now</button>
                         <button class="btn btn-secondary" type="button" onclick="cloudShowPairingQr()" data-en="Link a phone" data-ar="ربط هاتف">Link a phone</button>
-                        <button class="btn btn-warning" type="button" onclick="cloudUnpair()" data-en="Unpair" data-ar="إلغاء الربط">Unpair</button>
                         <div id="cloud-pairing-qr" style="display:none;margin-top:14px;">
                             <p style="margin:0 0 10px;color:var(--muted);font-size:0.9em;line-height:1.6;"
                                data-en="Open the mobile app, then Settings, then Scan QR."
@@ -5621,21 +5615,22 @@ HTML_TEMPLATE = '''
             const st = await fetchCloudStatus();
             renderCloudBadge(st);
             const line = document.getElementById('cloud-status-line');
-            const pairForm = document.getElementById('cloud-pair-form');
-            const pairedActions = document.getElementById('cloud-paired-actions');
+            const toggle = document.getElementById('cloud-enabled');
+            const secondary = document.getElementById('cloud-secondary');
             if (!line) return;
             const show = (el, on) => { if (el) el.style.display = on ? '' : 'none'; };
-            if (!st) { line.textContent = ''; show(pairForm, false); show(pairedActions, false); return; }
+            if (!st) { line.textContent = ''; if (toggle) toggle.checked = false; show(secondary, false); return; }
             if (st.cloud_mode) {
                 line.innerHTML = '<em>' + (_ar() ? 'هذا هو الخادم السحابي.' : 'This is the cloud node.') + '</em>';
-                show(pairForm, false); show(pairedActions, false);
+                if (toggle) { toggle.checked = false; toggle.disabled = true; }
+                show(secondary, false);
                 return;
             }
+            if (toggle) toggle.checked = !!st.configured;
+            show(secondary, !!st.configured);
             if (st.configured) {
-                show(pairForm, false); show(pairedActions, true);
                 const parts = [];
-                parts.push((_ar() ? 'مرتبط بـ ' : 'Paired with ') + '<strong>' + (st.cloud_url || '') + '</strong>');
-                if (st.clinic_id) parts.push((_ar() ? 'معرّف العيادة: ' : 'Clinic ID: ') + st.clinic_id);
+                parts.push((_ar() ? 'مرتبط بـ ' : 'Backing up to ') + '<strong>' + (st.cloud_url || '') + '</strong>');
                 if (st.last_sync_at) {
                     const ok = String(st.last_sync_result) === 'ok';
                     parts.push((_ar() ? 'آخر مزامنة: ' : 'Last sync: ') + _relativeTime(st.last_sync_at)
@@ -5643,38 +5638,39 @@ HTML_TEMPLATE = '''
                 } else {
                     parts.push(_ar() ? 'لم تتم أي مزامنة بعد' : 'No sync yet');
                 }
-                parts.push((_ar() ? 'كل ' : 'every ') + (st.sync_interval_minutes || 15) + (_ar() ? ' دقيقة' : ' min'));
                 line.innerHTML = parts.join('<br>');
             } else {
-                show(pairForm, true); show(pairedActions, false);
-                line.innerHTML = '<em>' + (_ar() ? 'غير مرتبط بالسحابة بعد.' : 'Not paired with the cloud yet.') + '</em>';
+                line.innerHTML = '<em>' + (_ar() ? 'النسخ الاحتياطي السحابي غير مفعّل.' : 'Cloud backup is off.') + '</em>';
             }
         }
 
-        async function cloudPair(btn) {
-            const url = (document.getElementById('cloud-url-input')?.value || '').trim();
-            const serial = (document.getElementById('cloud-serial-input')?.value || '').trim();
-            if (!url || serial.length < 8) {
-                alert(_ar() ? 'أدخل رابط الخادم السحابي والرقم التسلسلي (٨ خانات على الأقل).'
-                            : 'Enter the cloud server URL and a serial number (at least 8 characters).');
-                return;
+        async function cloudToggle(checked) {
+            const toggle = document.getElementById('cloud-enabled');
+            if (checked) {
+                try {
+                    const resp = await fetch('/api/cloud/enable', { method: 'POST' });
+                    const payload = await resp.json().catch(() => ({}));
+                    if (!resp.ok) {
+                        if (toggle) toggle.checked = false;
+                        if (payload.reason === 'not_activated') {
+                            alert(_ar() ? 'فعّل الترخيص أولاً.' : 'Activate a license first.');
+                        } else {
+                            alert(payload.error || (_ar() ? 'تعذّر تفعيل النسخ السحابي.' : 'Could not enable cloud backup.'));
+                        }
+                        return;
+                    }
+                } catch (_) {
+                    if (toggle) toggle.checked = false;
+                    alert(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.');
+                }
+            } else {
+                if (!confirm(_ar() ? 'إيقاف النسخ الاحتياطي السحابي؟' : 'Turn off cloud backup?')) {
+                    if (toggle) toggle.checked = true;
+                    return;
+                }
+                try { await fetch('/api/cloud/unpair', { method: 'POST' }); } catch (_) {}
             }
-            if (btn) btn.disabled = true;
-            try {
-                const resp = await fetch('/api/cloud/pair', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cloud_url: url, serial_number: serial })
-                });
-                const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) { alert(payload.error || (_ar() ? 'فشل الربط' : 'Pairing failed')); return; }
-                const si = document.getElementById('cloud-serial-input'); if (si) si.value = '';
-                const fs = payload.first_sync || {};
-                alert((_ar() ? 'تم الربط بالسحابة. ' : 'Paired with the cloud. ')
-                      + (fs.ok ? `↓${fs.pulled || 0} ↑${fs.pushed || 0}` : (fs.error ? ('— ' + fs.error) : '')));
-                await loadCloudSyncSettings();
-            } catch (_) {
-                alert(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.');
-            } finally { if (btn) btn.disabled = false; }
+            await loadCloudSyncSettings();
         }
 
         async function cloudSyncNow(btn) {
@@ -5692,15 +5688,6 @@ HTML_TEMPLATE = '''
             } catch (_) {
                 alert(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.');
             } finally { if (btn) btn.disabled = false; await loadCloudSyncSettings(); }
-        }
-
-        async function cloudUnpair() {
-            if (!confirm(_ar() ? 'إلغاء ربط هذه العيادة بالسحابة؟' : 'Unpair this clinic from the cloud?')) return;
-            try {
-                await fetch('/api/cloud/unpair', { method: 'POST' });
-                alert(_ar() ? 'تم إلغاء الربط.' : 'Unpaired from the cloud.');
-            } catch (_) {}
-            await loadCloudSyncSettings();
         }
 
         // Reveal the phone-pairing QR. The image src points at the authed
