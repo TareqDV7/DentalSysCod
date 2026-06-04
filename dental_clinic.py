@@ -597,10 +597,18 @@ def _iso_to_window_date(value):
         return ''
 
 
+# Product constant: vendor cloud node base URL, baked so the operator never types
+# it. NOT a secret (public endpoint). Override via CLINIC_LICENSE_CLOUD_URL /
+# CLINIC_CLOUD_URL for staging or self-host.
+_BAKED_CLOUD_BASE_URL = 'https://cloud.dentacare.app'   # vendor: set the real host
+
+
 def _license_cloud_url():
     url = os.environ.get('CLINIC_LICENSE_CLOUD_URL', '').strip()
     if not url:
         url = _cloud_sync_config()[0] or ''
+    if not url:
+        url = _BAKED_CLOUD_BASE_URL
     return (url.rstrip('/') or None)
 
 
