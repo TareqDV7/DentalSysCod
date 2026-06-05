@@ -6,6 +6,7 @@ NEVER returned, logged, or rendered. Bound to 127.0.0.1; a before_request guard
 rejects any non-loopback client.
 """
 import base64
+import binascii
 import io
 import csv
 import json
@@ -48,7 +49,7 @@ def key_status():
         return jsonify({'has_key': False, 'key_file': KEY_FILE})
     try:
         pub = _public_key_b64()
-    except (ValueError, OSError, json.JSONDecodeError):
+    except (ValueError, OSError, json.JSONDecodeError, binascii.Error):
         return jsonify({'has_key': False, 'key_file': KEY_FILE})
     return jsonify({'has_key': True, 'public_key': pub, 'key_file': KEY_FILE})
 
