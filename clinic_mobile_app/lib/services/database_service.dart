@@ -1079,7 +1079,75 @@ class DatabaseService {
             'SELECT COUNT(*) FROM appointments WHERE appointment_datetime LIKE ?',
             ['$today%'])) ??
         0;
-    return {'total_patients': patientCount, 'today_appointments': todayAppts};
+    // "Visits" in this app are recorded as follow-up entries (the patient
+    // screen shows followups.length under the "Visits" label); the local
+    // `visits` table is only populated by server sync, so count followups to
+    // stay consistent and avoid reading 0 for phone-entered visits.
+    final visitCount = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM followups')) ??
+        0;
+    // Revenue mirrors the canonical follow-up ledger (see getReceivables),
+    // not billing_records, which most clinics don't use day-to-day.
+    final revenueRows = await db
+        .rawQuery('SELECT COALESCE(SUM(payment), 0) AS total FROM followups');
+    final totalRevenue =
+        (revenueRows.first['total'] as num?)?.toDouble() ?? 0.0;
+    return {
+      'total_patients': patientCount,
+      'today_appointments': todayAppts,
+      'total_visits': visitCount,
+      'total_revenue': totalRevenue,
+    };
+  }
+
+  /// Per-day series for the dashboard sparklines over the last [days] days,
+  /// ordered oldest → newest. Each list has length [days]; days with no
+  /// activity are 0. Every value is real — no synthetic data.
+  Future<Map<String, List<double>>> getDashboardTrends({int days = 14}) async {
+    final db = await database;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final axis = <String>[
+      for (var i = days - 1; i >= 0; i--)
+        today.subtract(Duration(days: i)).toIso8601String().substring(0, 10),
+    ];
+    final cutoff = axis.first;
+
+    Future<Map<String, double>> grouped(
+        String table, String dateCol, String valueExpr) async {
+      final rows = await db.rawQuery(
+        'SELECT substr($dateCol, 1, 10) AS d, $valueExpr AS v '
+        'FROM $table WHERE substr($dateCol, 1, 10) >= ? '
+        'GROUP BY substr($dateCol, 1, 10)',
+        [cutoff],
+      );
+      final map = <String, double>{};
+      for (final r in rows) {
+        final d = r['d'] as String?;
+        if (d == null) continue;
+        map[d] = (r['v'] as num?)?.toDouble() ?? 0.0;
+      }
+      return map;
+    }
+
+    final patients = await grouped('patients', 'created_at', 'COUNT(*)');
+    final appts =
+        await grouped('appointments', 'appointment_datetime', 'COUNT(*)');
+    // Visits are follow-up entries in this app (see getStats), so the daily
+    // visit trend counts followups by their follow-up date.
+    final visits = await grouped('followups', 'followup_date', 'COUNT(*)');
+    final revenue =
+        await grouped('followups', 'followup_date', 'COALESCE(SUM(payment), 0)');
+
+    List<double> project(Map<String, double> m) =>
+        [for (final d in axis) m[d] ?? 0.0];
+
+    return {
+      'patients': project(patients),
+      'appointments': project(appts),
+      'visits': project(visits),
+      'revenue': project(revenue),
+    };
   }
 
   // ── Receivables ───────────────────────────────────────────────────────────

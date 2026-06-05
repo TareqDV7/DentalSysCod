@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class ClinicBrand {
+  // Brand identity — kept as the accent in both light and dark so the UI
+  // stays consistent with the DentaCare teal logo / launcher icon.
   static const Color brand = Color(0xFF0F6D7B);
   static const Color brand2 = Color(0xFF1D7FB7);
   static const Color accent = Color(0xFF13B5A7);
+
+  // Light mode tokens
   static const Color bg1 = Color(0xFFF1F7F8);
   static const Color bg2 = Color(0xFFE7F0FF);
   static const Color text = Color(0xFF11243A);
@@ -12,14 +16,19 @@ class ClinicBrand {
   static const Color panel = Colors.white;
   static const Color line = Color(0xFFDBE4EF);
 
-  // Dark mode tokens
-  static const Color darkBg = Color(0xFF0D1B2A);
-  static const Color darkSurface = Color(0xFF152536);
-  static const Color darkLine = Color(0xFF1E3347);
+  // Dark mode tokens — "Midnight Oceanic" deep navy surfaces.
+  static const Color darkBg = Color(0xFF0B1120);
+  static const Color darkSurface = Color(0xFF151E2E);
+  static const Color darkLine = Color(0xFF24314A);
   static const Color darkText = Color(0xFFE8F1F8);
   static const Color darkMuted = Color(0xFF8BA5BB);
 
-  static ThemeData buildTheme({bool dark = false}) {
+  /// Builds the app theme.
+  ///
+  /// [arabic] selects a harmonised Arabic typeface (Cairo) for the whole
+  /// text theme; Latin uses Plus Jakarta Sans for body and Space Grotesk for
+  /// the large numeric/headline scale.
+  static ThemeData buildTheme({bool dark = false, bool arabic = false}) {
     final colorScheme = dark
         ? ColorScheme.dark(
             primary: brand,
@@ -44,27 +53,39 @@ class ClinicBrand {
             error: const Color(0xFFD9434E),
           );
 
-    final textTheme = GoogleFonts.manropeTextTheme().copyWith(
-      headlineLarge: GoogleFonts.spaceGrotesk(
-          textStyle: TextStyle(
-              fontWeight: FontWeight.w700,
-              color: dark ? darkText : text)),
-      headlineMedium: GoogleFonts.spaceGrotesk(
-          textStyle: TextStyle(
-              fontWeight: FontWeight.w700,
-              color: dark ? darkText : text)),
-      headlineSmall: GoogleFonts.spaceGrotesk(
-          textStyle: TextStyle(
-              fontWeight: FontWeight.w700,
-              color: dark ? darkText : text)),
-      titleLarge: GoogleFonts.spaceGrotesk(
-          textStyle: TextStyle(
-              fontWeight: FontWeight.w700,
-              color: dark ? darkText : text)),
-      titleMedium: GoogleFonts.spaceGrotesk(
-          textStyle: TextStyle(
-              fontWeight: FontWeight.w700,
-              color: dark ? darkText : text)),
+    final onColor = dark ? darkText : text;
+
+    // Display/headline font: Cairo for Arabic (Space Grotesk has no Arabic
+    // glyphs), Space Grotesk otherwise for a precise "data terminal" feel.
+    TextStyle headline({double? fontSize, FontWeight weight = FontWeight.w700}) {
+      final style = TextStyle(
+        fontWeight: weight,
+        color: onColor,
+        fontSize: fontSize,
+        letterSpacing: -0.4,
+      );
+      return arabic
+          ? GoogleFonts.cairo(textStyle: style)
+          : GoogleFonts.spaceGrotesk(textStyle: style);
+    }
+
+    final baseTextTheme = arabic
+        ? GoogleFonts.cairoTextTheme()
+        : GoogleFonts.plusJakartaSansTextTheme();
+
+    final textTheme = baseTextTheme.copyWith(
+      headlineLarge: headline(weight: FontWeight.w800),
+      headlineMedium: headline(weight: FontWeight.w800),
+      headlineSmall: headline(weight: FontWeight.w700),
+      titleLarge: headline(weight: FontWeight.w700),
+      titleMedium: headline(weight: FontWeight.w700),
+      // Small, muted, tracked label — used (uppercased) for stat/field labels.
+      labelSmall: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.8,
+        color: dark ? darkMuted : muted,
+      ),
     );
 
     return ThemeData(
@@ -72,18 +93,18 @@ class ClinicBrand {
       useMaterial3: true,
       scaffoldBackgroundColor: dark ? darkBg : bg1,
       textTheme: textTheme.apply(
-        bodyColor: dark ? darkText : text,
-        displayColor: dark ? darkText : text,
+        bodyColor: onColor,
+        displayColor: onColor,
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
-        foregroundColor: dark ? darkText : text,
+        foregroundColor: onColor,
         elevation: 0,
         centerTitle: false,
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: dark ? darkSurface : panel,
-        indicatorColor: brand.withAlpha(30),
+        indicatorColor: brand.withAlpha(38),
         labelTextStyle: WidgetStateProperty.all(
           TextStyle(
               fontSize: 11,

@@ -311,7 +311,7 @@ clinic/
 └── clinic_mobile_app/
     ├── pubspec.yaml
     └── lib/
-        ├── main.dart
+        ├── main.dart                   # MaterialApp + locale/Directionality (true RTL mirror in Arabic) + theme wiring
         ├── config/
         │   └── app_config.dart         # AppBranding constants
         ├── state/
@@ -322,7 +322,7 @@ clinic/
         │   ├── scan_pairing_screen.dart # QR scan (mobile_scanner) → parsePairingPayload → link-by-token (Settings → Scan QR to link)
         │   ├── activation_screen.dart  # Offline-license flow: serial activation (legacy/manual entry)
         │   ├── home_screen.dart        # Shell: AppBar + NavigationBar + IndexedStack
-        │   ├── dashboard_screen.dart   # Stats grid + recent appointments
+        │   ├── dashboard_screen.dart   # Stats grid (real visits/revenue + per-day trend sparklines) + recent appointments
         │   ├── patients_screen.dart
         │   ├── patient_detail_screen.dart
         │   ├── odontogram_view.dart    # Tooth-chart tab: CustomPaint FDI arch + tap sheet (set condition / log treatment / add to plan)
@@ -333,7 +333,7 @@ clinic/
         │   ├── reports_screen.dart
         │   └── settings_screen.dart    # Server URL, sync, dark mode, language
         ├── services/
-        │   ├── database_service.dart        # Local SQLite (sqflite)
+        │   ├── database_service.dart        # Local SQLite (sqflite); getStats (patients/today/visits/revenue) + getDashboardTrends (real per-day series for sparklines)
         │   ├── local_storage_service.dart   # Secure storage (tokens, bonded peer, server URL)
         │   ├── api_client.dart              # Dio HTTP client
         │   ├── internet_sync_service.dart   # Pull /api/sync/export, push /api/sync/import
@@ -352,15 +352,16 @@ clinic/
         │   ├── bt_error_message.dart        # Pure: BtFailure enum + classifyBtError + bilingual btMessageFor — plain-language BT errors
         │   └── pairing_payload.dart         # Pure: parsePairingPayload — decode the desktop pairing QR's {v,u,t}
         ├── widgets/
-        │   ├── stat_card.dart      # Dashboard metric tile
+        │   ├── stat_card.dart      # Dashboard metric tile: massive number, uppercase muted label, optional trend sparkline
+        │   ├── sparkline.dart      # Axis-less fl_chart trend line (10% fill, touch-to-scrub day value)
         │   ├── clinic_card.dart    # Rounded surface card
         │   ├── section_header.dart
-        │   ├── status_badge.dart
+        │   ├── status_badge.dart   # Soft 10%-opacity status pills (solid-color text)
         │   ├── empty_state.dart
         │   ├── gradient_button.dart
         │   └── sync_status_bar.dart
         └── theme/
-            └── clinic_brand.dart   # Material 3 color scheme + typography
+            └── clinic_brand.dart   # Material 3: "Midnight Oceanic" dark (#0B1120/#151E2E) + teal accent; Plus Jakarta Sans / Space Grotesk (Latin) + Cairo (Arabic)
 ```
 
 ---

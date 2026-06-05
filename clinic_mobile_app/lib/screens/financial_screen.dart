@@ -551,7 +551,10 @@ class _ExpensesTabState extends State<_ExpensesTab> {
                                               style: TextStyle(
                                                   color: scheme.onSurfaceVariant,
                                                   fontSize: 12)),
-                                        Text(e.expenseDate ?? '',
+                                        Text(
+                                            (e.expenseDate?.isNotEmpty ?? false)
+                                                ? e.expenseDate!
+                                                : '—',
                                             style: TextStyle(
                                                 color: scheme.onSurfaceVariant,
                                                 fontSize: 12)),
@@ -712,7 +715,11 @@ class _ReceivablesTabState extends State<_ReceivablesTab> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(r['patient_name'] ?? '',
+                            Text(
+                                (r['patient_name'] as String?)?.isNotEmpty ==
+                                        true
+                                    ? r['patient_name'] as String
+                                    : '—',
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w700)),
                             Text('₪${_fmt.format(balance)}',

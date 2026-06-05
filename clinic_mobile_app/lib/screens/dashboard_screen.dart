@@ -18,7 +18,10 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  static final _money = NumberFormat('#,##0');
+
   Map<String, dynamic> _stats = {};
+  Map<String, List<double>> _trends = {};
   List<Appointment> _recent = [];
   bool _loading = true;
 
@@ -32,10 +35,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _loading = true);
     final state = context.read<AppState>();
     final stats = await state.db.getStats();
+    final trends = await state.db.getDashboardTrends();
     final recent = await state.appointments.getRecentAppointments(limit: 10);
     if (mounted) {
       setState(() {
         _stats = stats;
+        _trends = trends;
         _recent = recent;
         _loading = false;
       });
@@ -62,31 +67,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
             physics: const NeverScrollableScrollPhysics(),
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            childAspectRatio: 1.45,
+            childAspectRatio: 0.9,
             children: [
               StatCard(
                 label: 'Total Patients',
                 value: '${_stats['total_patients'] ?? 0}',
                 icon: Icons.people_alt_outlined,
                 color: const Color(0xFF0F6D7B),
+                trend: _trends['patients'],
               ),
               StatCard(
                 label: "Today's Appointments",
                 value: '${_stats['today_appointments'] ?? 0}',
                 icon: Icons.event_outlined,
                 color: const Color(0xFF1D7FB7),
+                trend: _trends['appointments'],
               ),
               StatCard(
                 label: 'Total Visits',
                 value: '${_stats['total_visits'] ?? 0}',
                 icon: Icons.medical_services_outlined,
                 color: const Color(0xFF1F9A5F),
+                trend: _trends['visits'],
               ),
               StatCard(
                 label: 'Revenue',
-                value: '₪ ${_stats['total_revenue'] ?? 0}',
+                value: '₪ ${_money.format((_stats['total_revenue'] as num?) ?? 0)}',
                 icon: Icons.payments_outlined,
                 color: const Color(0xFFC47F10),
+                trend: _trends['revenue'],
+                trendLabelFormat: (v) => '₪${_money.format(v)}',
               ),
             ],
           ),

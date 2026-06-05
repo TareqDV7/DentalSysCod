@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'theme/clinic_brand.dart';
@@ -42,9 +43,18 @@ class _ClinicMobileAppState extends State<ClinicMobileApp> {
         builder: (_, state, _) => MaterialApp(
           title: 'Dental Clinic',
           debugShowCheckedModeBanner: false,
-          theme: ClinicBrand.buildTheme(dark: false),
-          darkTheme: ClinicBrand.buildTheme(dark: true),
+          theme: ClinicBrand.buildTheme(dark: false, arabic: state.isArabic),
+          darkTheme: ClinicBrand.buildTheme(dark: true, arabic: state.isArabic),
           themeMode: state.themeMode,
+          // Drives app-wide Directionality so the entire layout physically
+          // mirrors (RTL) in Arabic, not just the translated strings.
+          locale: state.isArabic ? const Locale('ar') : const Locale('en'),
+          supportedLocales: const [Locale('en'), Locale('ar')],
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
           home: const AppEntry(),
           routes: {
             '/settings': (_) => const SettingsScreen(),
