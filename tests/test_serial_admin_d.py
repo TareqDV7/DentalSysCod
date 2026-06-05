@@ -62,3 +62,68 @@ def test_generate_when_absent(tmp_path, monkeypatch):
         assert r.status_code == 200
         assert r.get_json()['public_key']
         assert path.exists()
+
+
+def _mint(client, **body):
+    base = {'clinic_name': 'Smile Dental', 'clinic_code': 'SMD', 'plan_name': 'Standard',
+            'expiry_days': 365, 'max_devices': 3}
+    base.update(body)
+    return client.post('/api/mint', json=base)
+
+
+def test_mint_single_verifies(vendor):
+    r = _mint(vendor, devices=['LAPTOP-01'])
+    assert r.status_code == 200
+    recs = r.get_json()['records']
+    assert len(recs) == 1
+    ok, payload = serial_generator.verify_serial_token(recs[0]['offline_token'], vendor.pub_b64)
+    assert ok is True
+    assert payload['max_devices'] == 3
+    assert payload['plan_name'] == 'Standard'
+    assert payload['serial'] == recs[0]['serial']
+
+
+def test_mint_batch_distinct_and_valid(vendor):
+    recs = _mint(vendor, devices=['A', 'B', 'C']).get_json()['records']
+    assert len(recs) == 3
+    serials = {x['serial'] for x in recs}
+    assert len(serials) == 3
+    for x in recs:
+        ok, _ = serial_generator.verify_serial_token(x['offline_token'], vendor.pub_b64)
+        assert ok is True
+
+
+def test_mint_clinic_level_when_no_devices(vendor):
+    recs = _mint(vendor, devices=[]).get_json()['records']
+    assert len(recs) == 1
+    ok, _ = serial_generator.verify_serial_token(recs[0]['offline_token'], vendor.pub_b64)
+    assert ok is True
+
+
+def test_mint_without_key_400(tmp_path, monkeypatch):
+    monkeypatch.setattr(serial_admin, 'KEY_FILE', str(tmp_path / 'missing.json'))
+    with serial_admin.app.test_client() as c:
+        r = c.post('/api/mint', json={'clinic_name': 'X', 'clinic_code': 'X', 'devices': ['D']})
+        assert r.status_code == 400
+        assert r.get_json()['reason'] == 'no_key'
+
+
+def test_mint_csv_format(vendor):
+    r = vendor.post(
+        '/api/mint?format=csv',
+        json={'clinic_name': 'Smile', 'clinic_code': 'SMD', 'devices': ['A', 'B'],
+              'plan_name': 'Standard', 'expiry_days': 365, 'max_devices': 1})
+    assert r.status_code == 200
+    assert 'text/csv' in r.headers['Content-Type']
+    text = r.get_data(as_text=True)
+    assert 'Serial' in text and text.count('\n') >= 2  # header + 2 rows
+
+
+@pytest.mark.parametrize('body', [
+    {}, {'clinic_name': '', 'clinic_code': 'SMD'},
+    {'clinic_name': 'X', 'clinic_code': 'TOOLONG'},
+    {'clinic_name': 'X', 'clinic_code': 'SMD', 'devices': 'x' * 5000},
+])
+def test_mint_never_500s(vendor, body):
+    r = vendor.post('/api/mint', json=body)
+    assert r.status_code in (200, 400)

@@ -71,5 +71,76 @@ def key_generate():
     return jsonify({'public_key': pub_b64, 'key_file': KEY_FILE})
 
 
+def _mint_records(data):
+    """Return (records, error_tuple). error_tuple is (dict, status) or None."""
+    if not os.path.exists(KEY_FILE):
+        return None, ({'error': 'No signing key — generate one first', 'reason': 'no_key'}, 400)
+    clinic_name = str(data.get('clinic_name') or '').strip()
+    clinic_code = str(data.get('clinic_code') or '').strip()
+    if not clinic_name:
+        return None, ({'error': 'clinic_name is required'}, 400)
+    if not clinic_code or len(clinic_code) > 4:
+        return None, ({'error': 'clinic_code is required and must be at most 4 characters'}, 400)
+    try:
+        expiry_days = int(data.get('expiry_days', 365))
+        max_devices = max(1, int(data.get('max_devices', 1)))
+    except (TypeError, ValueError):
+        return None, ({'error': 'expiry_days and max_devices must be numbers'}, 400)
+
+    raw_devices = data.get('devices')
+    if isinstance(raw_devices, str):
+        devices = [d.strip() for d in raw_devices.splitlines() if d.strip()]
+    elif isinstance(raw_devices, list):
+        devices = [str(d).strip() for d in raw_devices if str(d).strip()]
+    else:
+        devices = []
+    if not devices:
+        devices = [f'CLINIC-{clinic_code.upper()}']
+
+    seed = serial_generator.load_private_seed(KEY_FILE)
+    records = []
+    for idx, device_id in enumerate(devices, 1):
+        serial = serial_generator.generate_device_serial_number(clinic_code, device_id, idx)
+        lic = serial_generator.generate_license_token(
+            serial=serial, clinic_name=clinic_name, device_id=device_id,
+            plan_name=str(data.get('plan_name') or 'Standard'),
+            max_devices=max_devices, expiry_days=expiry_days, private_seed_b64=seed)
+        records.append({
+            'serial': lic['serial'],
+            'offline_token': lic['offline_token'],
+            'device_id': device_id,
+            'plan_name': lic['payload']['plan_name'],
+            'max_devices': lic['payload']['max_devices'],
+            'issued_at': lic['issued_at'],
+            'expires_at': lic['expires_at'],
+        })
+    return records, None
+
+
+@app.route('/api/mint', methods=['POST'])
+def mint():
+    data = request.json or {}
+    records, err = _mint_records(data)
+    if err is not None:
+        return jsonify(err[0]), err[1]
+    if request.args.get('format') == 'csv':
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=['Serial', 'Device ID', 'Plan', 'Max Devices',
+                                                 'Issued At', 'Expires At', 'Offline Token'])
+        writer.writeheader()
+        for r in records:
+            writer.writerow({'Serial': r['serial'], 'Device ID': r['device_id'],
+                             'Plan': r['plan_name'], 'Max Devices': r['max_devices'],
+                             'Issued At': r['issued_at'], 'Expires At': r['expires_at'],
+                             'Offline Token': r['offline_token']})
+        code = str(data.get('clinic_code') or 'serials').upper()
+        fname = f"serials_{code}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv"
+        resp = app.response_class(buf.getvalue(), mimetype='text/csv')
+        resp.headers['Content-Disposition'] = f'attachment; filename={fname}'
+        resp.headers['Cache-Control'] = 'no-store'
+        return resp
+    return jsonify({'records': records})
+
+
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=int(os.environ.get('SERIAL_ADMIN_PORT', '8787')))
