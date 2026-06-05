@@ -1250,7 +1250,12 @@ HTML_TEMPLATE = '''
         html[dir="rtl"] .header { text-align: right; }
         html[dir="rtl"] .header-top { flex-direction: row-reverse; }
         html[dir="rtl"] .header-meta { justify-content: flex-start; }
-        html[dir="rtl"] .nav-tabs { border-right: none; border-left: 1px solid var(--line); order: 1; }
+        /* In RTL the sidebar sits on the right: .app-body is a flex row and
+           .nav-tabs is the first child, so RTL's right-to-left main axis lands
+           it on the right naturally. (No `order` override — that would push it
+           back to the left of the content.) The divider flips to the inner
+           (left) edge. */
+        html[dir="rtl"] .nav-tabs { border-right: none; border-left: 1px solid var(--line); }
         html[dir="rtl"] .nav-tab { text-align: right; }
         html[dir="rtl"] .form-row { direction: rtl; }
         html[dir="rtl"] .toolbar-row { flex-direction: row-reverse; }
