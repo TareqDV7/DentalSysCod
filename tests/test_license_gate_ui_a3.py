@@ -44,3 +44,21 @@ def test_template_scripts_pass_node_check():
         assert proc.returncode == 0, proc.stderr
     finally:
         os.unlink(path)
+
+
+def test_hidden_utility_is_authoritative():
+    # Regression: the activation overlay is `<div class="license-overlay hidden">`
+    # and the renew/view-only banners are `class="license-banner hidden"`. Both
+    # `.license-overlay` and `.license-banner` set `display:flex` and are defined
+    # AFTER the `.hidden` utility in the same stylesheet, so without !important they
+    # win the equal-specificity source-order tie and the `hidden` class becomes
+    # visually inert -- the activation card stays on screen and "re-pops" after a
+    # licensed reload. Pin that `.hidden` forces display:none authoritatively.
+    css = templates.HTML_TEMPLATE
+    m = re.search(r'\.hidden\s*\{[^}]*\}', css)
+    assert m, '.hidden rule not found in portal CSS'
+    assert 'display:none!important' in re.sub(r'\s+', '', m.group(0)), (
+        '.hidden must be `display:none !important` so the licensing overlay/banners '
+        'actually hide; a later `.license-overlay{display:flex}` otherwise wins the '
+        'source-order tie and the activation card re-pops after activation'
+    )

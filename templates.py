@@ -1658,7 +1658,11 @@ HTML_TEMPLATE = '''
         [data-theme="dark"] path[stroke="#94a3b8"] { stroke: #475569; }
         [dir="rtl"] .tooth-row { transform: scaleX(-1); }
         [dir="rtl"] .tooth-num { transform: scaleX(-1); transform-origin: center; }
-        .hidden { display:none; }
+        /* `.hidden` must beat component display rules defined after it (e.g.
+           `.license-overlay`/`.license-banner` use display:flex), otherwise
+           toggling the class is visually inert and the activation overlay
+           re-pops after a licensed reload. !important keeps the utility wins. */
+        .hidden { display:none !important; }
 
         /* ── Licensing: renew/view-only banners + activation overlay ──
            Theme-aware (light/dark) and built from the same design tokens as the
