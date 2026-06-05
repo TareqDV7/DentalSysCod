@@ -1659,43 +1659,149 @@ HTML_TEMPLATE = '''
         [dir="rtl"] .tooth-row { transform: scaleX(-1); }
         [dir="rtl"] .tooth-num { transform: scaleX(-1); transform-origin: center; }
         .hidden { display:none; }
-        .license-banner { display:flex; gap:12px; align-items:center; padding:10px 16px;
-          background:#fff4ce; color:#5c4400; font-size:.9rem; }
-        .license-banner--warn { background:#ffe2e5; color:#8d1f33; }
-        .license-overlay { position:fixed; inset:0; background:rgba(15,23,42,.78);
-          display:flex; align-items:center; justify-content:center; z-index:9999; }
-        .license-overlay__card { background:#fff; padding:28px; border-radius:14px;
-          width:min(440px,92vw); box-shadow:0 24px 60px rgba(0,0,0,.35); }
-        .license-overlay__card textarea { width:100%; margin:12px 0; font-family:monospace; }
-        .license-overlay__status { margin-top:10px; min-height:18px; font-size:.85rem; }
+
+        /* ── Licensing: renew/view-only banners + activation overlay ──
+           Theme-aware (light/dark) and built from the same design tokens as the
+           rest of the app, so the first-run flow reads as one premium product. */
+        .license-banner {
+            display:flex; align-items:center; gap:12px;
+            padding:11px 24px; font-size:0.9rem; font-weight:600; color:#5c4a12;
+            background:linear-gradient(180deg, rgba(232,167,51,0.20), rgba(232,167,51,0.10));
+            border-bottom:1px solid rgba(232,167,51,0.45);
+        }
+        .license-banner--warn {
+            color:#7a1f2b;
+            background:linear-gradient(180deg, rgba(218,76,88,0.18), rgba(218,76,88,0.09));
+            border-bottom-color:rgba(218,76,88,0.45);
+        }
+        body[data-theme="dark"] .license-banner { color:#f0d79a; }
+        body[data-theme="dark"] .license-banner--warn { color:#ffb3bd; }
+        .license-banner__dot {
+            width:9px; height:9px; border-radius:50%; flex-shrink:0;
+            background:var(--warning); box-shadow:0 0 0 4px rgba(216,158,31,0.20);
+        }
+        .license-banner--warn .license-banner__dot { background:var(--danger); box-shadow:0 0 0 4px rgba(217,67,78,0.20); }
+        .license-banner__text { flex:1; line-height:1.45; }
+        .license-banner__actions { display:flex; gap:8px; flex-shrink:0; }
+        .license-banner__ghost { background:transparent; border:1px solid currentColor; color:inherit; opacity:0.85; }
+
+        .license-overlay {
+            position:fixed; inset:0; z-index:9999; padding:20px;
+            display:flex; align-items:center; justify-content:center;
+            background:
+                radial-gradient(1200px 600px at 50% -10%, rgba(29,127,183,0.28), transparent 60%),
+                rgba(8,14,26,0.72);
+            backdrop-filter:blur(10px);
+        }
+        .license-overlay__card {
+            position:relative; width:min(460px,94vw);
+            background:var(--panel); color:var(--text);
+            border:1px solid var(--line); border-radius:20px;
+            padding:30px 30px 26px;
+            box-shadow:0 30px 80px rgba(0,0,0,0.45);
+            overflow:hidden;
+        }
+        .license-overlay__card::before {
+            content:""; position:absolute; top:0; left:0; right:0; height:4px;
+            background:linear-gradient(90deg, var(--brand), var(--brand-2), var(--accent));
+        }
+        .license-card__brand { display:flex; align-items:center; gap:12px; margin-bottom:22px; }
+        .license-card__logo { height:44px; width:auto; border-radius:10px; }
+        .license-card__system { font-size:1.15rem; font-weight:800; letter-spacing:0.01em; }
+        .license-card__tag { font-size:0.8rem; color:var(--muted); font-weight:600; margin-top:1px; }
+        .license-card__title { font-size:1.3rem; font-weight:800; line-height:1.25; margin-bottom:8px; }
+        .license-card__title span { font-size:0.95rem; color:var(--muted); font-weight:700; }
+        .license-card__lead { font-size:0.86rem; color:var(--muted); line-height:1.6; margin-bottom:18px; }
+        .license-field__label {
+            display:block; font-size:0.74rem; font-weight:800; letter-spacing:0.05em;
+            text-transform:uppercase; color:var(--muted); margin-bottom:8px;
+        }
+        .license-field {
+            width:100%; padding:12px 14px; font:inherit; font-size:0.92rem; line-height:1.5;
+            font-family:'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+            background:var(--bg-1); color:var(--text);
+            border:1.5px solid var(--line); border-radius:12px; resize:vertical;
+        }
+        .license-field:focus { outline:none; border-color:#7bb6e2; box-shadow:0 0 0 4px rgba(61,149,211,0.16); }
+        .license-card__cta { width:100%; margin-top:18px; padding:13px; font-size:0.95rem; border-radius:12px; }
+        .license-card__ghost { width:100%; margin-top:10px; background:transparent; border:1.5px solid var(--line); color:var(--text); }
+        .license-card__ghost:hover { background:var(--bg-1); }
+        .license-overlay__status { margin-top:12px; min-height:18px; font-size:0.84rem; color:var(--muted); }
+        .license-overlay__status.is-error { color:var(--danger); }
+        .license-overlay__status.is-busy { color:var(--brand-2); }
+
+        /* Confirmation card: what the pasted activation code decodes to */
+        .license-preview {
+            margin-top:16px; padding:14px 16px;
+            background:linear-gradient(180deg, rgba(19,181,167,0.12), rgba(29,127,183,0.06));
+            border:1px solid rgba(19,181,167,0.38); border-radius:14px;
+        }
+        .license-preview__head {
+            display:flex; align-items:center; gap:8px; margin-bottom:11px;
+            font-size:0.74rem; font-weight:800; letter-spacing:0.04em; text-transform:uppercase; color:var(--accent);
+        }
+        .license-preview__grid { display:grid; grid-template-columns:auto 1fr; gap:7px 14px; font-size:0.86rem; }
+        .license-preview__k { color:var(--muted); font-weight:700; white-space:nowrap; }
+        .license-preview__v { color:var(--text); font-weight:700; text-align:right; word-break:break-word; }
+
+        /* Success state */
+        #license-view-success { text-align:center; }
+        #license-view-success .license-card__lead { text-align:center; }
+        .license-success__check {
+            width:56px; height:56px; border-radius:50%; margin:4px auto 16px;
+            display:flex; align-items:center; justify-content:center;
+            font-size:1.7rem; font-weight:900; color:#fff;
+            background:linear-gradient(135deg, #2c9e62, #22b7a1);
+            box-shadow:0 12px 32px rgba(34,183,161,0.42);
+        }
+
         body.view-only [data-write] { pointer-events:none; opacity:.5; }
     </style>
 </head>
 <body>
     <div id="license-renew-banner" class="license-banner hidden">
-      <span id="license-renew-text"></span>
-      <button type="button" onclick="openLicenseActivation()">Renew</button>
-      <button type="button" onclick="dismissRenewBanner()">Dismiss</button>
+      <span class="license-banner__dot"></span>
+      <span class="license-banner__text" id="license-renew-text"></span>
+      <span class="license-banner__actions">
+        <button type="button" class="btn btn-sm btn-primary" onclick="openLicenseActivation()">Renew · تجديد</button>
+        <button type="button" class="btn btn-sm license-banner__ghost" onclick="dismissRenewBanner()">Dismiss · إخفاء</button>
+      </span>
     </div>
     <div id="license-viewonly-banner" class="license-banner license-banner--warn hidden">
-      <span>License inactive — view only. Renew to make changes.</span>
-      <button type="button" onclick="openLicenseActivation()">Renew</button>
+      <span class="license-banner__dot"></span>
+      <span class="license-banner__text">License inactive — view only. Renew to make changes. · الترخيص غير نشط — وضع العرض فقط، جدّد للتعديل.</span>
+      <span class="license-banner__actions">
+        <button type="button" class="btn btn-sm btn-primary" onclick="openLicenseActivation()">Renew · تجديد</button>
+      </span>
     </div>
     <div id="license-gate-overlay" class="license-overlay hidden">
       <div class="license-overlay__card">
-        <h2 id="license-gate-title">Activate this clinic / تفعيل العيادة</h2>
-        <p style="font-size:.85rem;color:#8aa0b4;margin:0 0 12px">Enter the serial number and activation code you received from your vendor.<br>أدخل رقم السيريال وكود التفعيل الذي تلقيته من المورد.</p>
-        <label style="font-size:.82rem;color:#8aa0b4;display:block;margin-bottom:4px">Serial Number / رقم السيريال</label>
-        <input id="license-gate-serial" placeholder="DENTAL-SMD-LAPTO-00001" style="width:100%;margin-bottom:10px;padding:9px 10px;background:#0c141d;color:#e7eef6;border:1px solid #243446;border-radius:8px;font:inherit" />
-        <label style="font-size:.82rem;color:#8aa0b4;display:block;margin-bottom:4px">Activation Code / كود التفعيل</label>
-        <textarea id="license-gate-token" rows="3" placeholder="eyJ..." style="width:100%;padding:9px 10px;background:#0c141d;color:#e7eef6;border:1px solid #243446;border-radius:8px;font:inherit;resize:vertical"></textarea>
-        <button type="button" onclick="submitLicenseActivation()" style="margin-top:12px">Activate / تفعيل</button>
-        <div id="license-gate-status" class="license-overlay__status"></div>
-        <div id="license-link-panel" class="hidden">
-          <h2>Enable secure cloud backup?</h2>
-          <p>Back up this clinic to the cloud. You can do this later in Settings.</p>
-          <button type="button" id="license-link-cloud" onclick="linkCloud()">Enable secure cloud backup</button>
-          <button type="button" id="license-link-skip" onclick="skipCloudLink()">Not now</button>
+        <div class="license-card__brand">
+          <img src="/logo" alt="DentaCare" class="license-card__logo">
+          <div>
+            <div class="license-card__system">{{ SYSTEM_NAME }}</div>
+            <div class="license-card__tag">Activate this workstation · تفعيل هذا الجهاز</div>
+          </div>
+        </div>
+
+        <!-- State A: enter the activation code -->
+        <div id="license-view-activate">
+          <h2 class="license-card__title">Activate this clinic <span>تفعيل العيادة</span></h2>
+          <p class="license-card__lead">Paste the activation code from your vendor — the serial number is contained inside it.<br><span dir="rtl">الصق كود التفعيل الذي تلقيته من المورد — رقم السيريال مضمّن بداخله.</span></p>
+          <label class="license-field__label" for="license-gate-token">Activation Code · كود التفعيل</label>
+          <textarea id="license-gate-token" class="license-field" rows="4" placeholder="eyJ..." oninput="onActivationCodeInput()" spellcheck="false" autocomplete="off"></textarea>
+          <div id="license-code-preview" class="license-preview hidden"></div>
+          <button type="button" class="btn btn-primary license-card__cta" onclick="submitLicenseActivation()">Activate · تفعيل</button>
+          <div id="license-gate-status" class="license-overlay__status"></div>
+        </div>
+
+        <!-- State B: activated, offer cloud backup -->
+        <div id="license-view-success" class="hidden">
+          <div class="license-success__check">&#10003;</div>
+          <h2 class="license-card__title">You're activated <span>تم التفعيل</span></h2>
+          <p class="license-card__lead">Enable secure cloud backup for this clinic? You can always turn it on later from Settings.<br><span dir="rtl">تفعيل النسخ الاحتياطي السحابي الآمن لهذه العيادة؟ يمكنك تفعيله لاحقًا من الإعدادات.</span></p>
+          <button type="button" id="license-link-cloud" class="btn btn-primary license-card__cta" onclick="linkCloud()">Enable secure cloud backup · تفعيل النسخ السحابي</button>
+          <button type="button" id="license-link-skip" class="btn license-card__ghost" onclick="skipCloudLink()">Not now · لاحقًا</button>
           <div id="license-link-status" class="license-overlay__status"></div>
         </div>
       </div>
@@ -6945,7 +7051,21 @@ HTML_TEMPLATE = '''
         // Load dashboard on page load
         loadDashboard();
 
-        // License gate functions
+        // ── License gate ──
+        // One card, three swapped views (activate → success → reload). Only one
+        // view is ever visible, so stale fields can't leak between steps.
+        function setGateStatus(el, msg, kind) {
+            if (!el) return;
+            el.textContent = msg || '';
+            el.classList.remove('is-error', 'is-busy');
+            if (kind) el.classList.add(kind);
+        }
+        function setGateView(view) {
+            const a = document.getElementById('license-view-activate');
+            const s = document.getElementById('license-view-success');
+            if (a) a.classList.toggle('hidden', view !== 'activate');
+            if (s) s.classList.toggle('hidden', view !== 'success');
+        }
         async function applyLicenseGate() {
             try {
                 const res = await fetch('/api/license/gate');
@@ -6956,10 +7076,12 @@ HTML_TEMPLATE = '''
                 const vo = document.getElementById('license-viewonly-banner');
                 document.body.classList.toggle('view-only', state === 'view_only');
                 overlay.classList.toggle('hidden', state !== 'unlicensed');
+                if (state === 'unlicensed') setGateView('activate');
                 vo.classList.toggle('hidden', state !== 'view_only');
                 if (state === 'grace') {
-                    document.getElementById('license-renew-text').textContent =
-                        'Subscription expired — in grace period until ' + (g.grace_until || '') + '. Renew to avoid interruption.';
+                    document.getElementById('license-renew-text').textContent = _ar()
+                        ? 'انتهى الاشتراك — أنت في فترة السماح حتى ' + (g.grace_until || '') + '. جدّد لتجنّب الانقطاع.'
+                        : 'Subscription expired — in grace period until ' + (g.grace_until || '') + '. Renew to avoid interruption.';
                     renew.classList.remove('hidden');
                 } else {
                     renew.classList.add('hidden');
@@ -6967,44 +7089,84 @@ HTML_TEMPLATE = '''
             } catch (e) { /* offline: leave the app usable, never gate on a fetch error */ }
         }
         function openLicenseActivation() {
+            setGateView('activate');
             document.getElementById('license-gate-overlay').classList.remove('hidden');
         }
         function dismissRenewBanner() {
             document.getElementById('license-renew-banner').classList.add('hidden');
         }
+        // Decode (NOT verify) a vendor serial token "base64url(json).signature"
+        // purely to preview what the user is about to activate. The server still
+        // verifies the Ed25519 signature on submit — this is display only.
+        function decodeActivationCode(token) {
+            try {
+                const part = String(token).split('.')[0];
+                if (!part) return null;
+                let s = part.replace(/-/g, '+').replace(/_/g, '/');
+                while (s.length % 4) s += '=';
+                const bin = atob(s);
+                const json = decodeURIComponent(Array.prototype.map.call(bin, function (c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                }).join(''));
+                const payload = JSON.parse(json);
+                return (payload && typeof payload === 'object') ? payload : null;
+            } catch (e) { return null; }
+        }
+        function onActivationCodeInput() {
+            const token = (document.getElementById('license-gate-token').value || '').trim();
+            const box = document.getElementById('license-code-preview');
+            const ar = _ar();
+            const p = token ? decodeActivationCode(token) : null;
+            if (!p || !p.serial) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+            const rows = [
+                [ar ? 'العيادة' : 'Clinic', p.clinic_name || '—'],
+                [ar ? 'السيريال' : 'Serial', p.serial],
+                [ar ? 'الباقة' : 'Plan', p.plan_name || 'starter'],
+                [ar ? 'تنتهي في' : 'Expires', p.expires_at || (ar ? 'بدون انتهاء' : 'No expiry')]
+            ];
+            let grid = '';
+            for (const r of rows) {
+                grid += '<div class="license-preview__k">' + escapeHtml(r[0]) + '</div>'
+                      + '<div class="license-preview__v">' + escapeHtml(String(r[1])) + '</div>';
+            }
+            const head = ar ? 'سيتم تفعيل' : 'You are about to activate';
+            box.innerHTML = '<div class="license-preview__head"><span>&#10003;</span><span>' + escapeHtml(head) + '</span></div>'
+                          + '<div class="license-preview__grid">' + grid + '</div>';
+            box.classList.remove('hidden');
+        }
         async function submitLicenseActivation() {
-            const serial = (document.getElementById('license-gate-serial').value || '').trim().toUpperCase();
             const token = (document.getElementById('license-gate-token').value || '').trim();
             const status = document.getElementById('license-gate-status');
-            if (!serial) { status.textContent = 'Please enter the Serial Number. / الرجاء إدخال رقم السيريال.'; return; }
-            if (!token) { status.textContent = 'Please enter the Activation Code. / الرجاء إدخال كود التفعيل.'; return; }
-            status.textContent = 'Activating...';
+            const ar = _ar();
+            if (!token) { setGateStatus(status, ar ? 'الرجاء لصق كود التفعيل.' : 'Please paste the activation code.', 'is-error'); return; }
+            setGateStatus(status, ar ? 'جارٍ التفعيل...' : 'Activating...', 'is-busy');
             try {
                 const res = await fetch('/api/license/activate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ serial_token: token, serial_number: serial })
+                    body: JSON.stringify({ serial_token: token })
                 });
                 const body = await res.json();
                 if (!res.ok) {
-                    const msg = body.error || 'Activation failed.';
-                    const hint = msg.includes('signing key') ? ' — Make sure your vendor configured the app correctly.' : '';
-                    status.textContent = msg + hint;
+                    const msg = body.error || (ar ? 'فشل التفعيل.' : 'Activation failed.');
+                    const hint = String(msg).includes('signing key')
+                        ? (ar ? ' — تأكّد من أن المورد أعدّ التطبيق بشكل صحيح.' : ' — Make sure your vendor configured the app correctly.')
+                        : '';
+                    setGateStatus(status, msg + hint, 'is-error');
                     return;
                 }
-                window.__activeSerial = (body.serial_number || serial);
-                showCloudLinkPanel();
-            } catch (e) { status.textContent = 'Network error. Check your connection and try again.'; }
-        }
-        function showCloudLinkPanel() {
-            document.querySelector('#license-gate-overlay h2').classList.add('hidden');
-            document.getElementById('license-gate-token').classList.add('hidden');
-            document.getElementById('license-gate-status').textContent = '';
-            document.getElementById('license-link-panel').classList.remove('hidden');
+                window.__activeSerial = (body.serial_number || '');
+                setGateStatus(status, '', null);
+                setGateView('success');
+            } catch (e) { setGateStatus(status, ar ? 'خطأ في الشبكة. تحقّق من الاتصال وحاول مجددًا.' : 'Network error. Check your connection and try again.', 'is-error'); }
         }
         async function linkCloud() {
             const status = document.getElementById('license-link-status');
-            status.textContent = 'Linking...';
+            const ar = _ar();
+            const fail = ar
+                ? 'تعذّر الوصول إلى السحابة — يمكنك تفعيل النسخ الاحتياطي لاحقًا من الإعدادات.'
+                : 'Could not reach the cloud — you can enable backup later in Settings.';
+            setGateStatus(status, ar ? 'جارٍ الربط...' : 'Linking...', 'is-busy');
             try {
                 const res = await fetch('/api/onboarding/state');
                 const st = await res.json();
@@ -7015,9 +7177,9 @@ HTML_TEMPLATE = '''
                     body: JSON.stringify({ serial_number: serial })
                 });
                 const body = await res2.json();
-                if (!res2.ok) { status.textContent = body.error || 'Could not reach the cloud — you can enable backup later in Settings.'; return; }
+                if (!res2.ok) { setGateStatus(status, body.error || fail, 'is-error'); return; }
                 window.location.reload();
-            } catch (e) { status.textContent = 'Could not reach the cloud — you can enable backup later in Settings.'; }
+            } catch (e) { setGateStatus(status, fail, 'is-error'); }
         }
         async function skipCloudLink() {
             try {
@@ -7333,23 +7495,53 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in — DentaCare</title>
 <style>
+  :root {
+    --brand:#0f6d7b; --brand-2:#1d7fb7; --accent:#13b5a7;
+    --text:#e7eef8; --muted:#9bb0c8; --panel:#0f1728; --line:#263449; --bg-1:#0b1220;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(135deg,#1e88e5 0%,#0d47a1 100%); }
-  .card { background:#fff; border-radius:14px; box-shadow:0 18px 50px rgba(0,0,0,0.25);
-          padding:34px 32px; width:100%; max-width:360px; }
-  .brand { text-align:center; margin-bottom:20px; }
-  .brand img { height:64px; width:auto; }
-  .brand h1 { font-size:20px; margin:10px 0 2px; color:#1a237e; }
-  .brand p { margin:0; color:#607d8b; font-size:13px; }
-  label { display:block; font-size:13px; color:#37474f; margin:14px 0 6px; }
-  input { width:100%; padding:11px 12px; border:1px solid #cfd8dc; border-radius:8px; font-size:15px; }
-  input:focus { outline:none; border-color:#1e88e5; box-shadow:0 0 0 3px rgba(30,136,229,0.15); }
-  button { width:100%; margin-top:22px; padding:12px; border:none; border-radius:8px; cursor:pointer;
-           background:#1e88e5; color:#fff; font-size:15px; font-weight:600; }
-  button:hover { background:#1565c0; }
-  .error { margin-top:16px; background:#ffebee; border:1px solid #ef9a9a; color:#b71c1c;
-           border-radius:8px; padding:9px 12px; font-size:13px; }
+  body {
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+    font-family:'Manrope','Inter','Segoe UI',Tahoma,sans-serif; color:var(--text);
+    background:
+      radial-gradient(1100px 520px at 100% -20%, rgba(29,127,183,0.28) 0%, transparent 60%),
+      radial-gradient(900px 480px at -10% 0%, rgba(19,181,167,0.18) 0%, transparent 58%),
+      linear-gradient(160deg, #0b1220, #111a2d);
+  }
+  .card {
+    position:relative; width:100%; max-width:380px; overflow:hidden;
+    background:var(--panel); border:1px solid var(--line); border-radius:20px;
+    box-shadow:0 30px 80px rgba(0,0,0,0.45); padding:36px 32px 30px;
+  }
+  .card::before {
+    content:""; position:absolute; top:0; left:0; right:0; height:4px;
+    background:linear-gradient(90deg, var(--brand), var(--brand-2), var(--accent));
+  }
+  .brand { text-align:center; margin-bottom:24px; }
+  .brand img { height:60px; width:auto; border-radius:12px; }
+  .brand h1 { font-size:22px; font-weight:800; margin:12px 0 2px; letter-spacing:0.01em; color:var(--text); }
+  .brand p { margin:0; color:var(--muted); font-size:13px; font-weight:600; }
+  label {
+    display:block; font-size:12px; font-weight:800; letter-spacing:0.05em; text-transform:uppercase;
+    color:var(--muted); margin:18px 0 7px;
+  }
+  input {
+    width:100%; padding:12px 14px; font-size:15px; font-family:inherit;
+    background:var(--bg-1); color:var(--text);
+    border:1.5px solid var(--line); border-radius:12px;
+  }
+  input::placeholder { color:var(--muted); opacity:0.7; }
+  input:focus { outline:none; border-color:#7bb6e2; box-shadow:0 0 0 4px rgba(61,149,211,0.16); }
+  button {
+    width:100%; margin-top:26px; padding:13px; border:none; border-radius:12px; cursor:pointer;
+    background:linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+    color:#fff; font-size:15px; font-weight:800; letter-spacing:0.01em; transition:0.18s ease;
+  }
+  button:hover { transform:translateY(-1px); box-shadow:0 12px 28px rgba(29,127,183,0.35); }
+  .error {
+    margin-top:18px; padding:10px 13px; border-radius:12px; font-size:13px; font-weight:600;
+    color:#ffb3bd; background:rgba(218,76,88,0.14); border:1px solid rgba(218,76,88,0.45);
+  }
 </style>
 </head>
 <body>

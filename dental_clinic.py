@@ -5263,6 +5263,7 @@ def onboarding_state():
     needs_onboarding = (state == 'unlicensed') or (licensed and not cloud_linked and not dismissed)
     return jsonify({
         'licensed_state': state,
+        'serial_number': gate.get('serial_number', ''),
         'cloud_linked': cloud_linked,
         'needs_onboarding': needs_onboarding,
     })
