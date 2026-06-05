@@ -255,7 +255,7 @@ clinic/
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   ├── backup.py             #   tenant-DB backup sidecar (RO data mount → backups volume, rotation)
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 374 tests across 42 suites
+├── tests/                    # 383 tests across 44 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
