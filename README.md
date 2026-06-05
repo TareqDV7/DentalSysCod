@@ -234,6 +234,7 @@ clinic/
 ├── templates.py              # HTML/CSS/JS for the web portal, mobile-download page, and login
 ├── requirements.txt          # Flask, Flask-CORS, pyserial, waitress, qrcode
 ├── serial_generator.py       # CLI tool to generate and batch-export license serials
+├── serial_admin.py           # Vendor-only loopback GUI (http://127.0.0.1:8787) for keypair generation + serial minting
 ├── pytest.ini                # pytest config
 ├── DentaCare.spec            # PyInstaller build spec (outputs dist/DentaCare.exe)
 ├── rebuild.bat               # One-click clean rebuild of the Windows executable
@@ -255,7 +256,7 @@ clinic/
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   ├── backup.py             #   tenant-DB backup sidecar (RO data mount → backups volume, rotation)
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 383 tests across 44 suites
+├── tests/                    # 400 tests across 46 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -279,6 +280,8 @@ clinic/
 │   ├── test_license_gate_ui_a3.py   # First-run gate UI: DOMContentLoaded JS gate rendered in HTML for unlicensed + view-only; absent when licensed
 │   ├── test_onboarding_b.py         # Premium onboarding B: baked cloud URL fallback, env override, pair flow, onboarding state API, license-cloud-url helper
 │   ├── test_onboarding_ui_b.py      # Premium onboarding B UI: cloud-link panel present in HTML template + node --check syntax
+│   ├── test_serial_admin_d.py       # Vendor serial-minting GUI: loopback guard, key status, generate with clobber guard, mint single/batch/clinic-level/CSV, no-500 fuzz
+│   ├── test_serial_admin_ui_d.py   # Vendor serial-minting GUI UI: key-panel + mint-form present in HTML, node --check JS syntax
 │   ├── test_serial_ed25519.py       # Ed25519 keypair + serial-token sign/verify, the dental_clinic verifier, load_private_seed, no demo-key fallback
 │   ├── test_credit_balance.py       # Patient credit derivation + Credit Used
 │   ├── test_date_utils.py

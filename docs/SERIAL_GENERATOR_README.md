@@ -41,6 +41,22 @@ pip install -r requirements.txt   # (or: pip install "cryptography>=42.0")
 cp serial_generator.py /path/to/vendor/
 ```
 
+## GUI (serial_admin.py)
+
+For a friendlier workflow, run the vendor admin console instead of the CLI:
+
+```bash
+python serial_admin.py          # starts on http://127.0.0.1:8787 (loopback only)
+```
+
+The page lets you generate the keypair, copy the **public** key, and mint single or
+batch serials with a Download CSV/JSON button. The private seed stays on disk and
+**never** appears in the browser or any response. Set `SERIAL_ADMIN_PORT` to change
+the port; set `CLINIC_VENDOR_KEY_FILE` to point at a non-default key path.
+
+The GUI is vendor-internal — not bundled in the clinic installer. Treat downloaded
+CSV/JSON files as secrets (they contain real signed tokens).
+
 ## Usage
 
 ### 0. Generate the vendor keypair (one time)
