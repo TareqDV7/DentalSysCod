@@ -236,3 +236,29 @@ def test_server_fingerprint_is_stable_and_client_cannot_override(local):
 def test_activate_never_500s(local, body):
     r = local.post('/api/license/activate', json=body)
     assert r.status_code in (200, 400, 403)
+
+
+# ── Regression: activation flips the gate, so the overlay can't re-loop ─────
+# The redesigned activation card reloads the page after activate + "Not now".
+# On reload, applyLicenseGate() re-reads /api/license/gate; if that still said
+# 'unlicensed' the overlay would re-show and feel like a loop. This pins the
+# seam end-to-end: activate -> gate 'active', and it stays 'active' across the
+# dismiss-cloud-link ("Not now") step + a re-read.
+
+def test_activate_flips_gate_to_active_no_reloop(local):
+    # Before activation the gate blocks (the overlay would show).
+    assert local.get('/api/license/gate').get_json()['state'] == 'unlicensed'
+
+    # Activate with a valid signed token (the only field the card sends).
+    assert _activate(local, _sign(local, 'DENTAL-A2-LOOP', expiry_days=365)).status_code == 200
+
+    # The post-reload applyLicenseGate() read: state is licensed, overlay hidden.
+    g1 = local.get('/api/license/gate').get_json()
+    assert g1['state'] == 'active' and g1['licensed'] is True
+    assert g1['serial_number'] == 'DENTAL-A2-LOOP'
+
+    # "Not now" path: dismiss the cloud-link step, then the reload re-reads the
+    # gate -- still active, so the activation card does not come back.
+    assert local.post('/api/onboarding/dismiss-cloud-link').status_code == 200
+    g2 = local.get('/api/license/gate').get_json()
+    assert g2['state'] == 'active' and g2['licensed'] is True
