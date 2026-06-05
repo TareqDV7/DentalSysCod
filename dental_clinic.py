@@ -236,7 +236,7 @@ _register_attempts_lock = threading.Lock()
 # Generate the keypair with `python serial_generator.py --genkey` and paste the
 # printed public key here. The private seed (backend_ed25519_key.json) stays on the
 # vendor machine and is NEVER committed.
-_BAKED_SERIAL_PUBLIC_KEY = 'REPLACE_WITH_REAL_VENDOR_PUBLIC_KEY_BASE64'
+_BAKED_SERIAL_PUBLIC_KEY = 'YmDlC/ed9O2R3bmFjw7ydxWuYvztllMTEeIkYU2WewM='
 _SERIAL_PUBLIC_KEY_B64 = os.environ.get('CLINIC_SERIAL_PUBLIC_KEY', '').strip() or _BAKED_SERIAL_PUBLIC_KEY
 _REQUIRE_SIGNED_SERIAL = os.environ.get('CLINIC_REQUIRE_SIGNED_SERIAL', '1').strip().lower() in ('1', 'true', 'yes', 'on')
 # Shared secret for the cloud license admin endpoint (revoke/suspend/release a

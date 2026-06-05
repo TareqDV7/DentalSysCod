@@ -1683,10 +1683,13 @@ HTML_TEMPLATE = '''
     </div>
     <div id="license-gate-overlay" class="license-overlay hidden">
       <div class="license-overlay__card">
-        <h2>Activate this clinic</h2>
-        <p>Paste the serial token from your vendor to activate.</p>
-        <textarea id="license-gate-token" rows="4" placeholder="serial token"></textarea>
-        <button type="button" onclick="submitLicenseActivation()">Activate</button>
+        <h2 id="license-gate-title">Activate this clinic / تفعيل العيادة</h2>
+        <p style="font-size:.85rem;color:#8aa0b4;margin:0 0 12px">Enter the serial number and activation code you received from your vendor.<br>أدخل رقم السيريال وكود التفعيل الذي تلقيته من المورد.</p>
+        <label style="font-size:.82rem;color:#8aa0b4;display:block;margin-bottom:4px">Serial Number / رقم السيريال</label>
+        <input id="license-gate-serial" placeholder="DENTAL-SMD-LAPTO-00001" style="width:100%;margin-bottom:10px;padding:9px 10px;background:#0c141d;color:#e7eef6;border:1px solid #243446;border-radius:8px;font:inherit" />
+        <label style="font-size:.82rem;color:#8aa0b4;display:block;margin-bottom:4px">Activation Code / كود التفعيل</label>
+        <textarea id="license-gate-token" rows="3" placeholder="eyJ..." style="width:100%;padding:9px 10px;background:#0c141d;color:#e7eef6;border:1px solid #243446;border-radius:8px;font:inherit;resize:vertical"></textarea>
+        <button type="button" onclick="submitLicenseActivation()" style="margin-top:12px">Activate / تفعيل</button>
         <div id="license-gate-status" class="license-overlay__status"></div>
         <div id="license-link-panel" class="hidden">
           <h2>Enable secure cloud backup?</h2>
@@ -6970,21 +6973,28 @@ HTML_TEMPLATE = '''
             document.getElementById('license-renew-banner').classList.add('hidden');
         }
         async function submitLicenseActivation() {
+            const serial = (document.getElementById('license-gate-serial').value || '').trim().toUpperCase();
             const token = (document.getElementById('license-gate-token').value || '').trim();
             const status = document.getElementById('license-gate-status');
-            if (!token) { status.textContent = 'Please paste your serial token.'; return; }
+            if (!serial) { status.textContent = 'Please enter the Serial Number. / الرجاء إدخال رقم السيريال.'; return; }
+            if (!token) { status.textContent = 'Please enter the Activation Code. / الرجاء إدخال كود التفعيل.'; return; }
             status.textContent = 'Activating...';
             try {
                 const res = await fetch('/api/license/activate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ serial_token: token })
+                    body: JSON.stringify({ serial_token: token, serial_number: serial })
                 });
                 const body = await res.json();
-                if (!res.ok) { status.textContent = body.error || 'Activation failed.'; return; }
-                window.__activeSerial = (body.serial_number || '');
+                if (!res.ok) {
+                    const msg = body.error || 'Activation failed.';
+                    const hint = msg.includes('signing key') ? ' — Make sure your vendor configured the app correctly.' : '';
+                    status.textContent = msg + hint;
+                    return;
+                }
+                window.__activeSerial = (body.serial_number || serial);
                 showCloudLinkPanel();
-            } catch (e) { status.textContent = 'Network error during activation.'; }
+            } catch (e) { status.textContent = 'Network error. Check your connection and try again.'; }
         }
         function showCloudLinkPanel() {
             document.querySelector('#license-gate-overlay h2').classList.add('hidden');

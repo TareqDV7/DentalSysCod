@@ -19,7 +19,10 @@ import serial_generator
 
 app = Flask(__name__)
 
-KEY_FILE = os.environ.get('CLINIC_VENDOR_KEY_FILE', 'backend_ed25519_key.json')
+KEY_FILE = os.environ.get(
+    'CLINIC_VENDOR_KEY_FILE',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backend_ed25519_key.json'),
+)
 _LOOPBACK = {'127.0.0.1', '::1', 'localhost'}
 
 
@@ -210,7 +213,8 @@ INDEX_TEMPLATE = r'''<!doctype html>
       <button class="ghost" onclick="downloadJson()">Download JSON</button>
       <button class="ghost" onclick="downloadCsv()">Download CSV</button>
     </div>
-    <table id="results"><thead><tr><th>Serial</th><th>Expires</th><th>Token</th></tr></thead><tbody></tbody></table>
+    <p style="font-size:.82rem;color:#8aa0b4;margin:8px 0 4px">Give the clinic owner: the <b style="color:#3ddc97">Serial Number</b> + the <b style="color:#3ddc97">Activation Code</b>. They enter both in the app.</p>
+    <table id="results"><thead><tr><th>Serial Number</th><th>Expires</th><th>Activation Code</th><th></th></tr></thead><tbody></tbody></table>
   </section>
 </main>
 <script>
@@ -262,11 +266,15 @@ INDEX_TEMPLATE = r'''<!doctype html>
     tb.innerHTML = '';
     for (const r of lastRecords) {
       const tr = document.createElement('tr');
-      const tok = document.createElement('td'); tok.className = 'tok'; tok.title = r.offline_token;
-      tok.textContent = r.offline_token;
-      const sc = document.createElement('td'); sc.textContent = r.serial;
+      const sc = document.createElement('td'); sc.textContent = r.serial; sc.style.fontFamily = 'ui-monospace,monospace'; sc.style.fontWeight = '600';
       const ex = document.createElement('td'); ex.textContent = r.expires_at;
-      tr.appendChild(sc); tr.appendChild(ex); tr.appendChild(tok);
+      const tok = document.createElement('td'); tok.className = 'tok'; tok.title = r.offline_token; tok.textContent = r.offline_token;
+      const cp = document.createElement('td');
+      const btn = document.createElement('button'); btn.className = 'ghost'; btn.textContent = 'Copy Code';
+      btn.style.cssText = 'padding:5px 10px;font-size:.8rem;margin:0';
+      btn.onclick = () => { navigator.clipboard.writeText(r.offline_token).then(() => { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy Code', 2000); }); };
+      cp.appendChild(btn);
+      tr.appendChild(sc); tr.appendChild(ex); tr.appendChild(tok); tr.appendChild(cp);
       tb.appendChild(tr);
     }
     document.getElementById('results-panel').style.display = lastRecords.length ? '' : 'none';
