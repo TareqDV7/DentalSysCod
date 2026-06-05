@@ -37,3 +37,28 @@ def test_key_status_no_key(tmp_path, monkeypatch):
 def test_loopback_guard_blocks_remote(vendor):
     r = vendor.get('/api/key/status', environ_overrides={'REMOTE_ADDR': '203.0.113.9'})
     assert r.status_code == 403
+
+
+def test_generate_refuses_to_clobber(vendor):
+    r = vendor.post('/api/key/generate', json={})
+    assert r.status_code == 409
+    assert r.get_json()['reason'] == 'exists'
+    assert vendor.priv_b64 not in r.get_data(as_text=True)
+
+
+def test_generate_with_confirm_rotates_key(vendor):
+    r = vendor.post('/api/key/generate', json={'confirm_overwrite': True})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['public_key'] and body['public_key'] != vendor.pub_b64  # new key
+    assert 'private' not in r.get_data(as_text=True)
+
+
+def test_generate_when_absent(tmp_path, monkeypatch):
+    path = tmp_path / 'new_key.json'
+    monkeypatch.setattr(serial_admin, 'KEY_FILE', str(path))
+    with serial_admin.app.test_client() as c:
+        r = c.post('/api/key/generate', json={})
+        assert r.status_code == 200
+        assert r.get_json()['public_key']
+        assert path.exists()

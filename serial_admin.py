@@ -54,5 +54,22 @@ def key_status():
     return jsonify({'has_key': True, 'public_key': pub, 'key_file': KEY_FILE})
 
 
+@app.route('/api/key/generate', methods=['POST'])
+def key_generate():
+    data = request.json or {}
+    confirm = bool(data.get('confirm_overwrite'))
+    if os.path.exists(KEY_FILE) and not confirm:
+        return jsonify({'error': 'A signing key already exists. Overwriting it invalidates '
+                                 'every serial already issued.', 'reason': 'exists'}), 409
+    priv_b64, pub_b64 = serial_generator.generate_keypair()
+    with open(KEY_FILE, 'w', encoding='utf-8') as fh:
+        json.dump({'alg': 'ed25519', 'private': priv_b64}, fh)
+    try:
+        os.chmod(KEY_FILE, 0o600)
+    except OSError:
+        pass
+    return jsonify({'public_key': pub_b64, 'key_file': KEY_FILE})
+
+
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=int(os.environ.get('SERIAL_ADMIN_PORT', '8787')))
