@@ -136,7 +136,7 @@ def mint():
         code = str(data.get('clinic_code') or 'serials').upper()
         fname = f"serials_{code}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv"
         resp = app.response_class(buf.getvalue(), mimetype='text/csv')
-        resp.headers['Content-Disposition'] = f'attachment; filename={fname}'
+        resp.headers['Content-Disposition'] = f'attachment; filename="{fname}"'
         resp.headers['Cache-Control'] = 'no-store'
         return resp
     return jsonify({'records': records})
