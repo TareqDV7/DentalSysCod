@@ -29,6 +29,11 @@ Thumbs.db
 # Build artifacts
 *.exe
 *.msi
+# Built mobile app — a ~56-80MB binary rebuilt every release. Not tracked in git
+# (each build is huge churn + chokes HTTPS pushes). The app serves it at
+# /downloads/android from the on-disk file (deployment/mobile/android/clinic-mobile.apk),
+# so keep that file present locally / on the server; distribute via GitHub Releases.
+*.apk
 
 # ...except these vendor binaries (pinned versions, MIT-licensed, redistributed
 # alongside the installer to remove setup friction for downstream packagers)
