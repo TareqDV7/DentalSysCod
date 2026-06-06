@@ -15,6 +15,12 @@ COPY dental_clinic.py ./
 # HTML lives there), so the cloud image needs it even though the staff portal
 # isn't served on the cloud node — without it the container crash-loops on start.
 COPY templates.py ./
+# It also does `from window.data_dir import resolve_data_dir` at module load.
+# Only data_dir.py (pure stdlib) + the package __init__ (docstring only, no
+# imports) are needed on the cloud path; the GUI submodules are not imported.
+# resolve_data_dir() honors CLINIC_DATA_DIR=/data (set below), so the cloud
+# node stores its SQLite files on the mounted volume as before.
+COPY window/__init__.py window/data_dir.py ./window/
 # /logo serves DentaCare.PNG if present (returns 204 otherwise) — copied opportunistically.
 # (kept as a separate optional layer so the build still works if the asset isn't in the context)
 
