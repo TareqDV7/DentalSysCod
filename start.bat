@@ -9,6 +9,13 @@ setlocal
 set SCRIPT_DIR=%~dp0
 cd /d "%SCRIPT_DIR%"
 
+REM Run in production mode (waitress, no dev reloader). This also starts the
+REM background workers that only run outside debug — most importantly the
+REM always-on cloud-sync worker, which auto-links to the cloud using the
+REM activation key and mirrors in the background. (The packaged exe already
+REM runs production because it's frozen; this gives the source launcher parity.)
+set CLINIC_DEBUG=0
+
 REM Prefer the launcher (resolves the active 3.14 install). Fall back to a
 REM direct python.exe path if the launcher isn't on PATH.
 where py.exe >nul 2>nul
