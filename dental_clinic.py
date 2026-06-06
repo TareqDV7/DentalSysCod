@@ -600,7 +600,7 @@ def _iso_to_window_date(value):
 # Product constant: vendor cloud node base URL, baked so the operator never types
 # it. NOT a secret (public endpoint). Override via CLINIC_LICENSE_CLOUD_URL /
 # CLINIC_CLOUD_URL for staging or self-host.
-_BAKED_CLOUD_BASE_URL = 'https://cloud.dentacare.app'   # vendor: set the real host
+_BAKED_CLOUD_BASE_URL = 'https://app.dentacare.tech'   # vendor cloud node (DigitalOcean + Caddy)
 
 
 def _license_cloud_url():
