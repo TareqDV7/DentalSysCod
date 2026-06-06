@@ -11,6 +11,10 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY dental_clinic.py ./
+# dental_clinic.py imports templates.py at module load (the portal/login/mobile
+# HTML lives there), so the cloud image needs it even though the staff portal
+# isn't served on the cloud node — without it the container crash-loops on start.
+COPY templates.py ./
 # /logo serves DentaCare.PNG if present (returns 204 otherwise) — copied opportunistically.
 # (kept as a separate optional layer so the build still works if the asset isn't in the context)
 
