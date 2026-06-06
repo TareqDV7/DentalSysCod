@@ -212,20 +212,29 @@ _CLOUD_OPEN_PREFIXES = ('/static/',)
 # local server only.
 _CLOUD_BLOCKED_PREFIXES = ('/api/medical-images', '/api/cloud/')
 
-# Tiny in-memory per-IP rate limiter for the cloud's only unauthenticated POST
-# (/api/clinics/register). Default 10 attempts per hour per IP; tunable via
-# CLINIC_REGISTER_RATE_LIMIT (count) and CLINIC_REGISTER_RATE_WINDOW (seconds).
-# Resets on every process restart — good enough to deter spam without pulling
-# in Redis. Behind Caddy we read X-Forwarded-For; otherwise request.remote_addr.
-try:
-    _REGISTER_RATE_LIMIT = int(os.environ.get('CLINIC_REGISTER_RATE_LIMIT', '10'))
-except (TypeError, ValueError):
-    _REGISTER_RATE_LIMIT = 10
-try:
-    _REGISTER_RATE_WINDOW = int(os.environ.get('CLINIC_REGISTER_RATE_WINDOW', '3600'))
-except (TypeError, ValueError):
-    _REGISTER_RATE_WINDOW = 3600
-_register_attempts = {}  # ip -> list[timestamps]; sliding window
+# Tiny in-memory per-IP rate limiters for the cloud's POST endpoints. Reset on
+# every process restart — good enough to deter spam without pulling in Redis.
+# Behind Caddy we read X-Forwarded-For; otherwise request.remote_addr.
+#
+# Two SEPARATE budgets, because they have very different traffic shapes:
+#   * register — first-time clinic provisioning. Rare per clinic, so a low cap
+#     deters spam. Already gated by the Ed25519 signed-serial check too.
+#   * validate — the routine license check every device makes periodically. A
+#     clinic's devices all share one NAT IP, so this MUST have a high ceiling or
+#     normal multi-device cloud sync trips a spurious 429 (the bug behind
+#     "Cloud registration failed (HTTP 429)"). The admin revoke endpoint reuses
+#     this generous budget — it's already X-Admin-Token gated.
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+_REGISTER_RATE_LIMIT = _env_int('CLINIC_REGISTER_RATE_LIMIT', 30)
+_REGISTER_RATE_WINDOW = _env_int('CLINIC_REGISTER_RATE_WINDOW', 3600)
+_VALIDATE_RATE_LIMIT = _env_int('CLINIC_VALIDATE_RATE_LIMIT', 240)
+_register_attempts = {}  # ip -> list[timestamps]; sliding window (register)
+_validate_attempts = {}  # ip -> list[timestamps]; sliding window (validate/admin)
 _register_attempts_lock = threading.Lock()
 
 # Ed25519 public key used to verify vendor-signed serials. Base64 (std) of the
@@ -322,25 +331,40 @@ def _client_ip():
     return request.remote_addr or 'unknown'
 
 
-def _check_register_rate_limit():
-    """Return None if allowed, else a (response, status) tuple to send back.
-    Sliding window — drops timestamps older than the window before counting."""
-    if _REGISTER_RATE_LIMIT <= 0:
+def _check_attempts(store, limit, window, what):
+    """Return None if allowed, else a (response, status) 429 tuple. Sliding
+    window — drops timestamps older than the window before counting. `store` is a
+    per-IP dict shared under `_register_attempts_lock`; `what` only shapes the
+    error text."""
+    if limit <= 0:
         return None
     ip = _client_ip()
     now = time.monotonic()
-    cutoff = now - _REGISTER_RATE_WINDOW
+    cutoff = now - window
     with _register_attempts_lock:
-        bucket = [t for t in _register_attempts.get(ip, []) if t > cutoff]
-        if len(bucket) >= _REGISTER_RATE_LIMIT:
-            _register_attempts[ip] = bucket
+        bucket = [t for t in store.get(ip, []) if t > cutoff]
+        if len(bucket) >= limit:
+            store[ip] = bucket
             return jsonify({
-                'error': f'Too many registration attempts — try again later '
-                         f'(limit {_REGISTER_RATE_LIMIT} per {_REGISTER_RATE_WINDOW}s).'
+                'error': f'Too many {what} — try again later '
+                         f'(limit {limit} per {window}s).'
             }), 429
         bucket.append(now)
-        _register_attempts[ip] = bucket
+        store[ip] = bucket
     return None
+
+
+def _check_register_rate_limit():
+    """Anti-spam cap on first-time clinic registration (low ceiling)."""
+    return _check_attempts(_register_attempts, _REGISTER_RATE_LIMIT,
+                           _REGISTER_RATE_WINDOW, 'registration attempts')
+
+
+def _check_validate_rate_limit():
+    """Generous cap on routine license-validate / admin calls — must not throttle
+    a clinic's normal multi-device sync (all devices share one NAT IP)."""
+    return _check_attempts(_validate_attempts, _VALIDATE_RATE_LIMIT,
+                           _REGISTER_RATE_WINDOW, 'requests')
 
 
 def _resolve_clinic_token():
@@ -4415,7 +4439,7 @@ def validate_license():
     remaining_slots, plan_name}. Business failures are HTTP 200 with valid=false."""
     if not CLOUD_MODE:
         return jsonify({'error': 'Not available on a local server'}), 404
-    limited = _check_register_rate_limit()
+    limited = _check_validate_rate_limit()
     if limited is not None:
         return limited
 
@@ -4531,7 +4555,7 @@ def license_admin():
     active), or release a device slot (release=true frees one fingerprint)."""
     if not CLOUD_MODE:
         return jsonify({'error': 'Not available on a local server'}), 404
-    limited = _check_register_rate_limit()
+    limited = _check_validate_rate_limit()
     if limited is not None:
         return limited
     # Compare as bytes: hmac.compare_digest raises TypeError on non-ASCII str
@@ -4652,9 +4676,15 @@ def cloud_status():
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     url, token, interval = _cloud_sync_config()
+    activated = bool(str(read_app_setting(cur, 'active_serial_number', '') or '').strip())
     info = {
         'cloud_mode': CLOUD_MODE,
         'configured': bool(url and token),
+        # Always-on model: cloud sync runs automatically using the activation key.
+        # `auto_sync` = the feature is on (no UI toggle); `activated` = there's a
+        # license to link with. The UI shows Active / waiting-to-link / activate-first.
+        'auto_sync': _auto_cloud_sync_enabled(),
+        'activated': activated,
         'cloud_url': url,
         'clinic_id': (read_app_setting(cur, 'cloud_clinic_id', '') or None),
         'sync_interval_minutes': interval,
@@ -6363,13 +6393,55 @@ def _run_cloud_sync_once(cloud_url, clinic_token, http=None):
     return result
 
 
+def _auto_cloud_sync_enabled():
+    """Cloud sync is ON by default for a clinic's local server — no UI toggle.
+    A vendor/support escape hatch (CLINIC_CLOUD_SYNC_DISABLED=1) can turn the
+    whole feature off without code changes; never enabled on the cloud node."""
+    if CLOUD_MODE:
+        return False
+    return os.environ.get('CLINIC_CLOUD_SYNC_DISABLED', '').strip().lower() \
+        not in ('1', 'true', 'yes', 'on')
+
+
+def _try_auto_cloud_pair():
+    """Link this clinic to the cloud automatically using the activation key the
+    operator already typed (active_serial_number + active_serial_token) — so cloud
+    sync 'just works' with zero clicks. Idempotent and quiet: offline / rate-limited
+    failures just retry on the next worker tick. Returns True once linked."""
+    if not _auto_cloud_sync_enabled():
+        return False
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        serial = str(read_app_setting(cur, 'active_serial_number', '') or '').strip().upper()
+        token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
+        conn.close()
+    except sqlite3.Error:
+        return False
+    if not serial:
+        return False  # not activated yet — nothing to link with
+    cloud_url = _license_cloud_url()
+    if not cloud_url:
+        return False
+    try:
+        _result, err = _link_clinic_to_cloud(cloud_url, serial, token)
+        return err is None
+    except Exception:  # noqa: BLE001 - a link failure must never crash the worker
+        return False
+
+
 def cloud_sync_worker():
     """Background loop on the clinic's LOCAL server: mirror to/from the cloud node
-    every CLINIC_CLOUD_SYNC_INTERVAL_MINUTES, whenever a cloud URL + clinic token
-    are configured. Skips quietly when offline (the failed round is just recorded)."""
+    every CLINIC_CLOUD_SYNC_INTERVAL_MINUTES. Always-on by default — if the clinic
+    is activated but not yet linked, the worker auto-links using the stored
+    activation key (no toggle), then mirrors. Skips quietly when offline."""
     time.sleep(20)  # let startup finish
     while True:
         url, token, interval = _cloud_sync_config()
+        if not (url and token):
+            # Not linked yet → auto-link from the activation key, then sync.
+            if _try_auto_cloud_pair():
+                url, token, interval = _cloud_sync_config()
         if url and token:
             try:
                 _run_cloud_sync_once(url, token)

@@ -2559,26 +2559,10 @@ HTML_TEMPLATE = '''
                 <h3 style="margin-top:18px;" data-en="Cloud Sync" data-ar="المزامنة السحابية">Cloud Sync</h3>
                 <div class="section-card" style="max-width:560px;margin-bottom:18px;">
                     <p style="margin:0 0 12px;color:var(--muted);font-size:0.9em;line-height:1.6;"
-                       data-en="Mirror this clinic's data to the cloud node so it stays reachable online and from mobile when off the local network. Staff keep using this local server — syncing runs in the background."
-                       data-ar="انسخ بيانات هذه العيادة إلى الخادم السحابي لتبقى متاحة عبر الإنترنت ومن الهاتف خارج الشبكة المحلية. يستمر الموظفون باستخدام هذا الخادم المحلي — تتم المزامنة في الخلفية.">Mirror this clinic's data to the cloud node so it stays reachable online and from mobile when off the local network. Staff keep using this local server — syncing runs in the background.</p>
+                       data-en="Cloud sync is automatic. Your clinic's data backs up online whenever there's an internet connection, so it stays reachable from your phone — no setup. To use the same data on a phone, just enter the same activation key in the mobile app."
+                       data-ar="المزامنة السحابية تلقائية. تُنسخ بيانات عيادتك إلى الإنترنت عند توفر الاتصال لتبقى متاحة من هاتفك — دون أي إعداد. لاستخدام نفس البيانات على الهاتف، أدخل نفس مفتاح التفعيل في تطبيق الهاتف.">Cloud sync is automatic. Your clinic's data backs up online whenever there's an internet connection, so it stays reachable from your phone — no setup. To use the same data on a phone, just enter the same activation key in the mobile app.</p>
                     <div id="cloud-status-line" style="font-size:0.92em;line-height:1.7;margin-bottom:14px;color:var(--text,#1f2d2f);"></div>
-                    <div class="cloud-toggle-row bt-toggle-row">
-                        <label>
-                            <input type="checkbox" id="cloud-enabled" onchange="cloudToggle(this.checked)"/>
-                            <span data-en="Cloud backup" data-ar="النسخ الاحتياطي السحابي">Cloud backup</span>
-                        </label>
-                    </div>
-                    <div id="cloud-secondary" style="display:none;margin-top:12px;">
-                        <button class="btn btn-secondary" type="button" onclick="cloudSyncNow(this)" data-en="Sync now" data-ar="مزامنة الآن">Sync now</button>
-                        <button class="btn btn-secondary" type="button" onclick="cloudShowPairingQr()" data-en="Link a phone" data-ar="ربط هاتف">Link a phone</button>
-                        <div id="cloud-pairing-qr" style="display:none;margin-top:14px;">
-                            <p style="margin:0 0 10px;color:var(--muted);font-size:0.9em;line-height:1.6;"
-                               data-en="Open the mobile app, then Settings, then Scan QR."
-                               data-ar="افتح تطبيق الهاتف، ثم الإعدادات، ثم مسح رمز QR.">Open the mobile app, then Settings, then Scan QR.</p>
-                            <img id="cloud-pairing-qr-img" alt="Pairing QR"
-                                 style="width:220px;height:220px;background:#fff;padding:10px;border-radius:8px;border:1px solid var(--border,#d8e0e2);">
-                        </div>
-                    </div>
+                    <button class="btn btn-secondary" type="button" onclick="cloudSyncNow(this)" data-en="Sync now" data-ar="مزامنة الآن">Sync now</button>
                 </div>
 
                 <h3 style="margin-top:18px;" data-en="Bluetooth sync" data-ar="مزامنة بلوتوث">Bluetooth sync</h3>
@@ -5706,14 +5690,16 @@ HTML_TEMPLATE = '''
             catch (_) { return null; }
         }
 
+        // Cloud sync is always-on (no toggle): the server auto-links using the
+        // activation key and mirrors in the background. These just reflect status.
         function renderCloudBadge(st) {
             const badge = document.getElementById('cloud-sync-badge');
             if (!badge) return;
             if (!st || st.cloud_mode) { badge.style.display = 'none'; return; }
             badge.style.display = '';
             badge.style.color = 'var(--muted)';
-            if (!st.configured) {
-                badge.textContent = _ar() ? '☁️ المزامنة السحابية: غير مفعّلة' : '☁️ Cloud sync: off';
+            if (st.auto_sync === false) {
+                badge.textContent = _ar() ? '☁️ المزامنة السحابية: متوقفة' : '☁️ Cloud sync: off';
                 return;
             }
             const res = String(st.last_sync_result || '');
@@ -5733,22 +5719,23 @@ HTML_TEMPLATE = '''
             const st = await fetchCloudStatus();
             renderCloudBadge(st);
             const line = document.getElementById('cloud-status-line');
-            const toggle = document.getElementById('cloud-enabled');
-            const secondary = document.getElementById('cloud-secondary');
             if (!line) return;
-            const show = (el, on) => { if (el) el.style.display = on ? '' : 'none'; };
-            if (!st) { line.textContent = ''; if (toggle) toggle.checked = false; show(secondary, false); return; }
+            if (!st) { line.textContent = ''; return; }
             if (st.cloud_mode) {
                 line.innerHTML = '<em>' + (_ar() ? 'هذا هو الخادم السحابي.' : 'This is the cloud node.') + '</em>';
-                if (toggle) { toggle.checked = false; toggle.disabled = true; }
-                show(secondary, false);
                 return;
             }
-            if (toggle) toggle.checked = !!st.configured;
-            show(secondary, !!st.configured);
+            if (st.auto_sync === false) {
+                line.innerHTML = '<em>' + (_ar() ? 'المزامنة السحابية متوقفة على هذا الخادم.' : 'Cloud sync is turned off on this server.') + '</em>';
+                return;
+            }
+            if (st.activated === false) {
+                line.innerHTML = '<em>' + (_ar() ? 'فعّل الترخيص لتشغيل المزامنة السحابية.' : 'Activate a license to turn on cloud sync.') + '</em>';
+                return;
+            }
+            const parts = [];
             if (st.configured) {
-                const parts = [];
-                parts.push((_ar() ? 'مرتبط بـ ' : 'Backing up to ') + '<strong>' + (st.cloud_url || '') + '</strong>');
+                parts.push('<strong>' + (_ar() ? '✓ المزامنة السحابية مفعّلة' : '✓ Cloud sync is on') + '</strong>');
                 if (st.last_sync_at) {
                     const ok = String(st.last_sync_result) === 'ok';
                     parts.push((_ar() ? 'آخر مزامنة: ' : 'Last sync: ') + _relativeTime(st.last_sync_at)
@@ -5756,67 +5743,39 @@ HTML_TEMPLATE = '''
                 } else {
                     parts.push(_ar() ? 'لم تتم أي مزامنة بعد' : 'No sync yet');
                 }
-                line.innerHTML = parts.join('<br>');
             } else {
-                line.innerHTML = '<em>' + (_ar() ? 'النسخ الاحتياطي السحابي غير مفعّل.' : 'Cloud backup is off.') + '</em>';
+                // Activated + on, but not linked yet — will connect automatically.
+                parts.push('<strong>' + (_ar() ? '✓ المزامنة السحابية مفعّلة' : '✓ Cloud sync is on') + '</strong>');
+                parts.push(_ar() ? 'بانتظار الاتصال بالإنترنت — ستتم المزامنة تلقائياً.'
+                                 : 'Waiting for internet — it will sync automatically.');
             }
+            line.innerHTML = parts.join('<br>');
         }
 
-        async function cloudToggle(checked) {
-            const toggle = document.getElementById('cloud-enabled');
-            if (checked) {
-                try {
-                    const resp = await fetch('/api/cloud/enable', { method: 'POST' });
-                    const payload = await resp.json().catch(() => ({}));
-                    if (!resp.ok) {
-                        if (toggle) toggle.checked = false;
-                        if (payload.reason === 'not_activated') {
-                            alert(_ar() ? 'فعّل الترخيص أولاً.' : 'Activate a license first.');
-                        } else {
-                            alert(payload.error || (_ar() ? 'تعذّر تفعيل النسخ السحابي.' : 'Could not enable cloud backup.'));
-                        }
-                        return;
-                    }
-                } catch (_) {
-                    if (toggle) toggle.checked = false;
-                    alert(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.');
-                }
-            } else {
-                if (!confirm(_ar() ? 'إيقاف النسخ الاحتياطي السحابي؟' : 'Turn off cloud backup?')) {
-                    if (toggle) toggle.checked = true;
-                    return;
-                }
-                try { await fetch('/api/cloud/unpair', { method: 'POST' }); } catch (_) {}
-            }
-            await loadCloudSyncSettings();
-        }
-
+        // Manual "Sync now". Auto-link first if not yet connected (uses the
+        // activation key on the server — no inputs), then run a sync.
         async function cloudSyncNow(btn) {
             if (btn) btn.disabled = true;
             try {
-                const resp = await fetch('/api/cloud/sync-now', { method: 'POST' });
+                const st = await fetchCloudStatus();
+                if (st && st.activated === false) {
+                    alert(_ar() ? 'فعّل الترخيص أولاً.' : 'Activate a license first.');
+                    return;
+                }
+                const endpoint = (st && st.configured) ? '/api/cloud/sync-now' : '/api/cloud/enable';
+                const resp = await fetch(endpoint, { method: 'POST' });
                 const payload = await resp.json().catch(() => ({}));
                 if (!resp.ok) {
                     alert(payload.error || (_ar() ? 'فشل المزامنة' : 'Sync failed'));
-                } else if (payload.ok) {
-                    alert((_ar() ? 'تمت المزامنة. ' : 'Synced. ') + `↓${payload.pulled || 0} ↑${payload.pushed || 0}`);
+                } else if (payload.ok || payload.success) {
+                    const fs = payload.first_sync || payload;
+                    alert((_ar() ? 'تمت المزامنة. ' : 'Synced. ') + `↓${fs.pulled || 0} ↑${fs.pushed || 0}`);
                 } else {
                     alert((_ar() ? 'لم تكتمل المزامنة: ' : 'Sync did not complete: ') + (payload.error || ''));
                 }
             } catch (_) {
                 alert(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.');
             } finally { if (btn) btn.disabled = false; await loadCloudSyncSettings(); }
-        }
-
-        // Reveal the phone-pairing QR. The image src points at the authed
-        // /api/cloud/pairing-qr endpoint; a ts cache-buster forces a fresh
-        // render each click so a stale (e.g. post-unpair) image never lingers.
-        function cloudShowPairingQr() {
-            const wrap = document.getElementById('cloud-pairing-qr');
-            const img = document.getElementById('cloud-pairing-qr-img');
-            if (!wrap || !img) return;
-            img.src = '/api/cloud/pairing-qr?ts=' + Date.now();
-            wrap.style.display = '';
         }
 
         // ── Bluetooth Sync (Settings → Bluetooth Sync) ────────────────────────

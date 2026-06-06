@@ -33,6 +33,15 @@ services:
       - CLINIC_SERIAL_PUBLIC_KEY=${CLINIC_SERIAL_PUBLIC_KEY:-}
       - CLINIC_ADMIN_API_TOKEN=${CLINIC_ADMIN_API_TOKEN:-}
       - CLINIC_REQUIRE_SIGNED_SERIAL=${CLINIC_REQUIRE_SIGNED_SERIAL:-1}
+      # Per-IP rate limits. register has its own (low) anti-spam budget; the
+      # routine license `validate` (and admin) calls have a SEPARATE, far higher
+      # budget — a clinic's devices all share one NAT IP, so lumping their
+      # periodic validate calls in with register tripped a spurious 429 on cloud
+      # sync. Empty here → the app's sane code defaults (register 30 / validate
+      # 240 per hour) apply; set a value in cloud/.env only to override.
+      - CLINIC_REGISTER_RATE_LIMIT=${CLINIC_REGISTER_RATE_LIMIT:-}
+      - CLINIC_VALIDATE_RATE_LIMIT=${CLINIC_VALIDATE_RATE_LIMIT:-}
+      - CLINIC_REGISTER_RATE_WINDOW=${CLINIC_REGISTER_RATE_WINDOW:-}
 
   caddy:
     image: caddy:2

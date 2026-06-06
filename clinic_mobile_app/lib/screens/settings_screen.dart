@@ -2,18 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:provider/provider.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
-import '../config/app_config.dart';
+import '../config/app_config.dart' show AppBranding;
 import '../models/holiday.dart';
 import '../state/app_state.dart';
 import '../services/bluetooth_permissions.dart';
 import '../services/clinic_api.dart' show SyncLink;
 import '../services/connectivity_sync_service.dart';
-import '../services/cloud_sync_service.dart';
-import '../services/local_storage_service.dart';
 import 'catalog_screen.dart';
 import 'tooth_conditions_screen.dart';
-import 'pairing_screen.dart';
-import 'scan_pairing_screen.dart';
 import '../utils/app_strings.dart';
 import '../utils/bt_error_message.dart';
 import '../utils/date_format_helper.dart';
@@ -30,9 +26,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _urlCtrl;
-  late TextEditingController _cloudUrlCtrl;
-  late TextEditingController _cloudSerialCtrl;
-  late TextEditingController _cloudClinicNameCtrl;
+  late TextEditingController _activationKeyCtrl;
   bool _syncing = false;
   bool _pairingCloud = false;
   String? _lastSync;
@@ -43,19 +37,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     final state = context.read<AppState>();
     _urlCtrl = TextEditingController(text: state.api.baseUrl);
-    _cloudUrlCtrl = TextEditingController(
-        text: state.cloudUrl ?? CloudSyncService.defaultCloudUrl);
-    _cloudSerialCtrl = TextEditingController();
-    _cloudClinicNameCtrl = TextEditingController(text: state.clinicName);
+    _activationKeyCtrl = TextEditingController();
     _loadLastSync();
   }
 
   @override
   void dispose() {
     _urlCtrl.dispose();
-    _cloudUrlCtrl.dispose();
-    _cloudSerialCtrl.dispose();
-    _cloudClinicNameCtrl.dispose();
+    _activationKeyCtrl.dispose();
     super.dispose();
   }
 
@@ -71,18 +60,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _syncing = false);
   }
 
-  Future<void> _openPairingScreen() async {
-    final app = context.read<AppState>();
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => PairingScreen(onPaired: () async {
-        // Re-init so api.deviceToken + sync targets pick up the fresh token.
-        await app.init();
-        if (mounted) Navigator.of(context).pop();
-      }),
-    ));
-    await _loadLastSync();
-  }
-
   Future<void> _saveUrl() async {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty) return;
@@ -93,47 +70,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _pairCloud() async {
-    final url = _cloudUrlCtrl.text.trim();
-    final serial = _cloudSerialCtrl.text.trim();
-    final name = _cloudClinicNameCtrl.text.trim();
-    if (url.isEmpty || serial.isEmpty || name.isEmpty) {
-      setState(() => _cloudStatus =
-          'Cloud URL, serial, and clinic name are all required.');
+  Future<void> _activateWithKey() async {
+    final key = _activationKeyCtrl.text.trim();
+    if (key.isEmpty) {
+      setState(() => _cloudStatus = 'Enter your activation key.');
       return;
     }
     setState(() {
       _pairingCloud = true;
-      _cloudStatus = 'Pairing with cloud…';
+      _cloudStatus = 'Linking…';
     });
     try {
-      final info = await context
-          .read<AppState>()
-          .pairCloud(cloudUrl: url, serialNumber: serial, clinicName: name);
+      final info = await context.read<AppState>().activateWithKey(key);
       if (!mounted) return;
       setState(() => _cloudStatus = info.alreadyRegistered
-          ? 'Re-linked to existing cloud account.'
-          : 'Cloud account created · clinic #${info.clinicId ?? '?'}.');
-      _cloudSerialCtrl.clear();
+          ? 'Linked to your clinic.'
+          : 'Linked · clinic #${info.clinicId ?? '?'}.');
+      _activationKeyCtrl.clear();
       await _loadLastSync();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _cloudStatus = 'Pairing failed: $e');
+      setState(() => _cloudStatus = 'Could not link: $e');
     } finally {
       if (mounted) setState(() => _pairingCloud = false);
-    }
-  }
-
-  Future<void> _scanToLink() async {
-    final isArabic = context.read<AppState>().isArabic;
-    final linked = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const ScanPairingScreen()),
-    );
-    if (!mounted) return;
-    if (linked == true) {
-      setState(() => _cloudStatus =
-          isArabic ? 'تم الربط عبر مسح الرمز.' : 'Linked by scanning the QR.');
-      await _loadLastSync();
     }
   }
 
@@ -222,62 +181,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(
                   state.hasCloudAccount
-                      ? 'Paired with ${state.cloudUrl ?? '—'}'
-                      : 'Add a cloud account to sync this device when off the clinic Wi-Fi.',
+                      ? 'This device is linked and syncs online automatically whenever there is a connection.'
+                      : 'Enter the same activation key you used on the desktop. That links this phone to your clinic and it syncs online automatically — nothing else to set up.',
                   style: TextStyle(
                       color: scheme.onSurfaceVariant, fontSize: 13, height: 1.4),
                 ),
-                if (!state.hasCloudAccount) ...[
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _cloudUrlCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Cloud server URL',
-                      prefixIcon: Icon(Icons.cloud_outlined),
-                      hintText: 'https://app.dentacare.tech',
-                    ),
-                    keyboardType: TextInputType.url,
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _activationKeyCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Activation key',
+                    prefixIcon: Icon(Icons.vpn_key_outlined),
+                    hintText: 'Paste your activation key',
                   ),
+                  autocorrect: false,
+                  minLines: 1,
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 12),
+                GradientButton(
+                  label: _pairingCloud
+                      ? 'Linking…'
+                      : (state.hasCloudAccount
+                          ? 'Re-link with a new key'
+                          : 'Link this device'),
+                  icon: Icons.cloud_sync_outlined,
+                  loading: _pairingCloud,
+                  onPressed: _pairingCloud ? null : _activateWithKey,
+                  width: double.infinity,
+                ),
+                if (state.hasCloudAccount) ...[
                   const SizedBox(height: 8),
-                  TextField(
-                    controller: _cloudSerialCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Serial number',
-                      prefixIcon: Icon(Icons.confirmation_number_outlined),
-                      hintText: 'XXXX-XXXX-XXXX-XXXX',
-                    ),
-                    autocorrect: false,
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _cloudClinicNameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Clinic name',
-                      prefixIcon: Icon(Icons.local_hospital_outlined),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  GradientButton(
-                    label: _pairingCloud ? 'Pairing…' : 'Pair with cloud',
-                    icon: Icons.cloud_sync_outlined,
-                    loading: _pairingCloud,
-                    onPressed: _pairingCloud ? null : _pairCloud,
-                    width: double.infinity,
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _pairingCloud ? null : _scanToLink,
-                    icon: const Icon(Icons.qr_code_scanner),
-                    label: Text(state.locale == 'ar'
-                        ? 'مسح رمز QR للربط'
-                        : 'Scan QR to link'),
-                  ),
-                ] else ...[
-                  const SizedBox(height: 12),
                   OutlinedButton.icon(
                     onPressed: _unpairCloud,
                     icon: const Icon(Icons.link_off),
-                    label: const Text('Unpair from cloud'),
+                    label: const Text('Unlink this device'),
                   ),
                 ],
                 if (_cloudStatus != null) ...[
@@ -335,28 +273,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   loading: _syncing,
                   onPressed: _syncing ? null : _syncNow,
                   width: double.infinity,
-                ),
-                const SizedBox(height: 8),
-                FutureBuilder<String?>(
-                  future: LocalStorageService().getDeviceToken(),
-                  builder: (context, snap) {
-                    final hasToken =
-                        snap.data != null && snap.data!.isNotEmpty;
-                    final isArabic =
-                        context.read<AppState>().locale == 'ar';
-                    return OutlinedButton.icon(
-                      onPressed: _openPairingScreen,
-                      icon: Icon(
-                          hasToken ? Icons.refresh : Icons.qr_code_2_outlined),
-                      label: Text(hasToken
-                          ? (isArabic
-                              ? 'إعادة الإقران عبر الواي فاي (رمز)'
-                              : 'Re-pair via Wi-Fi (code)')
-                          : (isArabic
-                              ? 'إقران عبر الواي فاي (رمز 6 أرقام)'
-                              : 'Pair via Wi-Fi (6-digit code)')),
-                    );
-                  },
                 ),
               ],
             ),

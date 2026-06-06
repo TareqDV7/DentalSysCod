@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../services/clinic_api.dart';
+import '../services/api_client.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/database_service.dart';
 import '../services/patient_service.dart';
@@ -16,6 +17,7 @@ import '../services/bluetooth_sync_service.dart';
 import '../services/connectivity_sync_service.dart';
 import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
+import '../utils/activation_token.dart';
 import '../utils/bt_error_message.dart';
 
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
@@ -274,60 +276,47 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// Register this device's clinic on the shared cloud node and remember the token
-  /// so subsequent syncs can fall back to (or run against) the cloud.
-  Future<CloudAccountInfo> pairCloud({
-    required String cloudUrl,
-    required String serialNumber,
-    required String clinicName,
+  /// Link this device to its clinic using the vendor-signed **activation key**
+  /// — the only thing the user types. The serial is read from the key, the
+  /// device registers against the baked cloud node (signature verified there),
+  /// and the returned clinic token is persisted so cloud sync runs automatically.
+  ///
+  /// Does NOT touch the device token (that belongs to the LAN/Bluetooth pairing
+  /// flow); cloud sync authenticates with the clinic token instead.
+  ///
+  /// Throws [ApiException] if the key is malformed or the cloud rejects it.
+  Future<CloudAccountInfo> activateWithKey(
+    String activationKey, {
+    String? clinicName,
   }) async {
+    final key = activationKey.trim();
+    final parsed = ActivationToken.tryParse(key);
+    if (parsed == null) {
+      throw const ApiException('That activation key is not valid.');
+    }
+    final name = (clinicName != null && clinicName.trim().isNotEmpty)
+        ? clinicName.trim()
+        : (parsed.clinicName ?? 'Clinic');
+    const cloudUrl = CloudSyncService.defaultCloudUrl;
     final info = await cloud.register(
       cloudUrl: cloudUrl,
-      serialNumber: serialNumber,
-      clinicName: clinicName,
+      serialNumber: parsed.serial,
+      clinicName: name,
+      offlineToken: key,
     );
+    await _storage.setSerialNumber(parsed.serial);
+    await _storage.setClinicName(name);
     await _storage.setCloudAccount(
       cloudUrl: cloudUrl,
       clinicToken: info.clinicToken,
       clinicId: info.clinicId,
     );
-    if (clinicName.trim().isNotEmpty) {
-      await _storage.setClinicName(clinicName.trim());
-      _clinicName = clinicName.trim();
-    }
+    _clinicName = name;
     _cloudUrl = cloudUrl;
     _hasCloudAccount = true;
     api.clinicToken = info.clinicToken;
     notifyListeners();
-    // Try a sync right away against the new target.
-    unawaited(sync.syncNow());
-    return info;
-  }
-
-  /// Link this device to a clinic the desktop already registered, using a
-  /// `{cloudUrl, clinicToken}` pair scanned from the desktop pairing QR.
-  ///
-  /// Persists into the same storage/state [pairCloud] uses, but skips the
-  /// `/api/clinics/register` call (the token already identifies the tenant),
-  /// then kicks off a first sync against the new cloud target.
-  Future<CloudAccountInfo> linkWithToken({
-    required String cloudUrl,
-    required String clinicToken,
-  }) async {
-    final info = cloud.linkWithToken(
-      cloudUrl: cloudUrl,
-      clinicToken: clinicToken,
-    );
-    await _storage.setCloudAccount(
-      cloudUrl: cloudUrl.trim(),
-      clinicToken: info.clinicToken,
-      clinicId: info.clinicId,
-    );
-    _cloudUrl = cloudUrl.trim();
-    _hasCloudAccount = true;
-    api.clinicToken = info.clinicToken;
-    notifyListeners();
-    // First sync against the freshly-linked cloud target.
+    // First sync right away against the freshly-linked cloud target.
     unawaited(sync.syncNow());
     return info;
   }

@@ -8,11 +8,19 @@ import pytest
 import templates
 
 
-def test_template_has_cloud_toggle():
+def test_template_cloud_sync_is_always_on_no_toggle():
+    """Cloud sync is automatic — the on/off toggle and QR pairing are gone; the
+    card is a status line + a manual 'Sync now' button."""
     html = templates.HTML_TEMPLATE
-    assert 'id="cloud-enabled"' in html
-    assert 'cloudToggle(' in html
-    assert "fetch('/api/cloud/enable'" in html or 'fetch("/api/cloud/enable"' in html
+    # Status surface + manual sync remain.
+    assert 'id="cloud-status-line"' in html
+    assert 'cloudSyncNow(' in html
+    # The toggle is removed (always-on by default).
+    assert 'id="cloud-enabled"' not in html
+    assert 'cloudToggle(' not in html
+    # QR phone-pairing is removed — the phone links by typing the activation key.
+    assert 'cloudShowPairingQr' not in html
+    assert 'id="cloud-pairing-qr"' not in html
 
 
 def test_template_drops_typed_pairing():
