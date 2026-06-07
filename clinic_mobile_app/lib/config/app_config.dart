@@ -2,8 +2,8 @@
 /// Change these values to customise the app name, clinic, and doctor info.
 /// One place to rebrand the entire app.
 class AppBranding {
-  static const String systemName = 'ClinicDesk';
-  static const String clinicName = 'Dental Clinic';
+  static const String systemName = 'DentaCare';
+  static const String clinicName = 'Dental Management System';
   static const String doctorName = 'Dr. Wasfy Barzaq';
   static const String doctorNameAr = 'د. وصفي برزق';
   static const String tagline = 'Patient Care & Practice Management';
