@@ -41,7 +41,7 @@ class _ClinicMobileAppState extends State<ClinicMobileApp> {
       value: _appState,
       child: Consumer<AppState>(
         builder: (_, state, _) => MaterialApp(
-          title: 'Dental Clinic',
+          title: 'DentaCare',
           debugShowCheckedModeBanner: false,
           theme: ClinicBrand.buildTheme(dark: false, arabic: state.isArabic),
           darkTheme: ClinicBrand.buildTheme(dark: true, arabic: state.isArabic),

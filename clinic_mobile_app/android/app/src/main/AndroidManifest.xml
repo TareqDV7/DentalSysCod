@@ -35,7 +35,7 @@
         android:maxSdkVersion="32" />
 
     <application
-        android:label="Dental Clinic"
+        android:label="DentaCare"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
