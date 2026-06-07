@@ -4,6 +4,7 @@ import '../config/app_config.dart';
 import '../services/license_gate_service.dart';
 import '../state/app_state.dart';
 import '../widgets/sync_status_bar.dart';
+import '../widgets/brand_logo.dart';
 import 'dashboard_screen.dart';
 import 'patients_screen.dart';
 import 'appointments_screen.dart';
@@ -71,21 +72,32 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildUnlicensedBlock() {
-    return const Center(
+    return Center(
       child: Padding(
-        padding: EdgeInsets.all(32),
+        padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline, size: 64, color: Colors.grey),
-            SizedBox(height: 16),
+            // "Outside" brand identity on the entry/gate screen.
+            const BrandLogo(size: 76, radius: 20),
+            const SizedBox(height: 16),
             Text(
+              AppBranding.systemName,
+              style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3),
+            ),
+            const SizedBox(height: 24),
+            const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text(
               'Activate on the desktop first',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
-            SizedBox(height: 8),
-            Text(
+            const SizedBox(height: 8),
+            const Text(
               'Open the dental clinic desktop app and complete activation.',
               textAlign: TextAlign.center,
             ),
@@ -104,24 +116,8 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Row(
           children: [
-            // Logo mark
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0F6D7B), Color(0xFF1D7FB7)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.local_hospital,
-                color: Colors.white,
-                size: 18,
-              ),
-            ),
+            // Brand logo mark (the real app icon, not a generic glyph)
+            const BrandLogo(size: 34, radius: 10),
             const SizedBox(width: 10),
             // System name + clinic name stacked
             Expanded(
