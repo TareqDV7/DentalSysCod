@@ -2253,7 +2253,6 @@ HTML_TEMPLATE = '''
                     <div class="stat-card"><h3 id="report-visits">0</h3><p data-i18n="visits">Visits</p></div>
                     <div class="stat-card"><h3 id="report-revenue">₪ 0</h3><p data-i18n="revenue">Revenue</p></div>
                     <div class="stat-card"><h3 id="report-expenses">₪ 0</h3><p data-i18n="expenses">Expenses</p></div>
-                    <div class="stat-card"><h3 id="report-lab-expenses">₪ 0</h3><p data-i18n="lab_expenses">Lab Expenses</p></div>
                     <div class="stat-card"><h3 id="report-clinic-gross-profit">₪ 0</h3><p data-i18n="clinic_gross_profit">Clinic Gross Profit</p></div>
                     <div class="stat-card"><h3 id="report-profit">₪ 0</h3><p data-i18n="profit">Profit</p></div>
                     <div class="stat-card"><h3 id="report-receivables-total">₪ 0</h3><p data-i18n="unpaid_by_patients">Unpaid by Patients</p></div>
@@ -4983,12 +4982,10 @@ HTML_TEMPLATE = '''
             document.getElementById('report-visits').textContent = report.visits;
             const reportRevenue = parseCurrency(report.revenue);
             const reportExpenses = parseCurrency(report.expenses);
-            const reportLabExpenses = parseCurrency(report.lab_expenses);
             const reportClinicGrossProfit = parseCurrency(report.clinic_gross_profit);
             const reportProfit = parseCurrency(report.profit);
             document.getElementById('report-revenue').textContent = '₪ ' + reportRevenue.toFixed(2);
             document.getElementById('report-expenses').textContent = '₪ ' + reportExpenses.toFixed(2);
-            document.getElementById('report-lab-expenses').textContent = '₪ ' + reportLabExpenses.toFixed(2);
             document.getElementById('report-clinic-gross-profit').textContent = '₪ ' + reportClinicGrossProfit.toFixed(2);
             document.getElementById('report-profit').textContent = '₪ ' + reportProfit.toFixed(2);
 
@@ -5016,12 +5013,10 @@ HTML_TEMPLATE = '''
             document.getElementById('report-visits').textContent = weekly.session_count || weekly.visits || 0;
             const weeklyRevenue = parseCurrency(weekly.revenue);
             const weeklyExpenses = parseCurrency(weekly.expenses);
-            const weeklyLabExpenses = parseCurrency(weekly.lab_expenses);
             const weeklyClinicGrossProfit = parseCurrency(weekly.clinic_gross_profit);
             const weeklyProfit = parseCurrency(weekly.profit);
             document.getElementById('report-revenue').textContent = '₪ ' + weeklyRevenue.toFixed(2);
             document.getElementById('report-expenses').textContent = '₪ ' + weeklyExpenses.toFixed(2);
-            document.getElementById('report-lab-expenses').textContent = '₪ ' + weeklyLabExpenses.toFixed(2);
             document.getElementById('report-clinic-gross-profit').textContent = '₪ ' + weeklyClinicGrossProfit.toFixed(2);
             document.getElementById('report-profit').textContent = '₪ ' + weeklyProfit.toFixed(2);
             document.getElementById('weekly-report-range').textContent = t('weekly_range_text', 'Weekly range: {start} to {end}')
