@@ -2112,8 +2112,17 @@ def patients():
         ''', (data['first_name'], data['last_name'], birth_date,
               data.get('phone'), data.get('email'), data.get('address'), data.get('medical_history')))
         conn.commit()
+        new_id = cursor.lastrowid
+        cursor.execute('SELECT * FROM patients WHERE id = ?', (new_id,))
+        row = cursor.fetchone()
         conn.close()
-        return jsonify({'success': True})
+        # Echo the created row (id + fields) so the mobile app can reconcile its
+        # local temp row to the server-assigned id instead of rebuilding a blank
+        # patient from a bare {'success': true}. `success` stays for the web
+        # portal, which only checks resp.ok.
+        created = dict(row) if row is not None else {'id': new_id}
+        created['success'] = True
+        return jsonify(created)
 
 @app.route('/api/patients/check-duplicate', methods=['GET'])
 def check_patient_duplicate():

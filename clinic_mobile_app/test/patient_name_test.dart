@@ -45,4 +45,29 @@ void main() {
           isNull);
     });
   });
+
+  group('patientInitials', () {
+    test('builds two-letter initials from first and last', () {
+      expect(patientInitials('Jane', 'Roe'), 'JR');
+    });
+
+    test('uses only the first letter when the last name is empty', () {
+      expect(patientInitials('Madonna', ''), 'M');
+    });
+
+    test('uses only the last initial when the first name is blank', () {
+      expect(patientInitials('', 'Smith'), 'S');
+    });
+
+    test('returns "?" instead of indexing an empty string', () {
+      // _PatientTile used to do firstName[0] — a RangeError on a blank row that
+      // white-screened the whole patients list. This must never throw.
+      expect(patientInitials('', ''), '?');
+      expect(patientInitials('   ', '  '), '?');
+    });
+
+    test('keeps Arabic initials intact', () {
+      expect(patientInitials('وصفي', 'برزق'), 'وب');
+    });
+  });
 }

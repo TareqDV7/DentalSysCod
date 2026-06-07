@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../state/app_state.dart';
 import '../utils/date_format_helper.dart';
 import '../utils/app_strings.dart';
+import '../utils/patient_name.dart';
 import '../utils/amount_expr.dart';
 import '../utils/patient_statement_pdf.dart';
 import '../models/patient.dart';
@@ -495,8 +496,8 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                           radius: 28,
                           backgroundColor: scheme.primary.withAlpha(20),
                           child: Text(
-                            '${_patient.firstName[0]}${_patient.lastName.isNotEmpty ? _patient.lastName[0] : ''}'
-                                .toUpperCase(),
+                            patientInitials(
+                                _patient.firstName, _patient.lastName),
                             style: TextStyle(
                                 color: scheme.primary,
                                 fontWeight: FontWeight.w800,

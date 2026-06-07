@@ -3,6 +3,7 @@ import '../models/visit.dart';
 import '../models/followup.dart';
 import 'database_service.dart';
 import 'clinic_api.dart';
+import '../utils/patient_sync.dart';
 
 class PatientService {
   final DatabaseService _db;
@@ -37,10 +38,18 @@ class PatientService {
 
     try {
       final res = await _api.post('/api/patients', body: local.toJson());
-      final remote = Patient.fromJson(res);
-      await _db.deletePatient(localId);
-      await _db.upsertPatient(remote.copyWith(isSynced: true));
-      return remote;
+      // Keep the fields the user just typed and only adopt the server-assigned
+      // id. We must NOT rebuild the patient from `res` — the desktop's create
+      // endpoint historically returned a bare {'success': true}, which used to
+      // blank the name and crash the patients list.
+      final synced = reconcileCreatedPatient(local, localId, res);
+      if (synced.id != localId) {
+        // Swap the local temp id for the server id so the row matches on the
+        // next sync pull (mirrors the previous behaviour, now with real data).
+        await _db.deletePatient(localId);
+      }
+      await _db.upsertPatient(synced);
+      return synced;
     } catch (_) {
       return local.copyWith(id: localId);
     }

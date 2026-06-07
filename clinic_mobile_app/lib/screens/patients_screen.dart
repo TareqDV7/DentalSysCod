@@ -7,6 +7,7 @@ import '../models/patient.dart';
 import '../services/connectivity_sync_service.dart';
 import '../widgets/empty_state.dart';
 import '../utils/date_format_helper.dart';
+import '../utils/patient_name.dart';
 import 'patient_detail_screen.dart';
 
 class PatientsScreen extends StatefulWidget {
@@ -196,7 +197,7 @@ class _PatientTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final initials = '${patient.firstName[0]}${patient.lastName.isNotEmpty ? patient.lastName[0] : ''}'.toUpperCase();
+    final initials = patientInitials(patient.firstName, patient.lastName);
 
     return InkWell(
       onTap: onTap,
