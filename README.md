@@ -221,6 +221,7 @@ class AppBranding {
 - Full English and Arabic (RTL) support throughout the web portal
 - Translation keys live in the `translations` JS object inside `templates.py` (the `HTML_TEMPLATE` web portal)
 - The Flutter app exposes a language toggle in Settings (EN / ع) via `app_state.dart`
+- The Flutter app is **fully bilingual** (EN / Arabic RTL) across every screen — home/nav, dashboard, patients, appointments, financial, reports, payment history, patient detail, settings, plus the status badges and sync banner. Strings are centralised in `clinic_mobile_app/lib/utils/app_strings.dart` (`AppStrings.t(key, isArabic:)`); a few earlier screens use inline `locale == 'ar'` ternaries. `test/app_strings_test.dart` guards EN/AR key parity so a translation can't silently fall back to a raw key, and `test/arabic_render_test.dart` asserts widgets re-render in the chosen language. Note: dropdown/stored values (payment method, statuses) stay English for desktop/server parity — only the displayed label is localized.
 
 ---
 

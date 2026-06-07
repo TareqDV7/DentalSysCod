@@ -69,7 +69,8 @@ class _SyncStatusBarState extends State<SyncStatusBar> {
   Widget build(BuildContext context) {
     final status = _shown;
     if (status == null) return const SizedBox.shrink();
-    final (bg, icon, msg) = _resolve(status, _shownMsg);
+    final ar = context.watch<AppState>().isArabic;
+    final (bg, icon, msg) = _resolve(status, _shownMsg, ar);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
@@ -90,7 +91,18 @@ class _SyncStatusBarState extends State<SyncStatusBar> {
     );
   }
 
-  (Color, Widget, String) _resolve(SyncStatus s, String? msg) {
+  (Color, Widget, String) _resolve(SyncStatus s, String? msg, bool ar) {
+    // The service emits an English status message, sometimes with a "· LAN" /
+    // "· Bluetooth" channel suffix. Render a localized status word and keep the
+    // suffix so the channel detail still shows, without touching the service
+    // (whose de-flicker logic compares the raw emitted message).
+    String suffix() {
+      final m = msg;
+      if (m == null) return '';
+      final i = m.indexOf('·');
+      return i >= 0 ? ' ${m.substring(i)}' : '';
+    }
+
     switch (s) {
       case SyncStatus.syncing:
         return (
@@ -100,25 +112,27 @@ class _SyncStatusBarState extends State<SyncStatusBar> {
               height: 14,
               child: CircularProgressIndicator(
                   color: Colors.white, strokeWidth: 2)),
-          msg ?? 'Syncing…',
+          ar ? 'جارٍ المزامنة…' : 'Syncing…',
         );
       case SyncStatus.offline:
         return (
           const Color(0xFFD89E1F),
           const Icon(Icons.bluetooth_searching, color: Colors.white, size: 16),
-          msg ?? 'Offline — tap Settings to sync via Bluetooth',
+          ar
+              ? 'غير متصل — استخدم البلوتوث للمزامنة'
+              : 'Offline — use Bluetooth to sync',
         );
       case SyncStatus.error:
         return (
           const Color(0xFFD9434E),
           const Icon(Icons.sync_problem, color: Colors.white, size: 16),
-          msg ?? 'Sync failed',
+          ar ? 'فشلت المزامنة' : 'Sync failed',
         );
       case SyncStatus.synced:
         return (
           const Color(0xFF1F9A5F),
           const Icon(Icons.cloud_done_outlined, color: Colors.white, size: 16),
-          msg ?? 'Synced',
+          '${ar ? 'تمت المزامنة' : 'Synced'}${suffix()}',
         );
       default:
         return (Colors.grey, const SizedBox.shrink(), '');

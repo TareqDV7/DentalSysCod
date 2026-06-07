@@ -12,6 +12,7 @@ import '../models/followup.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
+import '../utils/app_strings.dart';
 import '../utils/date_format_helper.dart';
 
 class AppointmentsScreen extends StatefulWidget {
@@ -95,6 +96,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
   bool _isFriday(DateTime day) => day.weekday == DateTime.friday;
 
   void _addAppointment() {
+    final ar = context.read<AppState>().isArabic;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -107,7 +109,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
             if (mounted) {
               _loadDay(_selectedDay);
               _loadMonth(_focusedDay);
-              _showMessage('Appointment saved successfully');
+              _showMessage(AppStrings.t('appointment_saved', isArabic: ar));
             }
           } catch (error) {
             _showMessage(error.toString(), isError: true);
@@ -121,6 +123,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
 
     return Scaffold(
       body: Column(
@@ -203,7 +206,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
                       color: scheme.errorContainer,
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Text('Holiday',
+                    child: Text(AppStrings.t('holiday', isArabic: ar),
                         style: TextStyle(
                             color: scheme.error,
                             fontSize: 12,
@@ -220,10 +223,12 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
                     ? EmptyState(
                         icon: Icons.calendar_today_outlined,
                         message: _isFriday(_selectedDay)
-                            ? 'Friday — Clinic closed'
-                            : 'No appointments on this day',
-                        actionLabel:
-                            _isFriday(_selectedDay) ? null : 'Add Appointment',
+                            ? AppStrings.t('friday_closed', isArabic: ar)
+                            : AppStrings.t('no_appointments_on_day',
+                                isArabic: ar),
+                        actionLabel: _isFriday(_selectedDay)
+                            ? null
+                            : AppStrings.t('add_appointment', isArabic: ar),
                         onAction:
                             _isFriday(_selectedDay) ? null : _addAppointment,
                       )
@@ -249,8 +254,8 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
               backgroundColor: scheme.primary,
               foregroundColor: Colors.white,
               icon: const Icon(Icons.add),
-              label: const Text('Add',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
+              label: Text(AppStrings.t('add', isArabic: ar),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
             ),
     );
   }
@@ -268,14 +273,16 @@ class _AppointmentTile extends StatelessWidget {
     'pending',
   ];
 
-  String _safePatientName() {
+  String _safePatientName(bool isArabic) {
+    final fallback =
+        '${AppStrings.t('patient', isArabic: isArabic)} #${appointment.patientId}';
     final raw = appointment.patientName?.trim();
     if (raw == null || raw.isEmpty) {
-      return 'Patient #${appointment.patientId}';
+      return fallback;
     }
     final lowered = raw.toLowerCase();
     if (lowered == 'null' || lowered == 'undefined') {
-      return 'Patient #${appointment.patientId}';
+      return fallback;
     }
     return raw;
   }
@@ -405,6 +412,7 @@ class _AppointmentTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isArabic = context.watch<AppState>().isArabic;
     final dt = appointment.dateTime;
 
     return Container(
@@ -449,14 +457,14 @@ class _AppointmentTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(_safePatientName(),
+                      Text(_safePatientName(isArabic),
                           style: const TextStyle(fontWeight: FontWeight.w700)),
                       if (appointment.treatmentType != null)
                         Text(appointment.treatmentType!,
                             style: TextStyle(
                                 color: scheme.onSurfaceVariant, fontSize: 13)),
                       if (appointment.durationMinutes != null)
-                        Text('${appointment.durationMinutes} min',
+                        Text('${appointment.durationMinutes} ${AppStrings.t('minutes_short', isArabic: isArabic)}',
                             style: TextStyle(
                                 color: scheme.onSurfaceVariant, fontSize: 12)),
                     ],
@@ -518,6 +526,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
 
   Future<void> _loadData() async {
     setState(() => _loadingData = true);
+    final ar = context.read<AppState>().isArabic;
     try {
       final [patients, procedures] = await Future.wait([
         context.read<AppState>().patients.getPatients(),
@@ -535,7 +544,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
     } catch (error) {
       if (mounted) {
         setState(() {
-          _loadError = 'Failed to load data';
+          _loadError = AppStrings.t('failed_to_load_data', isArabic: ar);
           _loadingData = false;
         });
       }
@@ -561,7 +570,8 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
 
   Future<void> _save() async {
     if (_patient == null || _selectedTreatment == null) {
-      _showError('Please select a patient and treatment');
+      _showError(AppStrings.t('select_patient_treatment',
+          isArabic: context.read<AppState>().isArabic));
       return;
     }
     setState(() => _saving = true);
@@ -593,6 +603,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.85,
@@ -618,7 +629,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Row(children: [
-                  Text('Add Appointment',
+                  Text(AppStrings.t('add_appointment', isArabic: ar),
                       style: Theme.of(context).textTheme.titleLarge),
                   const Spacer(),
                   IconButton(
@@ -641,7 +652,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                     style: TextStyle(color: scheme.error)),
                                 const SizedBox(height: 16),
                                 GradientButton(
-                                  label: 'Retry',
+                                  label: AppStrings.t('retry', isArabic: ar),
                                   onPressed: _loadData,
                                   width: 120,
                                 ),
@@ -655,7 +666,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               // ─────────────────────────────────────
                               // PATIENT & APPOINTMENT SECTION
                               // ─────────────────────────────────────
-                              Text('Patient & Schedule',
+                              Text(AppStrings.t('patient_schedule', isArabic: ar),
                                   style: Theme.of(context)
                                       .textTheme
                                       .labelLarge
@@ -666,7 +677,8 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               DropdownButtonFormField<Patient>(
                                 initialValue: _patient,
                                 decoration: InputDecoration(
-                                  labelText: 'Patient *',
+                                  labelText:
+                                      '${AppStrings.t('patient', isArabic: ar)} *',
                                   border: OutlineInputBorder(
                                       borderRadius:
                                           BorderRadius.circular(12)),
@@ -702,7 +714,8 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
-                                            Text('Date & Time *',
+                                            Text(
+                                                '${AppStrings.t('date_time', isArabic: ar)} *',
                                                 style: TextStyle(
                                                     fontSize: 12,
                                                     color: scheme
@@ -730,7 +743,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               // ─────────────────────────────────────
                               // TREATMENT & PROCEDURE SECTION
                               // ─────────────────────────────────────
-                              Text('Treatment',
+                              Text(AppStrings.t('treatment', isArabic: ar),
                                   style: Theme.of(context)
                                       .textTheme
                                       .labelLarge
@@ -742,10 +755,13 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                   TreatmentProcedure>(
                                 initialValue: _selectedTreatment,
                                 decoration: InputDecoration(
-                                  labelText: 'Treatment Type *',
+                                  labelText:
+                                      '${AppStrings.t('treatment_type', isArabic: ar)} *',
                                   hintText: _treatments.isEmpty
-                                      ? 'No treatments available'
-                                      : 'Select a treatment',
+                                      ? AppStrings.t('no_treatments_available',
+                                          isArabic: ar)
+                                      : AppStrings.t('select_treatment',
+                                          isArabic: ar),
                                   border: OutlineInputBorder(
                                       borderRadius:
                                           BorderRadius.circular(12)),
@@ -778,7 +794,9 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                     mainAxisAlignment:
                                         MainAxisAlignment.spaceBetween,
                                     children: [
-                                      Text('Default Price',
+                                      Text(
+                                          AppStrings.t('default_price',
+                                              isArabic: ar),
                                           style: TextStyle(
                                               fontSize: 12,
                                               color: scheme
@@ -798,7 +816,8 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               TextField(
                                 controller: _durationCtrl,
                                 decoration: InputDecoration(
-                                  labelText: 'Duration (minutes)',
+                                  labelText:
+                                      AppStrings.t('duration_minutes', isArabic: ar),
                                   border: OutlineInputBorder(
                                       borderRadius:
                                           BorderRadius.circular(12)),
@@ -813,7 +832,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               // ─────────────────────────────────────
                               // STATUS SECTION
                               // ─────────────────────────────────────
-                              Text('Status',
+                              Text(AppStrings.t('status', isArabic: ar),
                                   style: Theme.of(context)
                                       .textTheme
                                       .labelLarge
@@ -855,9 +874,9 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                               ),
                                               const SizedBox(
                                                   width: 10),
-                                              Text(status[0]
-                                                      .toUpperCase() +
-                                                  status.substring(1)),
+                                              Text(AppStrings.t(
+                                                  'status_$status',
+                                                  isArabic: ar)),
                                             ],
                                           ),
                                         ))
@@ -870,7 +889,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               // ─────────────────────────────────────
                               // NOTES SECTION
                               // ─────────────────────────────────────
-                              Text('Notes',
+                              Text(AppStrings.t('notes', isArabic: ar),
                                   style: Theme.of(context)
                                       .textTheme
                                       .labelLarge
@@ -881,8 +900,9 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                               TextField(
                                 controller: _notesCtrl,
                                 decoration: InputDecoration(
-                                  hintText:
-                                      'Additional notes (optional)',
+                                  hintText: AppStrings.t(
+                                      'additional_notes_optional',
+                                      isArabic: ar),
                                   border: OutlineInputBorder(
                                       borderRadius:
                                           BorderRadius.circular(12)),
@@ -931,13 +951,14 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                         side: BorderSide(
                                             color: scheme.outline),
                                       ),
-                                      child: const Text('Clear'),
+                                      child: Text(
+                                          AppStrings.t('clear', isArabic: ar)),
                                     ),
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: GradientButton(
-                                      label: 'Schedule',
+                                      label: AppStrings.t('schedule', isArabic: ar),
                                       loading: _saving,
                                       onPressed: _saving ||
                                               _patient == null ||

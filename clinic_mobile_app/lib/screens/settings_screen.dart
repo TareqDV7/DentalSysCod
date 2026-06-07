@@ -95,43 +95,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _saveUrl() async {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty) return;
+    final ar = context.read<AppState>().locale == 'ar';
     await context.read<AppState>().updateServerUrl(url);
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Server URL saved')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(ar ? 'تم حفظ عنوان الخادم' : 'Server URL saved')));
     }
   }
 
   Future<void> _activateWithKey() async {
     final key = _activationKeyCtrl.text.trim();
+    final ar = context.read<AppState>().locale == 'ar';
     if (key.isEmpty) {
-      setState(() => _cloudStatus = 'Enter your activation key.');
+      setState(() => _cloudStatus =
+          ar ? 'أدخل مفتاح التفعيل.' : 'Enter your activation key.');
       return;
     }
     setState(() {
       _pairingCloud = true;
-      _cloudStatus = 'Linking…';
+      _cloudStatus = ar ? 'جارٍ الربط…' : 'Linking…';
     });
     try {
       final info = await context.read<AppState>().activateWithKey(key);
       if (!mounted) return;
       setState(() => _cloudStatus = info.alreadyRegistered
-          ? 'Linked to your clinic.'
-          : 'Linked · clinic #${info.clinicId ?? '?'}.');
+          ? (ar ? 'تم الربط بعيادتك.' : 'Linked to your clinic.')
+          : (ar
+              ? 'تم الربط · عيادة #${info.clinicId ?? '?'}.'
+              : 'Linked · clinic #${info.clinicId ?? '?'}.'));
       _activationKeyCtrl.clear();
       await _loadLastSync();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _cloudStatus = 'Could not link: $e');
+      setState(() =>
+          _cloudStatus = ar ? 'تعذّر الربط: $e' : 'Could not link: $e');
     } finally {
       if (mounted) setState(() => _pairingCloud = false);
     }
   }
 
   Future<void> _unpairCloud() async {
+    final ar = context.read<AppState>().locale == 'ar';
     await context.read<AppState>().unpairCloud();
     if (!mounted) return;
-    setState(() => _cloudStatus = 'Unpaired from cloud.');
+    setState(() => _cloudStatus =
+        ar ? 'تم إلغاء الربط من السحابة.' : 'Unpaired from cloud.');
   }
 
   @override
@@ -140,19 +148,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+          title: Text(state.locale == 'ar' ? 'الإعدادات' : 'Settings')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // ── Appearance ──────���──────────────────────────────────────────
-          SectionHeader(title: 'Appearance'),
+          SectionHeader(title: state.locale == 'ar' ? 'المظهر' : 'Appearance'),
           ClinicCard(
             padding: EdgeInsets.zero,
             child: Column(
               children: [
                 ListTile(
                   leading: const Icon(Icons.language),
-                  title: const Text('Language'),
+                  title: Text(state.locale == 'ar' ? 'اللغة' : 'Language'),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -165,7 +174,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Divider(height: 1, color: scheme.outlineVariant),
                 SwitchListTile(
                   secondary: const Icon(Icons.dark_mode_outlined),
-                  title: const Text('Dark Mode'),
+                  title:
+                      Text(state.locale == 'ar' ? 'الوضع الداكن' : 'Dark Mode'),
                   value: state.themeMode == ThemeMode.dark,
                   onChanged: (v) => state.setThemeMode(
                       v ? ThemeMode.dark : ThemeMode.light),
@@ -331,7 +341,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 20),
 
           // ── Sync ──────────────────────────────────────────────────────��
-          SectionHeader(title: 'Data Sync'),
+          SectionHeader(
+              title: state.locale == 'ar' ? 'مزامنة البيانات' : 'Data Sync'),
           ClinicCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,7 +353,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   initialData: state.sync.status,
                   builder: (context, snap) {
                     final status = snap.data ?? SyncStatus.idle;
-                    final (icon, color, label) = _statusInfo(status);
+                    final (icon, color, label) =
+                        _statusInfo(status, state.locale == 'ar');
                     final linkLabel =
                         _linkLabel(state.sync.activeLink);
                     final fullLabel = (status == SyncStatus.synced &&
@@ -362,7 +374,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 if (_lastSync != null) ...[
                   const SizedBox(height: 4),
-                  Text('Last sync: $_lastSync',
+                  Text(
+                      '${state.locale == 'ar' ? 'آخر مزامنة: ' : 'Last sync: '}$_lastSync',
                       style: TextStyle(
                           color: scheme.onSurfaceVariant, fontSize: 12)),
                 ],
@@ -381,7 +394,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 20),
 
           // ── Bluetooth Peer ─────────────────────────────────────────────
-          SectionHeader(title: 'Bluetooth peer'),
+          SectionHeader(
+              title: state.locale == 'ar' ? 'جهاز البلوتوث' : 'Bluetooth peer'),
           ClinicCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -566,10 +580,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _urlCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Backend Server URL',
+                  decoration: InputDecoration(
+                    labelText: state.locale == 'ar'
+                        ? 'عنوان الخادم الخلفي'
+                        : 'Backend Server URL',
                     hintText: 'http://192.168.1.x:5000',
-                    prefixIcon: Icon(Icons.link),
+                    prefixIcon: const Icon(Icons.link),
                   ),
                   keyboardType: TextInputType.url,
                 ),
@@ -587,7 +603,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 20),
 
           // ── About ───────────────────────────────────────────────────────
-          SectionHeader(title: 'About'),
+          SectionHeader(title: state.locale == 'ar' ? 'حول' : 'About'),
           ClinicCard(
             padding: EdgeInsets.zero,
             child: Column(
@@ -607,8 +623,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Divider(height: 1, color: scheme.outlineVariant),
                 ListTile(
                   leading: const Icon(Icons.info_outline),
-                  title: const Text('Offline-first with smart sync'),
-                  subtitle: const Text('Internet sync · Bluetooth fallback'),
+                  title: Text(state.locale == 'ar'
+                      ? 'يعمل دون اتصال مع مزامنة ذكية'
+                      : 'Offline-first with smart sync'),
+                  subtitle: Text(state.locale == 'ar'
+                      ? 'مزامنة عبر الإنترنت · بلوتوث احتياطي'
+                      : 'Internet sync · Bluetooth fallback'),
                 ),
               ],
             ),
@@ -644,20 +664,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  (IconData, Color, String) _statusInfo(SyncStatus s) {
+  (IconData, Color, String) _statusInfo(SyncStatus s, bool ar) {
     switch (s) {
       case SyncStatus.syncing:
-        return (Icons.sync, const Color(0xFF1D7FB7), 'Syncing…');
+        return (Icons.sync, const Color(0xFF1D7FB7),
+            ar ? 'جارٍ المزامنة…' : 'Syncing…');
       case SyncStatus.synced:
-        return (
-            Icons.check_circle_outline, const Color(0xFF1F9A5F), 'Synced');
+        return (Icons.check_circle_outline, const Color(0xFF1F9A5F),
+            ar ? 'تمت المزامنة' : 'Synced');
       case SyncStatus.offline:
-        return (Icons.wifi_off, const Color(0xFFD89E1F), 'Offline');
+        return (Icons.wifi_off, const Color(0xFFD89E1F),
+            ar ? 'غير متصل' : 'Offline');
       case SyncStatus.error:
-        return (Icons.sync_problem, const Color(0xFFD9434E), 'Sync failed');
+        return (Icons.sync_problem, const Color(0xFFD9434E),
+            ar ? 'فشلت المزامنة' : 'Sync failed');
       default:
-        return (
-            Icons.sync_outlined, const Color(0xFF627386), 'Ready to sync');
+        return (Icons.sync_outlined, const Color(0xFF627386),
+            ar ? 'جاهز للمزامنة' : 'Ready to sync');
     }
   }
 

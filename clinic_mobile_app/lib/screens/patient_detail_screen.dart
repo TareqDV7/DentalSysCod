@@ -197,6 +197,8 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   }
 
   Future<void> _adjustCredit() async {
+    final isArabic = context.read<AppState>().isArabic;
+    String t(String key) => AppStrings.t(key, isArabic: isArabic);
     final db = context.read<AppState>().db;
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
@@ -205,14 +207,14 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (context, setLocal) => AlertDialog(
-          title: const Text('Adjust credit'),
+          title: Text(t('adjust_credit')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: true, label: Text('Add credit')),
-                  ButtonSegment(value: false, label: Text('Use credit')),
+                segments: [
+                  ButtonSegment(value: true, label: Text(t('add_credit'))),
+                  ButtonSegment(value: false, label: Text(t('use_credit'))),
                 ],
                 selected: {add},
                 onSelectionChanged: (s) => setLocal(() => add = s.first),
@@ -222,23 +224,23 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                 controller: amountCtrl,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                    labelText: 'Amount (₪)', prefixText: '₪ '),
+                decoration: InputDecoration(
+                    labelText: '${t('amount')} (₪)', prefixText: '₪ '),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: noteCtrl,
-                decoration: const InputDecoration(labelText: 'Note (optional)'),
+                decoration: InputDecoration(labelText: t('note_optional')),
               ),
             ],
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel')),
+                child: Text(t('cancel'))),
             FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Save')),
+                child: Text(t('save'))),
           ],
         ),
       ),
@@ -432,7 +434,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                 icon: const Icon(Icons.picture_as_pdf_outlined)),
           if (!_editing)
             IconButton(
-                tooltip: 'Adjust credit',
+                tooltip: t('adjust_credit'),
                 onPressed: _adjustCredit,
                 icon: const Icon(Icons.account_balance_wallet_outlined)),
           if (!_editing)
@@ -560,7 +562,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                                       fontWeight: FontWeight.w800,
                                       color: Color(0xFF1F9A5F),
                                       fontSize: 13)),
-                              Text('credit',
+                              Text(t('credit'),
                                   style: TextStyle(
                                       fontSize: 11,
                                       color: scheme.onSurfaceVariant)),
@@ -1214,15 +1216,17 @@ class _TreatmentPlanSheetState extends State<_TreatmentPlanSheet> {
                       child: DropdownButtonFormField<String>(
                         initialValue: _status,
                         decoration: InputDecoration(labelText: t('status')),
-                        items: const [
+                        items: [
                           DropdownMenuItem(
-                              value: 'draft', child: Text('Draft')),
+                              value: 'draft', child: Text(t('status_draft'))),
                           DropdownMenuItem(
-                              value: 'active', child: Text('Active')),
+                              value: 'active', child: Text(t('status_active'))),
                           DropdownMenuItem(
-                              value: 'completed', child: Text('Completed')),
+                              value: 'completed',
+                              child: Text(t('status_completed'))),
                           DropdownMenuItem(
-                              value: 'cancelled', child: Text('Cancelled')),
+                              value: 'cancelled',
+                              child: Text(t('status_cancelled'))),
                         ],
                         onChanged: (v) =>
                             setState(() => _status = v ?? 'draft'),
