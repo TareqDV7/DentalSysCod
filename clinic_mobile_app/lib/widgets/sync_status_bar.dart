@@ -1,43 +1,92 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../services/connectivity_sync_service.dart';
+import '../utils/sync_banner.dart';
 
-class SyncStatusBar extends StatelessWidget {
+/// Thin banner under the app bar that announces a sync *change* and then gets
+/// out of the way. It flashes the new state (Synced / Offline / Syncing…) and
+/// auto-hides a few seconds later instead of lingering forever or re-flashing
+/// on every routine cycle (de-flicker is also enforced at the service, which
+/// drops identical consecutive emissions).
+class SyncStatusBar extends StatefulWidget {
   const SyncStatusBar({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final sync = context.watch<AppState>().sync;
+  State<SyncStatusBar> createState() => _SyncStatusBarState();
+}
 
-    return StreamBuilder<SyncStatus>(
-      stream: sync.statusStream,
-      initialData: sync.status,
-      builder: (context, snapshot) {
-        final status = snapshot.data ?? SyncStatus.idle;
-        if (status == SyncStatus.idle) {
-          return const SizedBox.shrink();
-        }
-        final (bg, icon, msg) = _resolve(status, sync.statusMessage);
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          color: bg,
-          child: Row(
-            children: [
-              icon,
-              const SizedBox(width: 8),
-              Expanded(
-                  child: Text(msg,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600))),
-            ],
-          ),
-        );
-      },
+class _SyncStatusBarState extends State<SyncStatusBar> {
+  ConnectivitySyncService? _sync;
+  StreamSubscription<SyncStatus>? _sub;
+  Timer? _hideTimer;
+
+  SyncStatus? _shown; // null = hidden
+  String? _shownMsg;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final sync = context.read<AppState>().sync;
+    if (identical(sync, _sync)) return;
+    _sub?.cancel();
+    _sync = sync;
+    _apply(sync.status, sync.statusMessage);
+    _sub = sync.statusStream.listen((s) => _apply(s, sync.statusMessage));
+  }
+
+  void _apply(SyncStatus status, String? msg) {
+    final behavior = syncBannerBehavior(status);
+    _hideTimer?.cancel();
+    if (!behavior.show) {
+      if (mounted) setState(() => _shown = null);
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _shown = status;
+        _shownMsg = msg;
+      });
+    }
+    final hideAfter = behavior.autoHide;
+    if (hideAfter != null) {
+      _hideTimer = Timer(hideAfter, () {
+        if (mounted) setState(() => _shown = null);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _shown;
+    if (status == null) return const SizedBox.shrink();
+    final (bg, icon, msg) = _resolve(status, _shownMsg);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: bg,
+      child: Row(
+        children: [
+          icon,
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(msg,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600))),
+        ],
+      ),
     );
   }
 

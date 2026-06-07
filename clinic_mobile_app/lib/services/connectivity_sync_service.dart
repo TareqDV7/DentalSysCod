@@ -6,6 +6,7 @@ import 'cloud_sync_service.dart';
 import 'internet_sync_service.dart';
 import 'bluetooth_sync_service.dart';
 import 'local_storage_service.dart';
+import '../utils/sync_banner.dart';
 
 enum SyncStatus { idle, syncing, synced, offline, error }
 
@@ -53,6 +54,10 @@ class ConnectivitySyncService {
   bool get hasSyncedOnce => _hasSyncedOnce;
 
   void _emit(SyncStatus s, [String? msg]) {
+    // Drop identical consecutive emissions so a routine re-sync that changes
+    // nothing doesn't re-flash the banner (the "synced/not-synced keeps
+    // popping up" complaint).
+    if (!shouldEmitSyncStatus(_status, _statusMessage, s, msg)) return;
     _status = s;
     _statusMessage = msg;
     _statusController.add(s);
