@@ -22,6 +22,7 @@ class LocalStorageService {
   static const _doctorNameEnKey = 'doctor_name_en';
   static const _doctorNameArKey = 'doctor_name_ar';
   static const _doctorNamePendingKey = 'doctor_name_pending_push';
+  static const _licenseExpiryKey = 'license_expires_at';
 
   Future<String> getOrCreateDeviceId() async {
     final existing = await _storage.read(key: _deviceIdKey);
@@ -100,6 +101,11 @@ class LocalStorageService {
       _storage.write(key: _serialNumberKey, value: value);
 
   Future<String?> getSerialNumber() => _storage.read(key: _serialNumberKey);
+
+  Future<void> setLicenseExpiry(String value) =>
+      _storage.write(key: _licenseExpiryKey, value: value);
+
+  Future<String?> getLicenseExpiry() => _storage.read(key: _licenseExpiryKey);
 
   Future<void> setClinicName(String value) =>
       _storage.write(key: _clinicNameKey, value: value);

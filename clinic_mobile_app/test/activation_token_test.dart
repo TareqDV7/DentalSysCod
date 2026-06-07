@@ -27,6 +27,19 @@ void main() {
       expect(tok?.clinicName, isNull);
     });
 
+    test('extracts the embedded expiry when present', () {
+      final key = _mintKey({
+        'serial': 'DENTAL-EXP-0001',
+        'expires_at': '2027-01-15T00:00:00Z',
+      });
+      expect(ActivationToken.tryParse(key)?.expiresAt, '2027-01-15T00:00:00Z');
+    });
+
+    test('expiry is null when absent', () {
+      expect(ActivationToken.tryParse(_mintKey({'serial': 'DENTAL-NOEXP-1'}))?.expiresAt,
+          isNull);
+    });
+
     test('tolerates surrounding whitespace', () {
       final key = '  ${_mintKey({'serial': 'DENTAL-WS-0001'})}  ';
       expect(ActivationToken.tryParse(key)?.serial, 'DENTAL-WS-0001');

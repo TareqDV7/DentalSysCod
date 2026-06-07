@@ -12,6 +12,7 @@ import 'catalog_screen.dart';
 import 'tooth_conditions_screen.dart';
 import '../utils/app_strings.dart';
 import '../utils/bt_error_message.dart';
+import '../utils/license_display.dart';
 import '../utils/date_format_helper.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/gradient_button.dart';
@@ -65,6 +66,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
             state.locale == 'ar' ? 'تم حفظ اسم الطبيب' : 'Doctor name saved')));
+  }
+
+  Widget _licenseRow(String label, String value, ColorScheme scheme) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label,
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13)),
+        Text(value,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+      ],
+    );
   }
 
   Future<void> _loadLastSync() async {
@@ -211,26 +224,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 20),
 
-          // ── Cloud Account ──────────────────────────────────────────────
-          SectionHeader(title: 'Cloud Account'),
+          // ── License ──────────────────────────────────────────────────────
+          SectionHeader(title: state.locale == 'ar' ? 'الترخيص' : 'License'),
           ClinicCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (state.isActivated) ...[
+                  Row(
+                    children: [
+                      const Icon(Icons.verified_outlined,
+                          color: Color(0xFF1F9A5F), size: 18),
+                      const SizedBox(width: 8),
+                      Text(state.locale == 'ar' ? 'مُفعّل' : 'Activated',
+                          style: const TextStyle(
+                              color: Color(0xFF1F9A5F),
+                              fontWeight: FontWeight.w700)),
+                      if (state.hasCloudAccount) ...[
+                        const Spacer(),
+                        Icon(Icons.cloud_done_outlined,
+                            size: 16, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 4),
+                        Text(
+                            state.locale == 'ar'
+                                ? 'متصل بالسحابة'
+                                : 'Cloud linked',
+                            style: TextStyle(
+                                fontSize: 12, color: scheme.onSurfaceVariant)),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _licenseRow(state.locale == 'ar' ? 'الرقم التسلسلي' : 'Serial',
+                      maskSerial(state.serialNumber ?? ''), scheme),
+                  if (licenseExpiryDate(state.licenseExpiresAt) != null) ...[
+                    const SizedBox(height: 4),
+                    _licenseRow(
+                        state.locale == 'ar' ? 'صالح حتى' : 'Valid until',
+                        licenseExpiryDate(state.licenseExpiresAt)!,
+                        scheme),
+                  ],
+                  Divider(height: 24, color: scheme.outlineVariant),
+                ],
                 Text(
-                  state.hasCloudAccount
-                      ? 'This device is linked and syncs online automatically whenever there is a connection.'
-                      : 'Enter the same activation key you used on the desktop. That links this phone to your clinic and it syncs online automatically — nothing else to set up.',
+                  state.isActivated
+                      ? (state.locale == 'ar'
+                          ? 'لإعادة التفعيل بمفتاح جديد، الصقه هنا.'
+                          : 'To re-activate with a new key, paste it here.')
+                      : (state.locale == 'ar'
+                          ? 'الصق مفتاح التفعيل نفسه الذي استخدمته على الكمبيوتر لتفعيل هذا الجهاز ومزامنته تلقائيًا.'
+                          : 'Paste the same activation key you used on the desktop to activate this device — it then syncs online automatically, nothing else to set up.'),
                   style: TextStyle(
                       color: scheme.onSurfaceVariant, fontSize: 13, height: 1.4),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _activationKeyCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Activation key',
-                    prefixIcon: Icon(Icons.vpn_key_outlined),
-                    hintText: 'Paste your activation key',
+                  decoration: InputDecoration(
+                    labelText:
+                        state.locale == 'ar' ? 'مفتاح التفعيل' : 'Activation key',
+                    prefixIcon: const Icon(Icons.vpn_key_outlined),
+                    hintText: state.locale == 'ar'
+                        ? 'الصق مفتاح التفعيل'
+                        : 'Paste your activation key',
                   ),
                   autocorrect: false,
                   minLines: 1,
@@ -239,10 +295,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 12),
                 GradientButton(
                   label: _pairingCloud
-                      ? 'Linking…'
-                      : (state.hasCloudAccount
-                          ? 'Re-link with a new key'
-                          : 'Link this device'),
+                      ? (state.locale == 'ar' ? 'جارٍ التفعيل…' : 'Linking…')
+                      : (state.isActivated
+                          ? (state.locale == 'ar'
+                              ? 'إعادة التفعيل بمفتاح جديد'
+                              : 'Re-activate with a new key')
+                          : (state.locale == 'ar'
+                              ? 'تفعيل هذا الجهاز'
+                              : 'Activate this device')),
                   icon: Icons.cloud_sync_outlined,
                   loading: _pairingCloud,
                   onPressed: _pairingCloud ? null : _activateWithKey,
@@ -253,7 +313,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   OutlinedButton.icon(
                     onPressed: _unpairCloud,
                     icon: const Icon(Icons.link_off),
-                    label: const Text('Unlink this device'),
+                    label: Text(state.locale == 'ar'
+                        ? 'إلغاء ربط هذا الجهاز'
+                        : 'Unlink this device'),
                   ),
                 ],
                 if (_cloudStatus != null) ...[

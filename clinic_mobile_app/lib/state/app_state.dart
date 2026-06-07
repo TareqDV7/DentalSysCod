@@ -47,6 +47,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool _hasCloudAccount = false;
   String _doctorNameEn = AppBranding.doctorName;
   String _doctorNameAr = AppBranding.doctorNameAr;
+  String? _serialNumber;
+  String? _licenseExpiresAt;
 
   AppState(this._storage) {
     db = DatabaseService.instance;
@@ -104,6 +106,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// otherwise), falling back across languages when one is blank.
   String get doctorName =>
       resolveDoctorName(_doctorNameEn, _doctorNameAr, _locale);
+
+  /// The activated clinic serial (raw); null until the device is activated.
+  String? get serialNumber => _serialNumber;
+
+  /// ISO timestamp the license is valid until, decoded from the activation key.
+  String? get licenseExpiresAt => _licenseExpiresAt;
+
+  bool get isActivated => (_serialNumber ?? '').isNotEmpty;
 
   // ── Bluetooth peer ───────────────────────────────────────────────────────
   bool _btEnabled = false;
@@ -258,6 +268,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final dnAr = await _storage.getDoctorNameAr();
     if (dnEn != null && dnEn.isNotEmpty) _doctorNameEn = dnEn;
     if (dnAr != null && dnAr.isNotEmpty) _doctorNameAr = dnAr;
+    _serialNumber = await _storage.getSerialNumber();
+    _licenseExpiresAt = await _storage.getLicenseExpiry();
     _cloudUrl = cloudUrl;
     _hasCloudAccount = (cloudUrl != null && cloudUrl.isNotEmpty) &&
         (clinicToken != null && clinicToken.isNotEmpty);
@@ -373,6 +385,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     );
     await _storage.setSerialNumber(parsed.serial);
     await _storage.setClinicName(name);
+    if (parsed.expiresAt != null && parsed.expiresAt!.isNotEmpty) {
+      await _storage.setLicenseExpiry(parsed.expiresAt!);
+    }
     await _storage.setCloudAccount(
       cloudUrl: cloudUrl,
       clinicToken: info.clinicToken,
@@ -381,6 +396,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _clinicName = name;
     _cloudUrl = cloudUrl;
     _hasCloudAccount = true;
+    _serialNumber = parsed.serial;
+    if (parsed.expiresAt != null && parsed.expiresAt!.isNotEmpty) {
+      _licenseExpiresAt = parsed.expiresAt;
+    }
     api.clinicToken = info.clinicToken;
     notifyListeners();
     // First sync right away against the freshly-linked cloud target.
