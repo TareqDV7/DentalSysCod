@@ -23,6 +23,8 @@ class LocalStorageService {
   static const _doctorNameArKey = 'doctor_name_ar';
   static const _doctorNamePendingKey = 'doctor_name_pending_push';
   static const _licenseExpiryKey = 'license_expires_at';
+  static const _themeModeKey = 'theme_mode';
+  static const _localeKey = 'locale';
 
   Future<String> getOrCreateDeviceId() async {
     final existing = await _storage.read(key: _deviceIdKey);
@@ -177,4 +179,16 @@ class LocalStorageService {
       _storage.write(key: _btLastErrorKey, value: message);
 
   Future<void> clearBtLastError() => _storage.delete(key: _btLastErrorKey);
+
+  // ── UI preferences (theme + language, persisted across restarts) ──
+
+  Future<void> setThemeMode(String value) =>
+      _storage.write(key: _themeModeKey, value: value);
+
+  Future<String?> getThemeMode() => _storage.read(key: _themeModeKey);
+
+  Future<void> setLocale(String value) =>
+      _storage.write(key: _localeKey, value: value);
+
+  Future<String?> getLocale() => _storage.read(key: _localeKey);
 }

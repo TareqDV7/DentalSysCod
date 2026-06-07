@@ -20,6 +20,7 @@ import '../services/local_storage_service.dart';
 import '../utils/activation_token.dart';
 import '../utils/bt_error_message.dart';
 import '../utils/clinic_profile.dart';
+import '../utils/prefs_codec.dart';
 import '../config/app_config.dart';
 
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
@@ -270,6 +271,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (dnAr != null && dnAr.isNotEmpty) _doctorNameAr = dnAr;
     _serialNumber = await _storage.getSerialNumber();
     _licenseExpiresAt = await _storage.getLicenseExpiry();
+    // Restore the saved UI preferences — without this the theme reset to light
+    // (and the language to English) on every cold start.
+    _themeMode = decodeThemeMode(await _storage.getThemeMode());
+    _locale = decodeLocale(await _storage.getLocale());
     _cloudUrl = cloudUrl;
     _hasCloudAccount = (cloudUrl != null && cloudUrl.isNotEmpty) &&
         (clinicToken != null && clinicToken.isNotEmpty);
@@ -335,6 +340,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   void setLocale(String locale) {
     _locale = locale;
+    unawaited(_storage.setLocale(locale));
     // Re-render any visible BT error banner in the new locale. Reads the
     // stored token through _classifyStoredBtError, so a previously-displayed
     // "Turn on Bluetooth to sync." flips to "قم بتشغيل البلوتوث للمزامنة."
@@ -345,6 +351,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   void setThemeMode(ThemeMode mode) {
     _themeMode = mode;
+    unawaited(_storage.setThemeMode(encodeThemeMode(mode)));
     notifyListeners();
   }
 

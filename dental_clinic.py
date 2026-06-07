@@ -6573,11 +6573,23 @@ if __name__ == '__main__':
         threading.Thread(target=_backup_loop, daemon=True).start()
 
     # Background mirror to/from the cloud node (a clinic's local server only).
+    # Runs in production AND in debug — but in debug only inside the Werkzeug
+    # reloader's child (WERKZEUG_RUN_MAIN=true), so the reloader's parent watcher
+    # doesn't start a second worker. This mirrors the Bluetooth worker guard
+    # below: without it, a developer running `python dental_clinic.py` directly
+    # gets NO cloud sync at all (the desktop never pushes to / pulls from the
+    # cloud), so desktop and phone silently never see each other's data even
+    # though each device's own leg reports "synced".
     _cloud_url, _cloud_token, _cloud_interval = _cloud_sync_config()
-    cloud_sync_on = (not CLOUD_MODE) and (not debug_mode)
+    _in_reloader_child = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+    cloud_sync_on = (not CLOUD_MODE) and (not debug_mode or _in_reloader_child)
     if cloud_sync_on:
         threading.Thread(target=cloud_sync_worker, daemon=True).start()
-        threading.Thread(target=license_recheck_worker, daemon=True).start()
+        # License re-check stays production-only — it shouldn't fight a dev's
+        # local experiments with view-only downgrades; only the data mirror
+        # needs to run from source.
+        if not debug_mode:
+            threading.Thread(target=license_recheck_worker, daemon=True).start()
 
     # Background Bluetooth-SPP listener. Local clinic server only. Runs in
     # *both* production and debug — but in debug, only inside the Werkzeug

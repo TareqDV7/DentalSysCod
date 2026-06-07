@@ -9,6 +9,19 @@ import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
 import 'database_service.dart';
 import 'clinic_api.dart';
+import '../utils/sync_outcome.dart';
+
+/// Raised by [InternetSyncService.syncAll] when a pull or push leg failed even
+/// though the target was already deemed reachable — i.e. the server answered
+/// the open readiness probe but the authenticated sync call did not go through
+/// (e.g. a stale clinic token → 401). Lets the connectivity layer surface
+/// "Sync failed" instead of a misleading "Synced".
+class SyncTransferException implements Exception {
+  const SyncTransferException(this.cause);
+  final Object? cause;
+  @override
+  String toString() => 'SyncTransferException: $cause';
+}
 
 /// Syncs the local SQLite database with a clinic server over HTTP. Works against
 /// either a LAN/local server (device-token auth) or the shared cloud node
@@ -19,13 +32,19 @@ class InternetSyncService {
 
   InternetSyncService(this._db, this._api);
 
+  /// One pull-then-push round. Throws [SyncTransferException] if either leg
+  /// failed after the target was reachable, so the caller can show a real
+  /// failure rather than a false "Synced".
   Future<void> syncAll() async {
-    final generatedAt = await _pullFromServer();
-    await _pushToServer();
+    final pull = await _pullFromServer();
+    final push = await _pushToServer();
     await _db.setSyncMeta('last_sync', DateTime.now().toIso8601String());
-    if (generatedAt != null && generatedAt.isNotEmpty) {
+    if (pull.generatedAt != null && pull.generatedAt!.isNotEmpty) {
       // Use the server's own clock as the cursor for the next incremental pull.
-      await _db.setSyncMeta('last_sync_cursor', generatedAt);
+      await _db.setSyncMeta('last_sync_cursor', pull.generatedAt!);
+    }
+    if (!syncRoundSucceeded(pullOk: pull.ok, pushOk: push.ok)) {
+      throw SyncTransferException(pull.error ?? push.error);
     }
   }
 
@@ -100,8 +119,11 @@ class InternetSyncService {
     return {'tables': tables, 'tombstones': tombstones};
   }
 
-  /// Returns the server's `generated_at` (cursor for the next incremental pull).
-  Future<String?> _pullFromServer() async {
+  /// Pulls the server delta and applies it. Returns whether the leg succeeded
+  /// plus the server's `generated_at` (cursor for the next incremental pull).
+  /// On failure the cursor is left untouched so the next cycle re-pulls.
+  Future<({bool ok, String? generatedAt, Object? error})>
+      _pullFromServer() async {
     try {
       final since = await _db.getSyncMeta('last_sync_cursor');
       final snapshot = await _api.get(
@@ -109,10 +131,16 @@ class InternetSyncService {
         query: (since != null && since.isNotEmpty) ? {'since': since} : null,
       );
       await applyExportedDelta(snapshot);
-      return snapshot['generated_at']?.toString();
-    } catch (_) {
-      // pull failures are non-fatal; we'll retry next sync
-      return null;
+      return (
+        ok: true,
+        generatedAt: snapshot['generated_at']?.toString(),
+        error: null,
+      );
+    } catch (e) {
+      // Reached but rejected (e.g. 401 from a stale clinic token) or dropped
+      // mid-call. Report it so the caller surfaces a real failure instead of
+      // letting the banner falsely read "Synced"; we'll retry next cycle.
+      return (ok: false, generatedAt: null, error: e);
     }
   }
 
@@ -150,7 +178,10 @@ class InternetSyncService {
         (h) => _db.upsertHoliday(Holiday.fromJson(h).copyWith(isSynced: true)));
   }
 
-  Future<void> _pushToServer() async {
+  /// Pushes the local delta. Returns whether the leg succeeded. Nothing to push
+  /// counts as success. On failure rows stay flagged unsynced so the next cycle
+  /// retries.
+  Future<({bool ok, Object? error})> _pushToServer() async {
     final pushedRows = <String, List<int>>{};
     for (final entry in DatabaseService.localToRemoteTable.entries) {
       final localTable = entry.key;
@@ -164,7 +195,7 @@ class InternetSyncService {
     final payload = await buildPushPayload();
     final tables = payload['tables'] as Map<String, dynamic>;
     final tombstones = payload['tombstones'] as List;
-    if (tables.isEmpty && tombstones.isEmpty) return;
+    if (tables.isEmpty && tombstones.isEmpty) return (ok: true, error: null);
 
     try {
       await _api.post('/api/sync/import',
@@ -175,8 +206,9 @@ class InternetSyncService {
         }
       }
       await _db.markAllTombstonesSynced();
-    } catch (_) {
-      // push failures are non-fatal
+      return (ok: true, error: null);
+    } catch (e) {
+      return (ok: false, error: e);
     }
   }
 

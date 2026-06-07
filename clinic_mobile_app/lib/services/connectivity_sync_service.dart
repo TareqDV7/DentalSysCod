@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'bluetooth_permissions.dart';
 import 'clinic_api.dart';
 import 'cloud_sync_service.dart';
@@ -89,7 +90,11 @@ class ConnectivitySyncService {
       await _internet.syncAll();
       _hasSyncedOnce = true;
       _emit(SyncStatus.synced, 'Synced · ${_linkLabel(link)}');
-    } catch (_) {
+    } catch (error) {
+      // syncAll throws SyncTransferException when a pull/push leg failed even
+      // though the target answered the (open) readiness probe — surface it as a
+      // real failure rather than the old false "Synced".
+      debugPrint('Sync failed over ${_linkLabel(_activeLink)}: $error');
       _emit(SyncStatus.error, 'Sync failed');
     }
   }
