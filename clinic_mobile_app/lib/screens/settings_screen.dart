@@ -13,6 +13,7 @@ import 'tooth_conditions_screen.dart';
 import '../utils/app_strings.dart';
 import '../utils/bt_error_message.dart';
 import '../utils/date_format_helper.dart';
+import '../widgets/brand_logo.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/section_header.dart';
@@ -465,20 +466,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               children: [
                 ListTile(
-                  leading: Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF0F6D7B), Color(0xFF1D7FB7)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.local_hospital,
-                        color: Colors.white, size: 18),
-                  ),
+                  leading: const BrandLogo(size: 36, radius: 10),
                   title: Text(AppBranding.systemName),
                   subtitle: Text(
                       '${AppBranding.clinicName} · v${AppBranding.appVersion}'),
