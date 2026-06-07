@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../state/app_state.dart';
 import '../services/report_service.dart';
+import '../utils/app_strings.dart';
 import '../utils/date_format_helper.dart';
 import '../widgets/clinic_card.dart';
 import '../widgets/section_header.dart';
@@ -34,6 +35,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     return Scaffold(
       body: Column(
         children: [
@@ -44,9 +46,9 @@ class _ReportsScreenState extends State<ReportsScreen>
               indicatorColor: scheme.primary,
               labelColor: scheme.primary,
               unselectedLabelColor: scheme.onSurfaceVariant,
-              tabs: const [
-                Tab(text: 'Weekly'),
-                Tab(text: 'Monthly'),
+              tabs: [
+                Tab(text: AppStrings.t('weekly', isArabic: ar)),
+                Tab(text: AppStrings.t('monthly', isArabic: ar)),
               ],
             ),
           ),
@@ -111,6 +113,7 @@ class _WeeklyTabState extends State<_WeeklyTab> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     final weekEnd = _weekStart.add(const Duration(days: 6));
     final weekStartDisplay = DateFormatHelper.formatDate(_weekStart);
     final weekEndDisplay = DateFormatHelper.formatDate(weekEnd);
@@ -139,25 +142,25 @@ class _WeeklyTabState extends State<_WeeklyTab> {
           const Center(child: CircularProgressIndicator())
         else if (_report == null)
           Center(
-              child: Text('No data',
+              child: Text(AppStrings.t('no_data', isArabic: ar),
                   style: TextStyle(color: scheme.onSurfaceVariant)))
         else ...[
           _MetricCard(
-            label: 'Distinct Teeth',
+            label: AppStrings.t('distinct_teeth', isArabic: ar),
             value: '${_report!.distinctTeeth}',
             icon: Icons.medical_services_outlined,
             color: const Color(0xFF0F6D7B),
           ),
           const SizedBox(height: 10),
           _MetricCard(
-            label: 'Follow-ups',
+            label: AppStrings.t('follow_ups', isArabic: ar),
             value: '${_report!.followUps}',
             icon: Icons.repeat,
             color: const Color(0xFF7B5DB7),
           ),
           const SizedBox(height: 10),
           _MetricCard(
-            label: 'Revenue',
+            label: AppStrings.t('revenue', isArabic: ar),
             value: '₪${_fmt.format(_report!.revenue)}',
             icon: Icons.trending_up,
             color: const Color(0xFF1F9A5F),
@@ -168,14 +171,14 @@ class _WeeklyTabState extends State<_WeeklyTab> {
             // is included in this Expenses total — the doctor manages it under
             // Expenses, not as a separate report line. (No standalone "Lab
             // Expenses" card here; that double-presented the same money.)
-            label: 'Expenses',
+            label: AppStrings.t('expenses', isArabic: ar),
             value: '₪${_fmt.format(_report!.expenses)}',
             icon: Icons.trending_down,
             color: const Color(0xFFD89E1F),
           ),
           const SizedBox(height: 10),
           _MetricCard(
-            label: 'Profit',
+            label: AppStrings.t('profit', isArabic: ar),
             value: '₪${_fmt.format(_report!.profit)}',
             icon: Icons.account_balance_wallet,
             color: _report!.profit >= 0
@@ -217,11 +220,12 @@ class _MonthlyTabState extends State<_MonthlyTab> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
 
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_reports.isEmpty) {
       return Center(
-          child: Text('No data yet',
+          child: Text(AppStrings.t('no_data_yet', isArabic: ar),
               style: TextStyle(color: scheme.onSurfaceVariant)));
     }
 
@@ -233,7 +237,7 @@ class _MonthlyTabState extends State<_MonthlyTab> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        SectionHeader(title: 'Last 6 Months'),
+        SectionHeader(title: AppStrings.t('last_6_months', isArabic: ar)),
         const SizedBox(height: 8),
 
         // Bar chart
@@ -305,9 +309,9 @@ class _MonthlyTabState extends State<_MonthlyTab> {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _legend('Revenue', const Color(0xFF0F6D7B)),
+            _legend(AppStrings.t('revenue', isArabic: ar), const Color(0xFF0F6D7B)),
             const SizedBox(width: 16),
-            _legend('Expenses', const Color(0xFFD89E1F)),
+            _legend(AppStrings.t('expenses', isArabic: ar), const Color(0xFFD89E1F)),
           ],
         ),
 
@@ -316,31 +320,31 @@ class _MonthlyTabState extends State<_MonthlyTab> {
         // Latest month summary
         SectionHeader(
             title:
-                'Latest: ${DateFormat('MMMM y').format(DateTime.tryParse('${latest.month}-01') ?? DateTime.now())}'),
+                '${AppStrings.t('latest_prefix', isArabic: ar)}${DateFormat('MMMM y').format(DateTime.tryParse('${latest.month}-01') ?? DateTime.now())}'),
 
         _MetricCard(
-          label: 'Visits',
+          label: AppStrings.t('visits', isArabic: ar),
           value: '${latest.visits}',
           icon: Icons.people,
           color: const Color(0xFF0F6D7B),
         ),
         const SizedBox(height: 10),
         _MetricCard(
-          label: 'Revenue',
+          label: AppStrings.t('revenue', isArabic: ar),
           value: '₪${_fmt.format(latest.revenue)}',
           icon: Icons.trending_up,
           color: const Color(0xFF1F9A5F),
         ),
         const SizedBox(height: 10),
         _MetricCard(
-          label: 'Expenses',
+          label: AppStrings.t('expenses', isArabic: ar),
           value: '₪${_fmt.format(latest.expenses)}',
           icon: Icons.trending_down,
           color: const Color(0xFFD89E1F),
         ),
         const SizedBox(height: 10),
         _MetricCard(
-          label: 'Profit',
+          label: AppStrings.t('profit', isArabic: ar),
           value: '₪${_fmt.format(latest.profit)}',
           icon: Icons.account_balance_wallet,
           color: latest.profit >= 0

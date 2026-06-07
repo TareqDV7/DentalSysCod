@@ -7,6 +7,7 @@ import '../models/billing_record.dart';
 import '../models/expense.dart';
 import '../models/patient.dart';
 import '../utils/amount_expr.dart';
+import '../utils/app_strings.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
@@ -38,6 +39,7 @@ class _FinancialScreenState extends State<FinancialScreen>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     return Scaffold(
       body: Column(
         children: [
@@ -48,10 +50,10 @@ class _FinancialScreenState extends State<FinancialScreen>
               indicatorColor: scheme.primary,
               labelColor: scheme.primary,
               unselectedLabelColor: scheme.onSurfaceVariant,
-              tabs: const [
-                Tab(text: 'Billing'),
-                Tab(text: 'Expenses'),
-                Tab(text: 'Receivables'),
+              tabs: [
+                Tab(text: AppStrings.t('billing', isArabic: ar)),
+                Tab(text: AppStrings.t('expenses', isArabic: ar)),
+                Tab(text: AppStrings.t('receivables', isArabic: ar)),
               ],
             ),
           ),
@@ -115,16 +117,18 @@ class _BillingTabState extends State<_BillingTab> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
+    final ar = context.read<AppState>().isArabic;
     try {
       final records = await context.read<AppState>().billing.getBillingRecords();
       if (mounted) setState(() { _records = records; _loading = false; });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
-      _showError('Unable to load billing records right now');
+      _showError(AppStrings.t('unable_to_load_billing', isArabic: ar));
     }
   }
 
   void _addBilling() {
+    final ar = context.read<AppState>().isArabic;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -136,7 +140,9 @@ class _BillingTabState extends State<_BillingTab> {
             if (mounted) {
               _load();
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Billing record saved')),
+                SnackBar(
+                    content:
+                        Text(AppStrings.t('billing_saved', isArabic: ar))),
               );
             }
           } catch (error) {
@@ -150,26 +156,26 @@ class _BillingTabState extends State<_BillingTab> {
 
   Future<void> _deleteBilling(BillingRecord b) async {
     if (b.id == null) return;
+    final ar = context.read<AppState>().isArabic;
     final messenger = ScaffoldMessenger.of(context);
     final state = context.read<AppState>();
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete billing record'),
+        title: Text(AppStrings.t('delete_billing', isArabic: ar)),
         content: Text(
           b.creditUsed > 0
-              ? 'This also returns ₪${_fmt.format(b.creditUsed)} of applied '
-                  'credit to the patient. Delete this billing record?'
-              : 'Delete this billing record?',
+              ? '${AppStrings.t('delete_billing_credit_prefix', isArabic: ar)}₪${_fmt.format(b.creditUsed)}${AppStrings.t('delete_billing_credit_suffix', isArabic: ar)}'
+              : AppStrings.t('delete_billing_q', isArabic: ar),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(AppStrings.t('cancel', isArabic: ar))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Delete',
-                  style: TextStyle(color: Color(0xFFD9434E)))),
+              child: Text(AppStrings.t('delete', isArabic: ar),
+                  style: const TextStyle(color: Color(0xFFD9434E)))),
         ],
       ),
     );
@@ -179,8 +185,8 @@ class _BillingTabState extends State<_BillingTab> {
       unawaited(state.sync.syncNow());
       if (mounted) {
         await _load();
-        messenger.showSnackBar(
-            const SnackBar(content: Text('Billing record deleted')));
+        messenger.showSnackBar(SnackBar(
+            content: Text(AppStrings.t('billing_deleted', isArabic: ar))));
       }
     } catch (error) {
       _showError(error.toString());
@@ -213,6 +219,7 @@ class _BillingTabState extends State<_BillingTab> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final visible = _visibleRecords;
@@ -226,7 +233,7 @@ class _BillingTabState extends State<_BillingTab> {
             children: [
               Expanded(
                 child: Text(
-                  'Billing',
+                  AppStrings.t('billing', isArabic: ar),
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
@@ -235,7 +242,7 @@ class _BillingTabState extends State<_BillingTab> {
               TextButton.icon(
                 onPressed: _addBilling,
                 icon: const Icon(Icons.add),
-                label: const Text('Add Billing'),
+                label: Text(AppStrings.t('add_billing', isArabic: ar)),
               ),
             ],
           ),
@@ -243,19 +250,19 @@ class _BillingTabState extends State<_BillingTab> {
           ClinicCard(
             child: Row(
               children: [
-                Expanded(child: _statCell('Billed', '₪${_fmt.format(_totalBilled)}', scheme.primary, scheme)),
-                Expanded(child: _statCell('Paid', '₪${_fmt.format(_totalPaid)}', const Color(0xFF1F9A5F), scheme)),
-                Expanded(child: _statCell('Balance', '₪${_fmt.format(_totalBalance)}', const Color(0xFFD9434E), scheme)),
-                Expanded(child: _statCell('Open', '$_unpaidCount', const Color(0xFF1D7FB7), scheme)),
+                Expanded(child: _statCell(AppStrings.t('billed', isArabic: ar), '₪${_fmt.format(_totalBilled)}', scheme.primary, scheme)),
+                Expanded(child: _statCell(AppStrings.t('paid', isArabic: ar), '₪${_fmt.format(_totalPaid)}', const Color(0xFF1F9A5F), scheme)),
+                Expanded(child: _statCell(AppStrings.t('balance', isArabic: ar), '₪${_fmt.format(_totalBalance)}', const Color(0xFFD9434E), scheme)),
+                Expanded(child: _statCell(AppStrings.t('open', isArabic: ar), '$_unpaidCount', const Color(0xFF1D7FB7), scheme)),
               ],
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _searchCtrl,
-            decoration: const InputDecoration(
-              hintText: 'Search billing records',
-              prefixIcon: Icon(Icons.search),
+            decoration: InputDecoration(
+              hintText: AppStrings.t('search_billing', isArabic: ar),
+              prefixIcon: const Icon(Icons.search),
             ),
           ),
           const SizedBox(height: 10),
@@ -263,10 +270,10 @@ class _BillingTabState extends State<_BillingTab> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _filterChip('All', 'all'),
-              _filterChip('Paid', 'paid'),
-              _filterChip('Partial', 'partial'),
-              _filterChip('Unpaid', 'unpaid'),
+              _filterChip(AppStrings.t('all', isArabic: ar), 'all'),
+              _filterChip(AppStrings.t('status_paid', isArabic: ar), 'paid'),
+              _filterChip(AppStrings.t('status_partial', isArabic: ar), 'partial'),
+              _filterChip(AppStrings.t('status_unpaid', isArabic: ar), 'unpaid'),
             ],
           ),
           const SizedBox(height: 14),
@@ -274,9 +281,10 @@ class _BillingTabState extends State<_BillingTab> {
             EmptyState(
               icon: Icons.receipt_long_outlined,
               message: _records.isEmpty
-                  ? 'No billing records yet'
-                  : 'No records match your filters',
-              actionLabel: _records.isEmpty ? 'Add Record' : null,
+                  ? AppStrings.t('no_billing_records', isArabic: ar)
+                  : AppStrings.t('no_records_match', isArabic: ar),
+              actionLabel:
+                  _records.isEmpty ? AppStrings.t('add_record', isArabic: ar) : null,
               onAction: _records.isEmpty ? _addBilling : null,
             )
           else
@@ -299,12 +307,14 @@ class _BillingTabState extends State<_BillingTab> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                b.patientName ?? 'Patient #${b.patientId}',
+                                b.patientName ??
+                                    '${AppStrings.t('patient', isArabic: ar)} #${b.patientId}',
                                 style: const TextStyle(fontWeight: FontWeight.w800),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                _displayDate(b.paymentDate) ?? 'No payment date',
+                                _displayDate(b.paymentDate) ??
+                                    AppStrings.t('no_payment_date', isArabic: ar),
                                 style: TextStyle(
                                   color: scheme.onSurfaceVariant,
                                   fontSize: 12,
@@ -329,14 +339,14 @@ class _BillingTabState extends State<_BillingTab> {
                           onSelected: (v) {
                             if (v == 'delete') _deleteBilling(b);
                           },
-                          itemBuilder: (_) => const [
+                          itemBuilder: (_) => [
                             PopupMenuItem(
                               value: 'delete',
                               child: ListTile(
                                 contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.delete_outline,
+                                leading: const Icon(Icons.delete_outline,
                                     color: Color(0xFFD9434E)),
-                                title: Text('Delete'),
+                                title: Text(AppStrings.t('delete', isArabic: ar)),
                               ),
                             ),
                           ],
@@ -346,16 +356,16 @@ class _BillingTabState extends State<_BillingTab> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        _amountColumn('Subtotal', '₪${_fmt.format(b.subtotal)}', scheme),
-                        _amountColumn('Discount', '₪${_fmt.format(b.discount)}', scheme),
-                        _amountColumn('Paid', '₪${_fmt.format(b.paidAmount)}', scheme),
-                        _amountColumn('Balance', '₪${_fmt.format(b.balanceDue)}', scheme,
+                        _amountColumn(AppStrings.t('subtotal', isArabic: ar), '₪${_fmt.format(b.subtotal)}', scheme),
+                        _amountColumn(AppStrings.t('discount', isArabic: ar), '₪${_fmt.format(b.discount)}', scheme),
+                        _amountColumn(AppStrings.t('paid', isArabic: ar), '₪${_fmt.format(b.paidAmount)}', scheme),
+                        _amountColumn(AppStrings.t('balance', isArabic: ar), '₪${_fmt.format(b.balanceDue)}', scheme,
                             valueColor: b.balanceDue > 0 ? const Color(0xFFD9434E) : const Color(0xFF1F9A5F)),
                       ],
                     ),
                     if (b.creditUsed > 0) ...[
                       const SizedBox(height: 6),
-                      Text('Credit applied: ₪${_fmt.format(b.creditUsed)}',
+                      Text('${AppStrings.t('credit_applied', isArabic: ar)}: ₪${_fmt.format(b.creditUsed)}',
                           style: TextStyle(
                               fontSize: 12, color: scheme.onSurfaceVariant)),
                     ],
@@ -462,6 +472,7 @@ class _ExpensesTabState extends State<_ExpensesTab> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     final total = _expenses.fold(0.0, (s, e) => s + e.amount);
 
     return Scaffold(
@@ -471,16 +482,16 @@ class _ExpensesTabState extends State<_ExpensesTab> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Row(
               children: [
-                _chip('All', 'all', _period,
+                _chip(AppStrings.t('all', isArabic: ar), 'all', _period,
                     (v) => setState(() { _period = v; _load(); })),
                 const SizedBox(width: 6),
-                _chip('Today', 'today', _period,
+                _chip(AppStrings.t('today', isArabic: ar), 'today', _period,
                     (v) => setState(() { _period = v; _load(); })),
                 const SizedBox(width: 6),
-                _chip('Month', 'month', _period,
+                _chip(AppStrings.t('month', isArabic: ar), 'month', _period,
                     (v) => setState(() { _period = v; _load(); })),
                 const Spacer(),
-                _chip('Paid', 'paid', _status,
+                _chip(AppStrings.t('status_paid', isArabic: ar), 'paid', _status,
                     (v) => setState(() {
                           _status = _status == v ? 'all' : v;
                           _load();
@@ -497,7 +508,7 @@ class _ExpensesTabState extends State<_ExpensesTab> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('Total Expenses',
+                    Text(AppStrings.t('total_expenses', isArabic: ar),
                         style: TextStyle(
                             color: scheme.onSurfaceVariant,
                             fontWeight: FontWeight.w600)),
@@ -516,8 +527,8 @@ class _ExpensesTabState extends State<_ExpensesTab> {
                 : _expenses.isEmpty
                     ? EmptyState(
                         icon: Icons.money_off_outlined,
-                        message: 'No expenses found',
-                        actionLabel: 'Add Expense',
+                        message: AppStrings.t('no_expenses_found', isArabic: ar),
+                        actionLabel: AppStrings.t('add_expense', isArabic: ar),
                         onAction: _addExpense,
                       )
                     : RefreshIndicator(
@@ -586,8 +597,8 @@ class _ExpensesTabState extends State<_ExpensesTab> {
         backgroundColor: scheme.primary,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
-        label: const Text('Add Expense',
-            style: TextStyle(fontWeight: FontWeight.w700)),
+        label: Text(AppStrings.t('add_expense', isArabic: ar),
+            style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
     );
   }
@@ -648,6 +659,7 @@ class _ReceivablesTabState extends State<_ReceivablesTab> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     final totalOwed = _rows.fold(
         0.0, (s, r) => s + (r['balance'] as num? ?? 0).toDouble());
 
@@ -656,9 +668,9 @@ class _ReceivablesTabState extends State<_ReceivablesTab> {
     return RefreshIndicator(
       onRefresh: _load,
       child: _rows.isEmpty
-          ? const EmptyState(
+          ? EmptyState(
               icon: Icons.check_circle_outline,
-              message: 'No outstanding balances',
+              message: AppStrings.t('no_outstanding', isArabic: ar),
             )
           : ListView(
               padding: const EdgeInsets.all(16),
@@ -670,7 +682,7 @@ class _ReceivablesTabState extends State<_ReceivablesTab> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Total Receivables',
+                          Text(AppStrings.t('total_receivables', isArabic: ar),
                               style: TextStyle(
                                   color: scheme.onSurfaceVariant,
                                   fontSize: 13)),
@@ -689,7 +701,7 @@ class _ReceivablesTabState extends State<_ReceivablesTab> {
                                   fontWeight: FontWeight.w800,
                                   fontSize: 20,
                                   color: scheme.primary)),
-                          Text('patients',
+                          Text(AppStrings.t('patients_label', isArabic: ar),
                               style: TextStyle(
                                   color: scheme.onSurfaceVariant,
                                   fontSize: 13)),
@@ -732,15 +744,15 @@ class _ReceivablesTabState extends State<_ReceivablesTab> {
                         Row(
                           children: [
                             _infoCol(
-                                'Total',
+                                AppStrings.t('total', isArabic: ar),
                                 '₪${_fmt.format((r['total'] as num? ?? 0).toDouble())}',
                                 scheme),
                             _infoCol(
-                                'Paid',
+                                AppStrings.t('paid', isArabic: ar),
                                 '₪${_fmt.format((r['paid'] as num? ?? 0).toDouble())}',
                                 scheme),
                             _infoCol(
-                                'Last payment',
+                                AppStrings.t('last_payment', isArabic: ar),
                                 r['last_date'] ?? '—',
                                 scheme),
                           ],
@@ -808,11 +820,30 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
   }
 
   Future<void> _loadPatients() async {
+    final ar = context.read<AppState>().isArabic;
     try {
       final list = await context.read<AppState>().patients.getPatients();
       if (mounted) setState(() => _patients = list);
     } catch (_) {
-      _showError('Unable to load patients right now');
+      _showError(AppStrings.t('unable_to_load_patients', isArabic: ar));
+    }
+  }
+
+  /// Display label for a payment method; the stored value stays the English
+  /// token (Cash/Card/…) so it matches the desktop + server, only the shown
+  /// text is localized.
+  String _methodLabel(String m, bool ar) {
+    switch (m) {
+      case 'Cash':
+        return AppStrings.t('method_cash', isArabic: ar);
+      case 'Card':
+        return AppStrings.t('method_card', isArabic: ar);
+      case 'Bank Transfer':
+        return AppStrings.t('method_bank_transfer', isArabic: ar);
+      case 'Insurance':
+        return AppStrings.t('method_insurance', isArabic: ar);
+      default:
+        return m;
     }
   }
 
@@ -865,6 +896,7 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     return DraggableScrollableSheet(
       initialChildSize: 0.8,
       minChildSize: 0.5,
@@ -888,7 +920,7 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Row(children: [
-                  Text('Add Billing',
+                  Text(AppStrings.t('add_billing', isArabic: ar),
                       style: Theme.of(context).textTheme.titleLarge),
                   const Spacer(),
                   IconButton(
@@ -903,7 +935,8 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
                   children: [
                   DropdownButtonFormField<Patient>(
                     initialValue: _patient,
-                    decoration: const InputDecoration(labelText: 'Patient'),
+                    decoration: InputDecoration(
+                        labelText: AppStrings.t('patient', isArabic: ar)),
                     items: _patients
                         .map((p) => DropdownMenuItem(
                             value: p, child: Text(p.fullName)))
@@ -919,46 +952,54 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
                   const SizedBox(height: 12),
                   TextField(
                       controller: _subtotal,
-                      decoration: const InputDecoration(
-                          labelText: 'Amount (₪)', prefixText: '₪ '),
+                      decoration: InputDecoration(
+                          labelText:
+                              '${AppStrings.t('amount', isArabic: ar)} (₪)',
+                          prefixText: '₪ '),
                       keyboardType: TextInputType.text),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _discount,
-                      decoration: const InputDecoration(
-                          labelText: 'Discount (₪)', prefixText: '₪ '),
+                      decoration: InputDecoration(
+                          labelText:
+                              '${AppStrings.t('discount', isArabic: ar)} (₪)',
+                          prefixText: '₪ '),
                       keyboardType: TextInputType.text),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _paid,
-                      decoration: const InputDecoration(
-                          labelText: 'Amount Paid (₪)', prefixText: '₪ '),
+                      decoration: InputDecoration(
+                          labelText:
+                              '${AppStrings.t('amount_paid', isArabic: ar)} (₪)',
+                          prefixText: '₪ '),
                       keyboardType: TextInputType.text),
                   if (_availableCredit > 0) ...[
                     const SizedBox(height: 12),
                     TextField(
                         controller: _credit,
                         decoration: InputDecoration(
-                            labelText: 'Use Credit (₪)',
+                            labelText:
+                                '${AppStrings.t('use_credit', isArabic: ar)} (₪)',
                             prefixText: '₪ ',
                             helperText:
-                                'Available: ₪${_availableCredit.toStringAsFixed(2)}'),
+                                '${AppStrings.t('available', isArabic: ar)}: ₪${_availableCredit.toStringAsFixed(2)}'),
                         keyboardType: TextInputType.text),
                   ],
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     initialValue: _method,
-                    decoration:
-                        const InputDecoration(labelText: 'Payment Method'),
+                    decoration: InputDecoration(
+                        labelText:
+                            AppStrings.t('payment_method', isArabic: ar)),
                     items: ['Cash', 'Card', 'Bank Transfer', 'Insurance']
-                        .map((m) =>
-                            DropdownMenuItem(value: m, child: Text(m)))
+                        .map((m) => DropdownMenuItem(
+                            value: m, child: Text(_methodLabel(m, ar))))
                         .toList(),
                     onChanged: (v) => setState(() => _method = v!),
                   ),
                   const SizedBox(height: 20),
                   GradientButton(
-                    label: 'Save',
+                    label: AppStrings.t('save', isArabic: ar),
                     loading: _saving,
                     onPressed: (_saving || _patient == null) ? null : _save,
                     width: double.infinity,
@@ -1034,6 +1075,7 @@ class _AddExpenseSheetState extends State<_AddExpenseSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     return DraggableScrollableSheet(
       initialChildSize: 0.75,
       minChildSize: 0.4,
@@ -1057,7 +1099,7 @@ class _AddExpenseSheetState extends State<_AddExpenseSheet> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Row(children: [
-                  Text('Add Expense',
+                  Text(AppStrings.t('add_expense', isArabic: ar),
                       style: Theme.of(context).textTheme.titleLarge),
                   const Spacer(),
                   IconButton(
@@ -1072,39 +1114,48 @@ class _AddExpenseSheetState extends State<_AddExpenseSheet> {
                   children: [
                   TextField(
                       controller: _category,
-                      decoration:
-                          const InputDecoration(labelText: 'Category')),
+                      decoration: InputDecoration(
+                          labelText: AppStrings.t('category', isArabic: ar))),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _amount,
-                      decoration: const InputDecoration(
-                          labelText: 'Amount (₪)', prefixText: '₪ '),
+                      decoration: InputDecoration(
+                          labelText:
+                              '${AppStrings.t('amount', isArabic: ar)} (₪)',
+                          prefixText: '₪ '),
                       keyboardType: TextInputType.number),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _vendor,
-                      decoration:
-                          const InputDecoration(labelText: 'Vendor (optional)')),
+                      decoration: InputDecoration(
+                          labelText:
+                              AppStrings.t('vendor_optional', isArabic: ar))),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     initialValue: _status,
-                    decoration: const InputDecoration(labelText: 'Status'),
+                    decoration: InputDecoration(
+                        labelText: AppStrings.t('status', isArabic: ar)),
                     items: [
-                      const DropdownMenuItem(
-                          value: 'paid', child: Text('Paid')),
-                      const DropdownMenuItem(
-                          value: 'postponed', child: Text('Postponed')),
+                      DropdownMenuItem(
+                          value: 'paid',
+                          child:
+                              Text(AppStrings.t('status_paid', isArabic: ar))),
+                      DropdownMenuItem(
+                          value: 'postponed',
+                          child: Text(
+                              AppStrings.t('status_postponed', isArabic: ar))),
                     ],
                     onChanged: (v) => setState(() => _status = v!),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _notes,
-                      decoration: const InputDecoration(labelText: 'Notes'),
+                      decoration: InputDecoration(
+                          labelText: AppStrings.t('notes', isArabic: ar)),
                       maxLines: 2),
                   const SizedBox(height: 20),
                   GradientButton(
-                    label: 'Save Expense',
+                    label: AppStrings.t('save_expense', isArabic: ar),
                     loading: _saving,
                     onPressed: _saving ? null : _save,
                     width: double.infinity,
