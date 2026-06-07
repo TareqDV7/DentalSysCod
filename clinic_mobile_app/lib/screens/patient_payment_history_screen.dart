@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../state/app_state.dart';
 import '../models/patient.dart';
 import '../models/payment_history_entry.dart';
+import '../utils/app_strings.dart';
 import '../utils/date_format_helper.dart';
 import '../widgets/empty_state.dart';
 
@@ -51,16 +52,19 @@ class _PatientPaymentHistoryScreenState
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
     final total = _entries.fold<double>(0, (s, e) => s + e.amount);
 
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.patient.fullName} · Payments')),
+      appBar: AppBar(
+          title: Text(
+              '${widget.patient.fullName} · ${AppStrings.t('payments', isArabic: ar)}')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _entries.isEmpty
-              ? const EmptyState(
+              ? EmptyState(
                   icon: Icons.payments_outlined,
-                  message: 'No payments recorded yet')
+                  message: AppStrings.t('no_payments_recorded', isArabic: ar))
               : Column(
                   children: [
                     Expanded(
@@ -96,8 +100,11 @@ class _PatientPaymentHistoryScreenState
                                       Text(
                                           e.description.isEmpty
                                               ? (isFollowup
-                                                  ? 'Follow-up'
-                                                  : 'Billing record')
+                                                  ? AppStrings.t('followup',
+                                                      isArabic: ar)
+                                                  : AppStrings.t(
+                                                      'billing_record',
+                                                      isArabic: ar))
                                               : e.description,
                                           style: const TextStyle(
                                               fontWeight: FontWeight.w700)),
@@ -108,8 +115,10 @@ class _PatientPaymentHistoryScreenState
                                                 e.method!.isNotEmpty)
                                               e.method!,
                                             isFollowup
-                                                ? 'Follow-up'
-                                                : 'Billing'
+                                                ? AppStrings.t('followup',
+                                                    isArabic: ar)
+                                                : AppStrings.t('billing',
+                                                    isArabic: ar)
                                           ].join(' · '),
                                           style: TextStyle(
                                               fontSize: 12,
@@ -125,7 +134,7 @@ class _PatientPaymentHistoryScreenState
                                             fontWeight: FontWeight.w800)),
                                     if (e.creditUsed > 0)
                                       Text(
-                                          '+₪${_fmt.format(e.creditUsed)} credit',
+                                          '+₪${_fmt.format(e.creditUsed)} ${AppStrings.t('credit', isArabic: ar)}',
                                           style: TextStyle(
                                               fontSize: 11,
                                               color: scheme.onSurfaceVariant)),
@@ -148,8 +157,8 @@ class _PatientPaymentHistoryScreenState
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text('Total Collected',
-                              style: TextStyle(fontWeight: FontWeight.w700)),
+                          Text(AppStrings.t('total_collected', isArabic: ar),
+                              style: const TextStyle(fontWeight: FontWeight.w700)),
                           Text('₪${_fmt.format(total)}',
                               style: TextStyle(
                                   fontWeight: FontWeight.w900,

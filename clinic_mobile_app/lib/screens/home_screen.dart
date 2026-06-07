@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../services/license_gate_service.dart';
 import '../state/app_state.dart';
+import '../utils/app_strings.dart';
 import '../widgets/sync_status_bar.dart';
 import '../widgets/brand_logo.dart';
 import 'dashboard_screen.dart';
@@ -51,19 +52,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildLicenseBanner() {
+    final ar = context.read<AppState>().isArabic;
     return switch (_gate) {
       GateGrace(:final graceUntil) when !_graceDismissed => MaterialBanner(
-        content: Text('Renew on the clinic desktop by $graceUntil'),
+        content: Text(
+            '${AppStrings.t('renew_by_prefix', isArabic: ar)}$graceUntil'),
         backgroundColor: Colors.amber.shade100,
         actions: [
           TextButton(
             onPressed: () => setState(() => _graceDismissed = true),
-            child: const Text('Dismiss'),
+            child: Text(AppStrings.t('dismiss', isArabic: ar)),
           ),
         ],
       ),
       GateViewOnly() => MaterialBanner(
-        content: const Text('View only — ask the clinic to renew'),
+        content: Text(AppStrings.t('view_only_renew', isArabic: ar)),
         backgroundColor: Colors.red.shade100,
         actions: const [SizedBox.shrink()],
       ),
@@ -72,6 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildUnlicensedBlock() {
+    final ar = context.read<AppState>().isArabic;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -91,14 +95,14 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 24),
             const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
             const SizedBox(height: 12),
-            const Text(
-              'Activate on the desktop first',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            Text(
+              AppStrings.t('activate_on_desktop_title', isArabic: ar),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Open the dental clinic desktop app and complete activation.',
+            Text(
+              AppStrings.t('activate_on_desktop_body', isArabic: ar),
               textAlign: TextAlign.center,
             ),
           ],
@@ -158,8 +162,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   : Icons.dark_mode_outlined,
             ),
             tooltip: state.themeMode == ThemeMode.dark
-                ? 'Switch to light mode'
-                : 'Switch to dark mode',
+                ? AppStrings.t('switch_to_light', isArabic: state.isArabic)
+                : AppStrings.t('switch_to_dark', isArabic: state.isArabic),
             onPressed: () => state.setThemeMode(
               state.themeMode == ThemeMode.dark
                   ? ThemeMode.light
@@ -168,7 +172,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
+            tooltip: AppStrings.t('settings', isArabic: state.isArabic),
             onPressed: () => Navigator.pushNamed(context, '/settings'),
           ),
         ],
@@ -192,31 +196,31 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard),
-            label: 'Dashboard',
+            icon: const Icon(Icons.dashboard_outlined),
+            selectedIcon: const Icon(Icons.dashboard),
+            label: AppStrings.t('nav_dashboard', isArabic: state.isArabic),
           ),
           NavigationDestination(
-            icon: Icon(Icons.people_outline),
-            selectedIcon: Icon(Icons.people),
-            label: 'Patients',
+            icon: const Icon(Icons.people_outline),
+            selectedIcon: const Icon(Icons.people),
+            label: AppStrings.t('nav_patients', isArabic: state.isArabic),
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month),
-            label: 'Appointments',
+            icon: const Icon(Icons.calendar_month_outlined),
+            selectedIcon: const Icon(Icons.calendar_month),
+            label: AppStrings.t('appointments', isArabic: state.isArabic),
           ),
           NavigationDestination(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            selectedIcon: Icon(Icons.account_balance_wallet),
-            label: 'Financial',
+            icon: const Icon(Icons.account_balance_wallet_outlined),
+            selectedIcon: const Icon(Icons.account_balance_wallet),
+            label: AppStrings.t('nav_financial', isArabic: state.isArabic),
           ),
           NavigationDestination(
-            icon: Icon(Icons.bar_chart_outlined),
-            selectedIcon: Icon(Icons.bar_chart),
-            label: 'Reports',
+            icon: const Icon(Icons.bar_chart_outlined),
+            selectedIcon: const Icon(Icons.bar_chart),
+            label: AppStrings.t('nav_reports', isArabic: state.isArabic),
           ),
         ],
       ),

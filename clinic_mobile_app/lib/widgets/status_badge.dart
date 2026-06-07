@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../state/app_state.dart';
+import '../utils/app_strings.dart';
 
 class StatusBadge extends StatelessWidget {
   final String status;
@@ -7,7 +10,10 @@ class StatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (bg, fg, label) = _resolve(status);
+    final isArabic = context.watch<AppState>().isArabic;
+    final (bg, fg, key) = _resolve(status);
+    // Unknown statuses fall back to the raw value rather than a catalog key.
+    final label = key == null ? status : AppStrings.t(key, isArabic: isArabic);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -24,26 +30,26 @@ class StatusBadge extends StatelessWidget {
     );
   }
 
-  (Color, Color, String) _resolve(String s) {
+  (Color, Color, String?) _resolve(String s) {
     switch (s.toLowerCase()) {
       case 'completed':
+        return (const Color(0xFF1F9A5F), const Color(0xFF1F9A5F), 'status_completed');
       case 'paid':
-        return (const Color(0xFF1F9A5F), const Color(0xFF1F9A5F),
-            s == 'paid' ? 'Paid' : 'Completed');
+        return (const Color(0xFF1F9A5F), const Color(0xFF1F9A5F), 'status_paid');
       case 'scheduled':
+        return (const Color(0xFF1D7FB7), const Color(0xFF1D7FB7), 'status_scheduled');
       case 'partial':
-        return (const Color(0xFF1D7FB7), const Color(0xFF1D7FB7),
-            s == 'partial' ? 'Partial' : 'Scheduled');
+        return (const Color(0xFF1D7FB7), const Color(0xFF1D7FB7), 'status_partial');
       case 'postponed':
+        return (const Color(0xFFD89E1F), const Color(0xFFD89E1F), 'status_postponed');
       case 'unpaid':
-        return (const Color(0xFFD89E1F), const Color(0xFFD89E1F),
-            s == 'unpaid' ? 'Unpaid' : 'Postponed');
+        return (const Color(0xFFD89E1F), const Color(0xFFD89E1F), 'status_unpaid');
       case 'cancelled':
+        return (const Color(0xFFD9434E), const Color(0xFFD9434E), 'status_cancelled');
       case 'pending':
-        return (const Color(0xFFD9434E), const Color(0xFFD9434E),
-            s == 'cancelled' ? 'Cancelled' : 'Pending');
+        return (const Color(0xFFD9434E), const Color(0xFFD9434E), 'status_pending');
       default:
-        return (Colors.grey, Colors.grey, s);
+        return (Colors.grey, Colors.grey, null);
     }
   }
 }

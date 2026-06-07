@@ -11,6 +11,7 @@ import '../widgets/section_header.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/clinic_card.dart';
+import '../utils/app_strings.dart';
 import '../utils/date_format_helper.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -65,6 +66,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isArabic = context.watch<AppState>().isArabic;
 
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
@@ -85,28 +87,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
             childAspectRatio: 0.9,
             children: [
               StatCard(
-                label: 'Total Patients',
+                label: AppStrings.t('total_patients', isArabic: isArabic),
                 value: '${_stats['total_patients'] ?? 0}',
                 icon: Icons.people_alt_outlined,
                 color: const Color(0xFF0F6D7B),
                 trend: _trends['patients'],
               ),
               StatCard(
-                label: "Today's Appointments",
+                label: AppStrings.t('todays_appointments', isArabic: isArabic),
                 value: '${_stats['today_appointments'] ?? 0}',
                 icon: Icons.event_outlined,
                 color: const Color(0xFF1D7FB7),
                 trend: _trends['appointments'],
               ),
               StatCard(
-                label: 'Total Visits',
+                label: AppStrings.t('total_visits', isArabic: isArabic),
                 value: '${_stats['total_visits'] ?? 0}',
                 icon: Icons.medical_services_outlined,
                 color: const Color(0xFF1F9A5F),
                 trend: _trends['visits'],
               ),
               StatCard(
-                label: 'Revenue',
+                label: AppStrings.t('revenue', isArabic: isArabic),
                 value: '₪ ${_money.format((_stats['total_revenue'] as num?) ?? 0)}',
                 icon: Icons.payments_outlined,
                 color: const Color(0xFFC47F10),
@@ -120,15 +122,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
           // ── Recent Appointments ───────────────────────────────────────
           SectionHeader(
-            title: 'Recent Appointments',
+            title: AppStrings.t('recent_appointments', isArabic: isArabic),
           ),
 
           const SizedBox(height: 8),
 
           if (_recent.isEmpty)
-            const EmptyState(
+            EmptyState(
               icon: Icons.calendar_month_outlined,
-              message: 'No appointments yet.\nSchedule one to get started.',
+              message: AppStrings.t('no_appointments_yet', isArabic: isArabic),
             )
           else
             ClinicCard(
@@ -154,7 +156,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               color: scheme.primary, size: 20),
                         ),
                         title: Text(
-                          appt.patientName ?? 'Patient #${appt.patientId}',
+                          appt.patientName ??
+                              '${AppStrings.t('patient', isArabic: isArabic)} #${appt.patientId}',
                           style: const TextStyle(
                               fontWeight: FontWeight.w700, fontSize: 14),
                           maxLines: 1,

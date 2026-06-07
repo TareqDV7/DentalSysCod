@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../models/patient.dart';
 import '../services/connectivity_sync_service.dart';
 import '../widgets/empty_state.dart';
+import '../utils/app_strings.dart';
 import '../utils/date_format_helper.dart';
 import '../utils/patient_name.dart';
 import 'patient_detail_screen.dart';
@@ -60,13 +61,16 @@ class _PatientsScreenState extends State<PatientsScreen> {
   Future<void> _load({String? query, bool silent = false}) async {
     if (!mounted) return;
     if (!silent) setState(() => _loading = true);
+    final state = context.read<AppState>();
+    final isArabic = state.isArabic;
     try {
-      final state = context.read<AppState>();
       final list = await state.patients.getPatients(query: query);
       if (mounted) setState(() { _patients = list; _loading = false; });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
-      if (!silent) _showError('Unable to load patients right now');
+      if (!silent) {
+        _showError(AppStrings.t('unable_to_load_patients', isArabic: isArabic));
+      }
     }
   }
 
@@ -85,16 +89,21 @@ class _PatientsScreenState extends State<PatientsScreen> {
   }
 
   Future<void> _deletePatient(Patient p) async {
+    final ar = context.read<AppState>().isArabic;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Delete Patient'),
-        content: Text('Delete ${p.fullName}? This cannot be undone.'),
+        title: Text(AppStrings.t('delete_patient', isArabic: ar)),
+        content: Text(
+            '${AppStrings.t('delete', isArabic: ar)} ${p.fullName}? ${AppStrings.t('cannot_be_undone', isArabic: ar)}'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(AppStrings.t('cancel', isArabic: ar))),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: Color(0xFFD9434E))),
+            child: Text(AppStrings.t('delete', isArabic: ar),
+                style: const TextStyle(color: Color(0xFFD9434E))),
           ),
         ],
       ),
@@ -108,6 +117,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ar = context.watch<AppState>().isArabic;
 
     return Scaffold(
       body: Column(
@@ -116,9 +126,9 @@ class _PatientsScreenState extends State<PatientsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: TextField(
               controller: _searchCtrl,
-              decoration: const InputDecoration(
-                hintText: 'Search by name, phone, or email…',
-                prefixIcon: Icon(Icons.search),
+              decoration: InputDecoration(
+                hintText: AppStrings.t('search_patients_hint', isArabic: ar),
+                prefixIcon: const Icon(Icons.search),
               ),
             ),
           ),
@@ -128,8 +138,8 @@ class _PatientsScreenState extends State<PatientsScreen> {
                 : _patients.isEmpty
                     ? EmptyState(
                         icon: Icons.people_outline,
-                        message: 'No patients found',
-                        actionLabel: 'Add Patient',
+                        message: AppStrings.t('no_patients_found', isArabic: ar),
+                        actionLabel: AppStrings.t('add_patient', isArabic: ar),
                         onAction: _openAdd,
                       )
                     : RefreshIndicator(
@@ -182,8 +192,8 @@ class _PatientsScreenState extends State<PatientsScreen> {
         backgroundColor: scheme.primary,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.person_add),
-        label: const Text('Add Patient',
-            style: TextStyle(fontWeight: FontWeight.w700)),
+        label: Text(AppStrings.t('add_patient', isArabic: ar),
+            style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
     );
   }
@@ -278,6 +288,7 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
+    final ar = context.read<AppState>().isArabic;
     final patients = context.read<AppState>().patients;
     final firstName = _first.text.trim();
     final lastName = _last.text.trim();
@@ -291,21 +302,21 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
       final existing = dups.first;
       final samePhone = phone.isNotEmpty && (existing.phone?.trim() == phone);
       final reason = samePhone
-          ? 'phone ${existing.phone}'
-          : 'name "${existing.fullName}"';
+          ? '${AppStrings.t('dup_reason_phone', isArabic: ar)} ${existing.phone}'
+          : '${AppStrings.t('dup_reason_name', isArabic: ar)} "${existing.fullName}"';
       final proceed = await showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
-          title: const Text('Possible duplicate'),
+          title: Text(AppStrings.t('possible_duplicate', isArabic: ar)),
           content: Text(
-              'A patient with the same $reason already exists. Save anyway?'),
+              '${AppStrings.t('duplicate_exists_prefix', isArabic: ar)}$reason${AppStrings.t('duplicate_exists_suffix', isArabic: ar)}'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel')),
+                child: Text(AppStrings.t('cancel', isArabic: ar))),
             FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Save anyway')),
+                child: Text(AppStrings.t('save_anyway', isArabic: ar))),
           ],
         ),
       );
@@ -355,6 +366,7 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final ar = context.watch<AppState>().isArabic;
     return DraggableScrollableSheet(
       initialChildSize: 0.9,
       minChildSize: 0.5,
@@ -380,7 +392,7 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Row(
                   children: [
-                    Text('Add Patient',
+                    Text(AppStrings.t('add_patient', isArabic: ar),
                         style: Theme.of(context).textTheme.titleLarge),
                     const Spacer(),
                     IconButton(
@@ -397,37 +409,46 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
                     padding: const EdgeInsets.all(16),
                     children: [
                     Row(children: [
-                      Expanded(child: _field(_first, 'First Name', required: true)),
+                      Expanded(
+                          child: _field(
+                              _first, AppStrings.t('first_name', isArabic: ar),
+                              required: true)),
                       const SizedBox(width: 12),
-                      Expanded(child: _field(_last, 'Last Name', required: true)),
+                      Expanded(
+                          child: _field(
+                              _last, AppStrings.t('last_name', isArabic: ar),
+                              required: true)),
                     ]),
                     const SizedBox(height: 12),
-                    _field(_phone, 'Phone', type: TextInputType.phone),
+                    _field(_phone, AppStrings.t('phone', isArabic: ar),
+                        type: TextInputType.phone),
                     const SizedBox(height: 12),
-                    _field(_email, 'Email', type: TextInputType.emailAddress),
+                    _field(_email, AppStrings.t('email', isArabic: ar),
+                        type: TextInputType.emailAddress),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _dob,
                       readOnly: true,
                       onTap: _pickDob,
-                      decoration: const InputDecoration(
-                        labelText: 'Date of Birth',
-                        hintText: 'Tap to pick date',
-                        suffixIcon: Icon(Icons.calendar_month_outlined),
+                      decoration: InputDecoration(
+                        labelText: AppStrings.t('date_of_birth', isArabic: ar),
+                        hintText: AppStrings.t('tap_to_pick_date', isArabic: ar),
+                        suffixIcon: const Icon(Icons.calendar_month_outlined),
                       ),
                       validator: (_) {
                         if (_dob.text.trim().isEmpty) return null;
                         return DateFormatHelper.parseDisplayDate(_dob.text.trim()) == null
-                            ? 'Enter a valid date'
+                            ? AppStrings.t('enter_valid_date', isArabic: ar)
                             : null;
                       },
                     ),
                     const SizedBox(height: 12),
-                    _field(_address, 'Address'),
+                    _field(_address, AppStrings.t('address', isArabic: ar)),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _history,
-                      decoration: const InputDecoration(labelText: 'Medical History'),
+                      decoration: InputDecoration(
+                          labelText: AppStrings.t('medical_history', isArabic: ar)),
                       maxLines: 3,
                     ),
                     const SizedBox(height: 20),
@@ -438,8 +459,8 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
                         onPressed: _saving ? null : _save,
                         child: _saving
                             ? const CircularProgressIndicator(color: Colors.white)
-                            : const Text('Save Patient',
-                                style: TextStyle(fontWeight: FontWeight.w800)),
+                            : Text(AppStrings.t('save_patient', isArabic: ar),
+                                style: const TextStyle(fontWeight: FontWeight.w800)),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -461,7 +482,10 @@ class _AddPatientSheetState extends State<_AddPatientSheet> {
       keyboardType: type,
       decoration: InputDecoration(labelText: label),
       validator: required
-          ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
+          ? (v) => (v == null || v.trim().isEmpty)
+              ? AppStrings.t('required',
+                  isArabic: context.read<AppState>().isArabic)
+              : null
           : null,
     );
   }
