@@ -145,34 +145,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 20),
 
-          // ── Server ────────────────────────────────────────────────���────
-          SectionHeader(title: 'Server Connection'),
-          ClinicCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: _urlCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Backend Server URL',
-                    hintText: 'http://192.168.1.x:5000',
-                    prefixIcon: Icon(Icons.link),
-                  ),
-                  keyboardType: TextInputType.url,
-                ),
-                const SizedBox(height: 12),
-                GradientButton(
-                  label: 'Save URL',
-                  icon: Icons.save_outlined,
-                  onPressed: _saveUrl,
-                  width: double.infinity,
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 20),
-
           // ── Cloud Account ──────────────────────────────────────────────
           SectionHeader(title: 'Cloud Account'),
           ClinicCard(
@@ -431,6 +403,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title:
                   AppStrings.t('holidays', isArabic: state.locale == 'ar')),
           ClinicCard(child: _HolidaysSection()),
+
+          const SizedBox(height: 20),
+
+          // ── Advanced ────────────────────────────────────────────────────
+          // The manual LAN server URL. Most users never need this — the
+          // activation key links the device to the cloud automatically — so it
+          // lives here, collapsed, instead of front-and-centre.
+          ClinicCard(
+            padding: EdgeInsets.zero,
+            child: ExpansionTile(
+              leading: const Icon(Icons.tune),
+              title: Text(state.locale == 'ar' ? 'إعدادات متقدمة' : 'Advanced'),
+              subtitle: Text(
+                state.locale == 'ar'
+                    ? 'عنوان خادم الشبكة المحلية (اختياري)'
+                    : 'Local network server URL (optional)',
+                style:
+                    TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+              ),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              children: [
+                Text(
+                  state.locale == 'ar'
+                      ? 'عادةً لا تحتاج لهذا — مفتاح التفعيل يربط الجهاز تلقائيًا. اضبطه فقط إذا كنت تتصل بخادم العيادة عبر الشبكة المحلية مباشرة.'
+                      : "You usually don't need this — the activation key links "
+                          'this device automatically. Set it only to reach the '
+                          'clinic server directly over the local network.',
+                  style: TextStyle(
+                      color: scheme.onSurfaceVariant,
+                      fontSize: 12,
+                      height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _urlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Backend Server URL',
+                    hintText: 'http://192.168.1.x:5000',
+                    prefixIcon: Icon(Icons.link),
+                  ),
+                  keyboardType: TextInputType.url,
+                ),
+                const SizedBox(height: 12),
+                GradientButton(
+                  label: state.locale == 'ar' ? 'حفظ العنوان' : 'Save URL',
+                  icon: Icons.save_outlined,
+                  onPressed: _saveUrl,
+                  width: double.infinity,
+                ),
+              ],
+            ),
+          ),
 
           const SizedBox(height: 20),
 
