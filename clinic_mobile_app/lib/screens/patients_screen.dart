@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../models/patient.dart';
+import '../services/connectivity_sync_service.dart';
 import '../widgets/empty_state.dart';
 import '../utils/date_format_helper.dart';
 import 'patient_detail_screen.dart';
@@ -17,6 +20,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
   List<Patient> _patients = [];
   bool _loading = true;
   final _searchCtrl = TextEditingController();
+  StreamSubscription<SyncStatus>? _syncSub;
 
   void _showError(String message) {
     if (!mounted) return;
@@ -34,24 +38,34 @@ class _PatientsScreenState extends State<PatientsScreen> {
     super.initState();
     _load();
     _searchCtrl.addListener(() => _load(query: _searchCtrl.text));
+    // The home shell keeps this screen alive in an IndexedStack, so initState
+    // runs once — before the first background sync has populated the DB.
+    // Silently reload whenever a sync lands so freshly-synced patients appear
+    // without needing a manual pull-to-refresh.
+    _syncSub = context.read<AppState>().sync.statusStream.listen((status) {
+      if (status == SyncStatus.synced && mounted) {
+        _load(query: _searchCtrl.text, silent: true);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _syncSub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _load({String? query}) async {
+  Future<void> _load({String? query, bool silent = false}) async {
     if (!mounted) return;
-    setState(() => _loading = true);
+    if (!silent) setState(() => _loading = true);
     try {
       final state = context.read<AppState>();
       final list = await state.patients.getPatients(query: query);
       if (mounted) setState(() { _patients = list; _loading = false; });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
-      _showError('Unable to load patients right now');
+      if (!silent) _showError('Unable to load patients right now');
     }
   }
 

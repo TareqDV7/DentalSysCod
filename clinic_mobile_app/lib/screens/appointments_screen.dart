@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../state/app_state.dart';
 import '../models/appointment.dart';
 import '../models/patient.dart';
+import '../services/connectivity_sync_service.dart';
 import '../models/treatment_procedure.dart';
 import '../models/followup.dart';
 import '../widgets/status_badge.dart';
@@ -26,6 +27,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
   Map<DateTime, int> _counts = {};
   List<Appointment> _dayAppointments = [];
   bool _loading = true;
+  StreamSubscription<SyncStatus>? _syncSub;
 
   void _showMessage(String message, {bool isError = false}) {
     if (!mounted) return;
@@ -43,6 +45,21 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
     super.initState();
     _loadMonth(_focusedDay);
     _loadDay(_selectedDay);
+    // Kept alive in the home IndexedStack, so initState runs once. Refresh the
+    // visible month + day whenever a background sync completes, so synced
+    // appointments (and their now-resolved patient names) show up.
+    _syncSub = context.read<AppState>().sync.statusStream.listen((status) {
+      if (status == SyncStatus.synced && mounted) {
+        _loadMonth(_focusedDay);
+        _loadDay(_selectedDay, silent: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadMonth(DateTime month) async {
@@ -53,8 +70,8 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
     if (mounted) setState(() => _counts = counts);
   }
 
-  Future<void> _loadDay(DateTime day) async {
-    setState(() => _loading = true);
+  Future<void> _loadDay(DateTime day, {bool silent = false}) async {
+    if (!silent) setState(() => _loading = true);
     final appts = await context
         .read<AppState>()
         .appointments

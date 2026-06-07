@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../state/app_state.dart';
 import '../models/appointment.dart';
+import '../services/connectivity_sync_service.dart';
 import '../widgets/stat_card.dart';
 import '../widgets/section_header.dart';
 import '../widgets/status_badge.dart';
@@ -24,15 +27,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, List<double>> _trends = {};
   List<Appointment> _recent = [];
   bool _loading = true;
+  StreamSubscription<SyncStatus>? _syncSub;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // Kept alive in the home IndexedStack, so initState runs once. Refresh the
+    // stats + recent appointments whenever a background sync completes.
+    _syncSub = context.read<AppState>().sync.statusStream.listen((status) {
+      if (status == SyncStatus.synced && mounted) _load(silent: true);
+    });
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) setState(() => _loading = true);
     final state = context.read<AppState>();
     final stats = await state.db.getStats();
     final trends = await state.db.getDashboardTrends();

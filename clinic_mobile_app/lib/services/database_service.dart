@@ -11,6 +11,7 @@ import '../models/treatment_plan.dart';
 import '../models/treatment_procedure.dart';
 import '../models/payment_history_entry.dart';
 import '../models/medical_image.dart';
+import '../utils/patient_name.dart';
 
 class DatabaseService {
   static DatabaseService? _instance;
@@ -458,36 +459,59 @@ class DatabaseService {
 
   // ── Appointments ──────────────────────────────────────────────────────────
 
+  // Appointment rows that arrive over sync carry only patient_id — the desktop
+  // resolves patient_name with a JOIN at read time and never stores it, so it
+  // lands null on the phone. We mirror that JOIN here (LEFT JOIN patients) and
+  // resolve the name in [_mapAppointments], so a synced appointment shows the
+  // real name instead of "Patient #<id>". Locally-entered rows keep their own
+  // stored patient_name (preferred when present).
+  static const String _appointmentsWithPatient =
+      'SELECT a.*, p.first_name AS _p_first, p.last_name AS _p_last '
+      'FROM appointments a LEFT JOIN patients p ON p.id = a.patient_id';
+
+  List<Appointment> _mapAppointments(List<Map<String, dynamic>> rows) {
+    return rows.map((row) {
+      final m = Map<String, dynamic>.from(row);
+      m['patient_name'] = resolvePatientName(
+        m['patient_name'] as String?,
+        firstName: m.remove('_p_first') as String?,
+        lastName: m.remove('_p_last') as String?,
+      );
+      return Appointment.fromDb(m);
+    }).toList();
+  }
+
   Future<List<Appointment>> getAppointments({DateTime? date}) async {
     final db = await database;
     List<Map<String, dynamic>> rows;
     if (date != null) {
       final day = date.toIso8601String().substring(0, 10);
-      rows = await db.query('appointments',
-          where: 'appointment_datetime LIKE ?',
-          whereArgs: ['$day%'],
-          orderBy: 'appointment_datetime ASC');
+      rows = await db.rawQuery(
+          '$_appointmentsWithPatient WHERE a.appointment_datetime LIKE ? '
+          'ORDER BY a.appointment_datetime ASC',
+          ['$day%']);
     } else {
-      rows = await db.query('appointments',
-          orderBy: 'appointment_datetime DESC');
+      rows = await db.rawQuery(
+          '$_appointmentsWithPatient ORDER BY a.appointment_datetime DESC');
     }
-    return rows.map(Appointment.fromDb).toList();
+    return _mapAppointments(rows);
   }
 
   Future<List<Appointment>> getRecentAppointments({int limit = 10}) async {
     final db = await database;
-    final rows = await db.query('appointments',
-        orderBy: 'appointment_datetime DESC', limit: limit);
-    return rows.map(Appointment.fromDb).toList();
+    final rows = await db.rawQuery(
+        '$_appointmentsWithPatient ORDER BY a.appointment_datetime DESC LIMIT ?',
+        [limit]);
+    return _mapAppointments(rows);
   }
 
   Future<List<Appointment>> getPatientAppointments(int patientId) async {
     final db = await database;
-    final rows = await db.query('appointments',
-        where: 'patient_id = ?',
-        whereArgs: [patientId],
-        orderBy: 'appointment_datetime DESC');
-    return rows.map(Appointment.fromDb).toList();
+    final rows = await db.rawQuery(
+        '$_appointmentsWithPatient WHERE a.patient_id = ? '
+        'ORDER BY a.appointment_datetime DESC',
+        [patientId]);
+    return _mapAppointments(rows);
   }
 
   Future<Map<DateTime, int>> getAppointmentCountsByMonth(
