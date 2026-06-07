@@ -164,17 +164,14 @@ class _WeeklyTabState extends State<_WeeklyTab> {
           ),
           const SizedBox(height: 10),
           _MetricCard(
+            // Lab cost is already auto-recorded as a (postponed) expense, so it
+            // is included in this Expenses total — the doctor manages it under
+            // Expenses, not as a separate report line. (No standalone "Lab
+            // Expenses" card here; that double-presented the same money.)
             label: 'Expenses',
             value: '₪${_fmt.format(_report!.expenses)}',
             icon: Icons.trending_down,
             color: const Color(0xFFD89E1F),
-          ),
-          const SizedBox(height: 10),
-          _MetricCard(
-            label: 'Lab Expenses',
-            value: '₪${_fmt.format(_report!.labExpenses)}',
-            icon: Icons.science_outlined,
-            color: const Color(0xFF1D7FB7),
           ),
           const SizedBox(height: 10),
           _MetricCard(
