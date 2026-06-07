@@ -19,6 +19,8 @@ import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
 import '../utils/activation_token.dart';
 import '../utils/bt_error_message.dart';
+import '../utils/clinic_profile.dart';
+import '../config/app_config.dart';
 
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final LocalStorageService _storage;
@@ -43,6 +45,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   ThemeMode _themeMode = ThemeMode.light;
   String? _cloudUrl;
   bool _hasCloudAccount = false;
+  String _doctorNameEn = AppBranding.doctorName;
+  String _doctorNameAr = AppBranding.doctorNameAr;
 
   AppState(this._storage) {
     db = DatabaseService.instance;
@@ -93,6 +97,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool get isArabic => _locale == 'ar';
   String? get cloudUrl => _cloudUrl;
   bool get hasCloudAccount => _hasCloudAccount;
+  String get doctorNameEn => _doctorNameEn;
+  String get doctorNameAr => _doctorNameAr;
+
+  /// The doctor name to show for the current locale (Arabic in Arabic, English
+  /// otherwise), falling back across languages when one is blank.
+  String get doctorName =>
+      resolveDoctorName(_doctorNameEn, _doctorNameAr, _locale);
 
   // ── Bluetooth peer ───────────────────────────────────────────────────────
   bool _btEnabled = false;
@@ -243,15 +254,71 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (token != null) api.deviceToken = token;
     if (clinicToken != null) api.clinicToken = clinicToken;
     if (clinic != null) _clinicName = clinic;
+    final dnEn = await _storage.getDoctorNameEn();
+    final dnAr = await _storage.getDoctorNameAr();
+    if (dnEn != null && dnEn.isNotEmpty) _doctorNameEn = dnEn;
+    if (dnAr != null && dnAr.isNotEmpty) _doctorNameAr = dnAr;
     _cloudUrl = cloudUrl;
     _hasCloudAccount = (cloudUrl != null && cloudUrl.isNotEmpty) &&
         (clinicToken != null && clinicToken.isNotEmpty);
     notifyListeners();
-    unawaited(sync.syncNow().catchError((error) {
-      debugPrint('Initial sync failed: $error');
-    }));
+    // Sync first, then pull the shared clinic profile — sequenced so the one-off
+    // clinic-settings call doesn't re-point ClinicApi mid-sync.
+    unawaited(() async {
+      try {
+        await sync.syncNow();
+      } catch (error) {
+        debugPrint('Initial sync failed: $error');
+      }
+      await refreshClinicProfile();
+    }());
     await _loadBtState();
     _refreshBtAutoLoop();
+  }
+
+  /// Persist a new doctor name locally, reflect it immediately, and push it to
+  /// the server best-effort. If the push can't reach a server (offline), the
+  /// edit is marked pending so the next refresh re-pushes it instead of being
+  /// overwritten by a stale server value.
+  Future<void> setDoctorNames(String en, String ar) async {
+    final e = en.trim();
+    final a = ar.trim();
+    if (e.isNotEmpty) _doctorNameEn = e;
+    if (a.isNotEmpty) _doctorNameAr = a;
+    await _storage.setDoctorNameEn(_doctorNameEn);
+    await _storage.setDoctorNameAr(_doctorNameAr);
+    notifyListeners();
+    final pushed = await sync.pushClinicSettings(
+        doctorName: _doctorNameEn, doctorNameAr: _doctorNameAr);
+    await _storage.setDoctorNamePending(!pushed);
+  }
+
+  /// Best-effort reconcile of the shared doctor name with the server. A pending
+  /// local edit is re-pushed (never clobbered); otherwise the server value (the
+  /// shared source of truth, written by the desktop too) is pulled in.
+  Future<void> refreshClinicProfile() async {
+    if (await _storage.getDoctorNamePending()) {
+      final pushed = await sync.pushClinicSettings(
+          doctorName: _doctorNameEn, doctorNameAr: _doctorNameAr);
+      if (pushed) await _storage.setDoctorNamePending(false);
+      return;
+    }
+    final data = await sync.fetchClinicSettings();
+    if (data == null) return;
+    final en = (data['doctor_name'] ?? '').toString().trim();
+    final ar = (data['doctor_name_ar'] ?? '').toString().trim();
+    var changed = false;
+    if (en.isNotEmpty && en != _doctorNameEn) {
+      _doctorNameEn = en;
+      await _storage.setDoctorNameEn(en);
+      changed = true;
+    }
+    if (ar.isNotEmpty && ar != _doctorNameAr) {
+      _doctorNameAr = ar;
+      await _storage.setDoctorNameAr(ar);
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   void setLocale(String locale) {

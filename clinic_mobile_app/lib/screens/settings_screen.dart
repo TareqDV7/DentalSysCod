@@ -28,6 +28,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _urlCtrl;
   late TextEditingController _activationKeyCtrl;
+  late TextEditingController _docEnCtrl;
+  late TextEditingController _docArCtrl;
   bool _syncing = false;
   bool _pairingCloud = false;
   String? _lastSync;
@@ -39,6 +41,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final state = context.read<AppState>();
     _urlCtrl = TextEditingController(text: state.api.baseUrl);
     _activationKeyCtrl = TextEditingController();
+    _docEnCtrl = TextEditingController(text: state.doctorNameEn);
+    _docArCtrl = TextEditingController(text: state.doctorNameAr);
     _loadLastSync();
   }
 
@@ -46,7 +50,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _urlCtrl.dispose();
     _activationKeyCtrl.dispose();
+    _docEnCtrl.dispose();
+    _docArCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _saveDoctorName() async {
+    final en = _docEnCtrl.text.trim();
+    final ar = _docArCtrl.text.trim();
+    if (en.isEmpty && ar.isEmpty) return;
+    final state = context.read<AppState>();
+    await state.setDoctorNames(en, ar);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            state.locale == 'ar' ? 'تم حفظ اسم الطبيب' : 'Doctor name saved')));
   }
 
   Future<void> _loadLastSync() async {
@@ -139,6 +157,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (v) => state.setThemeMode(
                       v ? ThemeMode.dark : ThemeMode.light),
                   activeThumbColor: scheme.primary,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // ── Clinic ──────────────────────────────────────────────────────
+          SectionHeader(title: state.locale == 'ar' ? 'العيادة' : 'Clinic'),
+          ClinicCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  state.locale == 'ar'
+                      ? 'اسم الطبيب كما يظهر في التطبيق والفواتير.'
+                      : 'The doctor name shown in the app and on invoices.',
+                  style: TextStyle(
+                      color: scheme.onSurfaceVariant, fontSize: 13, height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _docEnCtrl,
+                  decoration: InputDecoration(
+                    labelText: state.locale == 'ar'
+                        ? 'اسم الطبيب (إنجليزي)'
+                        : 'Doctor name (English)',
+                    prefixIcon: const Icon(Icons.person_outline),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _docArCtrl,
+                  textDirection: TextDirection.rtl,
+                  decoration: InputDecoration(
+                    labelText: state.locale == 'ar'
+                        ? 'اسم الطبيب (عربي)'
+                        : 'Doctor name (Arabic)',
+                    prefixIcon: const Icon(Icons.person_outline),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                GradientButton(
+                  label: state.locale == 'ar' ? 'حفظ' : 'Save',
+                  icon: Icons.save_outlined,
+                  onPressed: _saveDoctorName,
+                  width: double.infinity,
                 ),
               ],
             ),
@@ -474,8 +539,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Divider(height: 1, color: scheme.outlineVariant),
                 ListTile(
                   leading: const Icon(Icons.person_outline),
-                  title: const Text('Doctor'),
-                  subtitle: Text(AppBranding.doctorName),
+                  title: Text(state.locale == 'ar' ? 'الطبيب' : 'Doctor'),
+                  subtitle: Text(state.doctorName),
                 ),
                 Divider(height: 1, color: scheme.outlineVariant),
                 ListTile(

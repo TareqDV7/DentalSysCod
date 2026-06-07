@@ -214,6 +214,37 @@ class ConnectivitySyncService {
     return _cloud.isReachable(url, clinicToken: token);
   }
 
+  /// Best-effort one-shot read of the shared clinic settings (doctor name)
+  /// from whichever server is reachable. Returns null when nothing is reachable
+  /// or the call fails — clinic settings live in `app_settings`, not the synced
+  /// tables, so they need their own fetch.
+  Future<Map<String, dynamic>?> fetchClinicSettings() async {
+    if (await _configureBestTarget() == null) return null;
+    try {
+      return await _api.get('/api/clinic-settings');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Best-effort one-shot push of the doctor name to the reachable server.
+  /// Returns false when offline, so the caller can mark the edit pending.
+  Future<bool> pushClinicSettings({
+    required String doctorName,
+    required String doctorNameAr,
+  }) async {
+    if (await _configureBestTarget() == null) return false;
+    try {
+      await _api.post('/api/clinic-settings', body: {
+        'doctor_name': doctorName,
+        'doctor_name_ar': doctorNameAr,
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<String?> getLastSyncTime() => _internet.getLastSyncTime();
 
   void dispose() {

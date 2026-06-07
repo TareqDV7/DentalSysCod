@@ -5,6 +5,7 @@ class AppBranding {
   static const String systemName = 'ClinicDesk';
   static const String clinicName = 'Dental Clinic';
   static const String doctorName = 'Dr. Wasfy Barzaq';
+  static const String doctorNameAr = 'د. وصفي برزق';
   static const String tagline = 'Patient Care & Practice Management';
   static const String appVersion = '1.0.0';
 }

@@ -19,6 +19,9 @@ class LocalStorageService {
   static const _btBondedLabelKey = 'bt_bonded_label';
   static const _btLastSyncAtKey = 'bt_last_sync_at';
   static const _btLastErrorKey = 'bt_last_error';
+  static const _doctorNameEnKey = 'doctor_name_en';
+  static const _doctorNameArKey = 'doctor_name_ar';
+  static const _doctorNamePendingKey = 'doctor_name_pending_push';
 
   Future<String> getOrCreateDeviceId() async {
     final existing = await _storage.read(key: _deviceIdKey);
@@ -73,6 +76,25 @@ class LocalStorageService {
     }
     return _storage.read(key: _baseUrlKey);
   }
+
+  // ── Clinic profile (doctor name) ──────────────────────────────────────────
+  Future<void> setDoctorNameEn(String value) =>
+      _storage.write(key: _doctorNameEnKey, value: value);
+
+  Future<String?> getDoctorNameEn() => _storage.read(key: _doctorNameEnKey);
+
+  Future<void> setDoctorNameAr(String value) =>
+      _storage.write(key: _doctorNameArKey, value: value);
+
+  Future<String?> getDoctorNameAr() => _storage.read(key: _doctorNameArKey);
+
+  /// Whether a local doctor-name edit hasn't reached the server yet, so the
+  /// next online refresh re-pushes it instead of pulling a stale value over it.
+  Future<void> setDoctorNamePending(bool pending) =>
+      _storage.write(key: _doctorNamePendingKey, value: pending ? '1' : '0');
+
+  Future<bool> getDoctorNamePending() async =>
+      (await _storage.read(key: _doctorNamePendingKey)) == '1';
 
   Future<void> setSerialNumber(String value) =>
       _storage.write(key: _serialNumberKey, value: value);
