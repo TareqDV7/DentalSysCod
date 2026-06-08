@@ -1231,6 +1231,29 @@ class DatabaseService {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// Discard ALL locally-stored clinic data. Used only when this device is being
+  /// re-linked to a DIFFERENT clinic (gated by `clinicSwitchRequiresLocalReset`)
+  /// so the previous clinic's records don't linger — or collide by row-id and
+  /// overwrite a real record — after the switch. Clearing every table also drops
+  /// `sync_meta`, so the next pull is a FULL one that re-mirrors the newly-linked
+  /// clinic. Destructive by design; never call it on a same-clinic re-activation.
+  Future<void> wipeLocalClinicData() async {
+    final db = await database;
+    final tables = await db.query(
+      'sqlite_master',
+      columns: ['name'],
+      where:
+          "type = 'table' AND name NOT IN ('android_metadata', 'sqlite_sequence')",
+    );
+    await db.transaction((txn) async {
+      for (final row in tables) {
+        final name = row['name'] as String?;
+        if (name == null) continue;
+        await txn.delete(name);
+      }
+    });
+  }
+
   // ── Tombstones (deletion propagation) ─────────────────────────────────────
 
   /// Record that a row was deleted locally so the deletion can be synced.

@@ -19,6 +19,7 @@ import '../services/device_service.dart';
 import '../services/local_storage_service.dart';
 import '../utils/activation_token.dart';
 import '../utils/bt_error_message.dart';
+import '../utils/clinic_link.dart';
 import '../utils/clinic_profile.dart';
 import '../utils/prefs_codec.dart';
 import '../config/app_config.dart';
@@ -384,6 +385,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         ? clinicName.trim()
         : (parsed.clinicName ?? 'Clinic');
     const cloudUrl = CloudSyncService.defaultCloudUrl;
+    // Capture the clinic this device was linked to BEFORE we overwrite it, so we
+    // can tell whether this key moves the device to a different clinic.
+    final previousClinicId = await _storage.getCloudClinicId();
     final info = await cloud.register(
       cloudUrl: cloudUrl,
       serialNumber: parsed.serial,
@@ -400,6 +404,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       clinicToken: info.clinicToken,
       clinicId: info.clinicId,
     );
+    if (clinicSwitchRequiresLocalReset(
+        previousClinicId: previousClinicId, newClinicId: info.clinicId)) {
+      // Joining a DIFFERENT clinic: discard this device's old-clinic records so
+      // they neither linger nor collide by row-id, then let the full pull below
+      // mirror the new clinic. Without this, a stale sync cursor + already-synced
+      // flags make both legs transfer nothing while the banner reads "Synced".
+      await db.wipeLocalClinicData();
+    }
     _clinicName = name;
     _cloudUrl = cloudUrl;
     _hasCloudAccount = true;
