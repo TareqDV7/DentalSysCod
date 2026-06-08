@@ -240,6 +240,74 @@ HTML_TEMPLATE = '''
         }
         .doctor-badge:hover .doctor-edit-icon { opacity: 1; }
 
+        /* License chip (header) — always-visible active serial */
+        .license-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 12px;
+            border-radius: 13px;
+            font-weight: 700;
+            font-size: 0.82rem;
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.28);
+            background: rgba(255,255,255,0.14);
+            backdrop-filter: blur(8px);
+            cursor: pointer;
+            white-space: nowrap;
+            user-select: none;
+            letter-spacing: 0.01em;
+            font-family: inherit;
+            transition: background 0.18s, border-color 0.18s, transform 0.12s;
+        }
+        .license-chip:hover {
+            background: rgba(255,255,255,0.22);
+            border-color: rgba(255,255,255,0.44);
+            transform: translateY(-1px);
+        }
+        .license-chip:active { transform: translateY(0); }
+        .license-chip.hidden { display: none; }
+        .license-chip__dot {
+            width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+            background: #46d39a; box-shadow: 0 0 0 3px rgba(70,211,154,0.25);
+        }
+        .license-chip--warn .license-chip__dot { background: #ffb13d; box-shadow: 0 0 0 3px rgba(255,177,61,0.25); }
+        .license-chip__serial { font-variant-numeric: tabular-nums; }
+
+        /* License details popover (body child to escape backdrop-filter containment) */
+        .license-pop {
+            display: none;
+            position: fixed;
+            min-width: 300px;
+            max-width: 360px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 18px;
+            box-shadow: 0 20px 48px rgba(0,0,0,0.22), 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 9999;
+        }
+        .license-pop.open { display: block; animation: popoverIn 0.16s ease; }
+        .license-pop__title {
+            font-size: 0.75rem; font-weight: 800; color: var(--muted);
+            text-transform: uppercase; letter-spacing: 0.07em;
+            margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+        }
+        .license-pop__serial-row { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
+        .license-pop__copy {
+            border: 1px solid var(--line); background: var(--bg-1); color: var(--text);
+            border-radius: 8px; padding: 5px 10px; font-size: 0.76rem; font-weight: 700;
+            cursor: pointer; font-family: inherit; transition: border-color 0.15s;
+        }
+        .license-pop__copy:hover { border-color: var(--brand); }
+        .license-pop__actions { margin-top: 16px; display: flex; }
+        .license-pop__close {
+            flex: 1; padding: 9px; background: var(--bg-1); color: var(--text);
+            border: 1px solid var(--line); border-radius: 9px; font-weight: 700;
+            font-size: 0.85rem; cursor: pointer; font-family: inherit; transition: border-color 0.15s;
+        }
+        .license-pop__close:hover { border-color: var(--brand); }
+
         /* Doctor name edit popover */
         .doctor-edit-popover {
             display: none;
@@ -1833,6 +1901,10 @@ HTML_TEMPLATE = '''
                         <span data-i18n="doctor_name" class="doctor-badge-name" id="doctor-name-display">{{ DOCTOR_NAME }}</span>
                         <span class="doctor-edit-icon">✏ edit</span>
                     </div>
+                    <button type="button" id="license-chip" class="license-chip hidden" onclick="toggleLicensePopover(event)" title="License details · تفاصيل الترخيص">
+                        <span class="license-chip__dot"></span>
+                        <span class="license-chip__serial" id="license-chip-label">License</span>
+                    </button>
                     <button id="theme-toggle" class="theme-toggle" title="Night Mode" aria-label="Night Mode">🌙</button>
                     <button id="language-toggle" class="language-toggle">EN</button>
                     <a id="logout-link" href="/logout" class="language-toggle" style="text-decoration:none;display:inline-flex;align-items:center;" title="Sign out" data-i18n="logout">Logout</a>
@@ -7153,6 +7225,110 @@ HTML_TEMPLATE = '''
             window.location.reload();
         }
         document.addEventListener('DOMContentLoaded', applyLicenseGate);
+
+        // ── License chip (header) ──
+        // Surfaces the active serial so the user can always SEE which license this
+        // install is on (the "I can't see the key anywhere" complaint). Reads the
+        // public /api/license/status — serial only, never the signed token.
+        let __licenseStatus = null;
+        async function loadLicenseChip() {
+            try {
+                const res = await fetch('/api/license/status');
+                const s = await res.json();
+                __licenseStatus = s;
+                const chip = document.getElementById('license-chip');
+                const label = document.getElementById('license-chip-label');
+                if (!chip || !label) return;
+                if (!s || s.licensed === false || !s.serial_number) {
+                    chip.classList.add('hidden');   // gate already covers unlicensed
+                    return;
+                }
+                label.textContent = s.serial_number;
+                chip.classList.remove('hidden', 'license-chip--warn');
+                if (s.in_grace) chip.classList.add('license-chip--warn');
+            } catch (e) { /* offline / no license — leave chip hidden */ }
+        }
+        function _licenseRow(k, vHtml) {
+            return '<div class="license-preview__k">' + escapeHtml(k) + '</div>'
+                 + '<div class="license-preview__v">' + vHtml + '</div>';
+        }
+        function renderLicensePopover() {
+            const ar = _ar();
+            const s = __licenseStatus || {};
+            const grid = document.getElementById('license-pop-grid');
+            const title = document.getElementById('license-pop-title');
+            const close = document.getElementById('license-pop-close');
+            if (title) title.textContent = ar ? 'تفاصيل الترخيص' : 'License details';
+            if (close) close.textContent = ar ? 'إغلاق' : 'Close';
+            const serial = s.serial_number || '—';
+            const statusTxt = s.in_grace
+                ? (ar ? 'فترة سماح' : 'Grace period')
+                : (s.licensed ? (ar ? 'نشط' : 'Active') : (ar ? 'غير نشط' : 'Inactive'));
+            const serialCell =
+                '<span class="license-pop__serial-row">'
+              + '<span id="license-pop-serial">' + escapeHtml(serial) + '</span>'
+              + '<button type="button" class="license-pop__copy" id="license-pop-copy" onclick="copyLicenseSerial()">'
+              + (ar ? 'نسخ' : 'Copy') + '</button></span>';
+            let html = _licenseRow(ar ? 'السيريال' : 'Serial', serialCell);
+            if (s.clinic_name) html += _licenseRow(ar ? 'العيادة' : 'Clinic', escapeHtml(String(s.clinic_name)));
+            if (s.plan_name)   html += _licenseRow(ar ? 'الباقة' : 'Plan', escapeHtml(String(s.plan_name)));
+            html += _licenseRow(ar ? 'الحالة' : 'Status', escapeHtml(statusTxt));
+            if (s.max_devices) {
+                const used = (s.active_devices === 0 || s.active_devices) ? String(s.active_devices) : '?';
+                html += _licenseRow(ar ? 'الأجهزة' : 'Devices', escapeHtml(used + ' / ' + String(s.max_devices)));
+            }
+            if (s.expires_at) html += _licenseRow(ar ? 'تنتهي في' : 'Expires', escapeHtml(String(s.expires_at).slice(0, 10)));
+            grid.innerHTML = html;
+        }
+        function toggleLicensePopover(evt) {
+            if (evt) evt.stopPropagation();
+            const pop = document.getElementById('license-pop');
+            const chip = document.getElementById('license-chip');
+            if (!pop || !chip) return;
+            if (pop.classList.contains('open')) { closeLicensePopover(); return; }
+            renderLicensePopover();
+            const r = chip.getBoundingClientRect();
+            pop.style.top = (r.bottom + 8) + 'px';
+            pop.style.left = '';
+            pop.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+            pop.classList.add('open');
+            setTimeout(function () { document.addEventListener('click', _closeLicenseOnOutside); }, 0);
+        }
+        function closeLicensePopover() {
+            const pop = document.getElementById('license-pop');
+            if (pop) pop.classList.remove('open');
+            document.removeEventListener('click', _closeLicenseOnOutside);
+        }
+        function _closeLicenseOnOutside(e) {
+            const pop = document.getElementById('license-pop');
+            const chip = document.getElementById('license-chip');
+            if (!pop) return;
+            if (pop.contains(e.target) || (chip && chip.contains(e.target))) return;
+            closeLicensePopover();
+        }
+        async function copyLicenseSerial() {
+            const s = (__licenseStatus && __licenseStatus.serial_number) || '';
+            if (!s) return;
+            const ar = _ar();
+            const btn = document.getElementById('license-pop-copy');
+            const done = function () {
+                if (!btn) return;
+                btn.textContent = ar ? 'تم النسخ ✓' : 'Copied ✓';
+                setTimeout(function () { if (btn) btn.textContent = ar ? 'نسخ' : 'Copy'; }, 1500);
+            };
+            try {
+                await navigator.clipboard.writeText(s);
+                done();
+            } catch (e) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = s; document.body.appendChild(ta); ta.select();
+                    document.execCommand('copy'); document.body.removeChild(ta);
+                    done();
+                } catch (e2) { if (btn) btn.textContent = ar ? 'تعذّر النسخ' : 'Copy failed'; }
+            }
+        }
+        document.addEventListener('DOMContentLoaded', loadLicenseChip);
     </script>
 
     <!-- Doctor name edit popover: direct body child to escape backdrop-filter containment -->
@@ -7169,6 +7345,15 @@ HTML_TEMPLATE = '''
         <div class="doctor-edit-actions">
             <button class="doctor-edit-save" onclick="saveDoctorName()" data-i18n="save">Save</button>
             <button class="doctor-edit-cancel" onclick="toggleDoctorEditPopover()" data-i18n="cancel">Cancel</button>
+        </div>
+    </div>
+
+    <!-- License details popover: direct body child to escape backdrop-filter containment -->
+    <div class="license-pop" id="license-pop" onclick="event.stopPropagation()">
+        <div class="license-pop__title"><span>&#128273;</span><span id="license-pop-title">License details</span></div>
+        <div class="license-preview__grid" id="license-pop-grid"></div>
+        <div class="license-pop__actions">
+            <button type="button" class="license-pop__close" id="license-pop-close" onclick="closeLicensePopover()">Close</button>
         </div>
     </div>
 </body>
