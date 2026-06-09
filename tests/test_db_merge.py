@@ -202,3 +202,29 @@ def test_merge_database_full_roundtrip(tmp_path):
     cred = dst.execute("SELECT invoice_id FROM patient_credit_transactions WHERE patient_id=?", (src_pid,)).fetchone()
     assert cred['invoice_id'] == src_bill
     assert report.total_added() >= 5
+
+
+def test_merge_tolerates_older_source_missing_column(tmp_path):
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+    src.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Old', 'Schema')")
+    src.commit()
+    # Simulate an older source DB lacking a newer column the destination has.
+    src.execute("ALTER TABLE patients DROP COLUMN notes")   # 'notes' added by a later migration
+    src.commit()
+
+    report = db_merge.merge_database(dst, str(tmp_path / 'src.db'),
+                                     include_images=False, include_credit=False)
+    dst.commit()
+    assert dst.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
+    assert report.tables['patients']['added'] == 1
+
+
+def test_merge_garbage_source_raises_cleanly(tmp_path):
+    dst = _new_db(tmp_path / 'dst.db')
+    junk = tmp_path / 'junk.db'
+    junk.write_bytes(b'not a sqlite database at all')
+    with pytest.raises(Exception):
+        db_merge.merge_database(dst, str(junk))
+    # Destination untouched (caller would roll back; here nothing was inserted).
+    assert dst.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 0
