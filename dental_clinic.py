@@ -3703,6 +3703,52 @@ def data_export_bundle():
     return send_file(bundle, as_attachment=True, download_name=name)
 
 
+def _save_and_resolve_upload(tmpdir):
+    """Persist the uploaded file and resolve it to (db_path, uploads_dir|None).
+    Returns (None, None, error_message) on validation failure."""
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return None, None, 'No file uploaded'
+    raw = os.path.join(tmpdir, secure_filename(file.filename) or 'upload')
+    file.save(raw)
+    if zipfile.is_zipfile(raw):
+        try:
+            db_path, uploads_dir = db_import.extract_bundle(raw, os.path.join(tmpdir, 'unpacked'))
+        except (ValueError, zipfile.BadZipFile) as exc:
+            return None, None, f'Invalid bundle: {exc}'
+        if not db_import.is_sqlite_file(db_path):
+            return None, None, 'Bundle does not contain a valid database'
+        return db_path, uploads_dir, None
+    if db_import.is_sqlite_file(raw):
+        return raw, None, None
+    return None, None, 'File is not a DentaCare database or bundle'
+
+
+@app.route('/api/data/merge', methods=['POST'])
+def data_merge():
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    tmpdir = tempfile.mkdtemp(prefix='dc_merge_')
+    db_path, uploads_dir, err = _save_and_resolve_upload(tmpdir)
+    if err:
+        return jsonify({'error': err}), 400
+    backups = run_database_backup()
+    backup_path = backups[0] if backups else None
+    conn = sqlite3.connect(str(DB_NAME))
+    try:
+        report = db_merge.merge_database(
+            conn, db_path, src_uploads=uploads_dir, dst_uploads=str(UPLOAD_FOLDER),
+            include_images=True, include_credit=True)
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — any failure must roll back the whole merge
+        conn.rollback()
+        return jsonify({'error': f'Merge failed and was rolled back: {exc}',
+                        'backup_path': backup_path}), 500
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'report': report.as_dict(), 'backup_path': backup_path})
+
+
 @app.route('/api/medical-images', methods=['GET', 'POST'])
 def medical_images():
     conn = sqlite3.connect(DB_NAME)

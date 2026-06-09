@@ -44,3 +44,58 @@ def test_export_bundle_returns_zip_with_db(client):
     assert resp.status_code == 200
     z = zipfile.ZipFile(io.BytesIO(resp.data))
     assert 'dental_clinic.db' in z.namelist()
+
+
+def _make_source_db(path):
+    """A second clinic's DB with one patient, colliding id 1."""
+    prev = dental_clinic.DB_NAME
+    dental_clinic.DB_NAME = str(path)
+    try:
+        dental_clinic.init_database()
+    finally:
+        dental_clinic.DB_NAME = prev
+    conn = sqlite3.connect(str(path))
+    conn.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Imported', 'Patient')")
+    conn.commit()
+    conn.close()
+
+
+def test_merge_requires_login(client):
+    assert client.post('/api/data/merge').status_code == 401
+
+
+def test_merge_rejects_non_sqlite(client):
+    _login(client)
+    data = {'file': (io.BytesIO(b'not a database'), 'evil.db')}
+    resp = client.post('/api/data/merge', data=data, content_type='multipart/form-data')
+    assert resp.status_code == 400
+
+
+def test_merge_adds_imported_patient_and_keeps_existing(client, tmp_path):
+    _login(client)
+    # Destination already has a patient at id 1.
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Local', 'Owner')")
+    conn.commit(); conn.close()
+
+    src = tmp_path / 'other_clinic.db'
+    _make_source_db(src)
+    with open(src, 'rb') as fh:
+        data = {'file': (io.BytesIO(fh.read()), 'other_clinic.db')}
+        resp = client.post('/api/data/merge', data=data, content_type='multipart/form-data')
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['report']['total_added'] >= 1
+    assert body['backup_path']                      # safety backup was taken
+
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    names = {r[0] for r in conn.execute("SELECT first_name FROM patients").fetchall()}
+    conn.close()
+    assert {'Local', 'Imported'} <= names
+
+
+def test_merge_disabled_on_cloud(client, monkeypatch):
+    _login(client)
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
+    resp = client.post('/api/data/merge', data={}, content_type='multipart/form-data')
+    assert resp.status_code == 404
