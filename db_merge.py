@@ -94,6 +94,72 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
     return id_map
 
 
+def _unique_dest_name(dst_uploads: str, file_name: str) -> str:
+    stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+    base = os.path.basename(file_name or 'image')
+    candidate = os.path.join(dst_uploads, f'merged_{stamp}_{base}')
+    n = 0
+    while os.path.exists(candidate):
+        n += 1
+        candidate = os.path.join(dst_uploads, f'merged_{stamp}_{n}_{base}')
+    return candidate
+
+
+def _copy_medical_images(dst_cur, src_cur, remaps: dict, src_uploads, dst_uploads,
+                         report: MergeReport) -> None:
+    patient_map = remaps.get('patients', {})
+    cols = [c for c in _dst_columns(dst_cur, 'medical_images') if c != 'id']
+    src_cur.execute('SELECT * FROM medical_images ORDER BY id ASC')
+    rows = [dict(r) for r in src_cur.fetchall()]
+    if not rows:
+        return
+    if not src_uploads or not dst_uploads:
+        report.images_skipped += len(rows)
+        report.warnings.append(
+            f'{len(rows)} medical image(s) skipped — image files were not included '
+            f'(import a .zip bundle to carry X-rays).')
+        return
+    os.makedirs(dst_uploads, exist_ok=True)
+    for row in rows:
+        new_pid = _remap_value(row.get('patient_id'), patient_map)
+        if new_pid is None:
+            report.images_skipped += 1
+            continue
+        # Resolve the source file: stored absolute path, else by file_name in src uploads.
+        candidates = []
+        if row.get('file_path'):
+            candidates.append(row['file_path'])
+            candidates.append(os.path.join(src_uploads, os.path.basename(row['file_path'])))
+        if row.get('file_name'):
+            candidates.append(os.path.join(src_uploads, os.path.basename(row['file_name'])))
+        source_file = next((p for p in candidates if p and os.path.exists(p)), None)
+        if not source_file:
+            report.images_skipped += 1
+            report.warnings.append(f"medical image missing on disk: {row.get('file_name')}")
+            continue
+        dest_file = _unique_dest_name(dst_uploads, row.get('file_name') or os.path.basename(source_file))
+        try:
+            shutil.copy2(source_file, dest_file)
+        except OSError as exc:
+            report.images_skipped += 1
+            report.warnings.append(f"could not copy image {row.get('file_name')}: {exc}")
+            continue
+        out = dict(row)
+        out['patient_id'] = new_pid
+        out['file_path'] = dest_file
+        placeholders = ', '.join('?' for _ in cols)
+        try:
+            dst_cur.execute(
+                f"INSERT INTO medical_images ({', '.join(cols)}) VALUES ({placeholders})",
+                tuple(out.get(c) for c in cols),
+            )
+        except sqlite3.Error as exc:
+            report.images_skipped += 1
+            report.warnings.append(f'medical_images: skipped a row ({exc})')
+            continue
+        report.images_copied += 1
+
+
 def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
     """Copy expenses, rewriting patient_id and treatment_id via their maps, and
     reference_id via the follow-up map ONLY when source_type == 'followup'

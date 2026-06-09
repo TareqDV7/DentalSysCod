@@ -116,3 +116,48 @@ def test_copy_expenses_remaps_followup_reference(tmp_path):
     assert (lab['patient_id'], lab['reference_id']) == (100, 700)   # both links rewritten
     rent = dst.execute("SELECT reference_id FROM expenses WHERE category = 'Rent'").fetchone()
     assert rent['reference_id'] == 999                              # manual reference_id preserved
+
+
+def test_copy_medical_images_copies_file_and_repaths(tmp_path):
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+    src_uploads = tmp_path / 'src_uploads'
+    dst_uploads = tmp_path / 'dst_uploads'
+    src_uploads.mkdir(); dst_uploads.mkdir()
+    img = src_uploads / 'xray1.png'
+    img.write_bytes(b'\x89PNG fake bytes')
+    src.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'S', 'One')")
+    src.execute("""INSERT INTO medical_images (id, patient_id, file_name, file_path)
+                   VALUES (1, 1, 'xray1.png', ?)""", (str(img),))
+    src.commit()
+
+    report = db_merge.MergeReport()
+    remaps = {'patients': {1: 50}}
+    db_merge._copy_medical_images(dst.cursor(), src.cursor(), remaps,
+                                  str(src_uploads), str(dst_uploads), report)
+    dst.commit()
+
+    row = dst.execute("SELECT patient_id, file_name, file_path FROM medical_images").fetchone()
+    assert row['patient_id'] == 50
+    assert row['file_name'] == 'xray1.png'
+    # File physically copied into the destination uploads dir, path rewritten there.
+    import os
+    assert os.path.dirname(row['file_path']) == str(dst_uploads)
+    assert os.path.exists(row['file_path'])
+    assert report.images_copied == 1
+
+
+def test_copy_medical_images_skips_when_no_uploads(tmp_path):
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+    src.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'S', 'One')")
+    src.execute("""INSERT INTO medical_images (id, patient_id, file_name, file_path)
+                   VALUES (1, 1, 'x.png', '/nowhere/x.png')""")
+    src.commit()
+    report = db_merge.MergeReport()
+    db_merge._copy_medical_images(dst.cursor(), src.cursor(), {'patients': {1: 50}},
+                                  None, None, report)
+    dst.commit()
+    assert dst.execute("SELECT COUNT(*) FROM medical_images").fetchone()[0] == 0
+    assert report.images_skipped == 1
+    assert any('image' in w.lower() for w in report.warnings)
