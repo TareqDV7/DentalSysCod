@@ -26,6 +26,9 @@ import uuid
 import urllib.request
 import urllib.error
 import urllib.parse
+import shutil
+import tempfile
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -206,7 +209,8 @@ DEFAULT_LICENSE_GRACE_DAYS = 7
 
 # Endpoints reachable on the cloud node without a clinic token.
 _CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/api/license/admin/revoke', '/healthz', '/logo', '/favicon.ico'}
-_CLOUD_OPEN_PREFIXES = ('/static/',)
+# /api/data/ is open on the cloud so the handlers can return their own 404 (CLOUD_MODE gate).
+_CLOUD_OPEN_PREFIXES = ('/static/', '/api/data/')
 # Not available on the cloud node: uploads aren't part of cloud sync and the
 # folder isn't tenant-scoped; the /api/cloud/* endpoints are for a clinic's own
 # local server only.
@@ -1860,6 +1864,9 @@ CLINIC_CONFIG = {
 
 # HTML templates extracted to templates.py (see that module).
 from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE
+# Data-tools helpers (pure, no Flask).
+import db_import
+import db_merge
 
 
 def _safe_next_url(target):
@@ -1875,7 +1882,8 @@ def _safe_next_url(target):
 # REST API and mobile/license/pairing endpoints are intentionally left open so the
 # offline-first mobile app keeps working unchanged.
 _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure',
-                        '/api/cloud/pairing-qr'}
+                        '/api/cloud/pairing-qr',
+                        '/api/data/export-bundle', '/api/data/merge', '/api/data/replace'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 
@@ -3670,6 +3678,30 @@ def delete_holiday(holiday_id):
 def backup_database():
     backup_name = f"dental_clinic_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     return send_file(DB_NAME, as_attachment=True, download_name=backup_name)
+
+
+@app.route('/api/data/export-bundle')
+def data_export_bundle():
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    # Snapshot the live DB consistently (online backup) into a temp file, then zip.
+    tmpdir = tempfile.mkdtemp(prefix='dc_export_')
+    snap = os.path.join(tmpdir, 'dental_clinic.db')
+    src = sqlite3.connect(str(DB_NAME))
+    try:
+        dst = sqlite3.connect(snap)
+        try:
+            with dst:
+                src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    bundle = os.path.join(tmpdir, 'dentacare_bundle.zip')
+    db_import.build_bundle(bundle, snap, str(UPLOAD_FOLDER))
+    name = f"dentacare_bundle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    return send_file(bundle, as_attachment=True, download_name=name)
+
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])
 def medical_images():
