@@ -251,7 +251,7 @@ def test_verify_serial_token_from_serial_generator(monkeypatch):
 
 def test_verify_serial_token_bad_signature(monkeypatch):
     import serial_generator
-    priv_good = _make_keypair_and_patch(monkeypatch)  # public key patched in
+    _make_keypair_and_patch(monkeypatch)  # patch the good public key; we then sign with a different key
     # Sign with a different (unpatched) private key
     priv_other, _pub_other = serial_generator.generate_keypair()
     serial = 'VERIFY-BAD-SIG'

@@ -1,6 +1,5 @@
 """Tests for the BT settings endpoints (/api/bt/status, /api/bt/configure)."""
 
-import json
 import pytest
 
 import dental_clinic

@@ -66,7 +66,6 @@ def test_json_access_log_emits_well_formed_line(local_client, monkeypatch, capsy
     monkeypatch.setenv('CLINIC_LOG_FORMAT', 'json')
     # Re-run the configurator so the StreamHandler attaches to (the now-real)
     # stdout that pytest's capsys is monitoring.
-    import logging
     log = dental_clinic._REQUEST_LOG
     # Clear any handler attached by an earlier test or import.
     for h in list(log.handlers):

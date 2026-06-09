@@ -6,7 +6,6 @@ the file missing, being malformed, or containing partial data."""
 import json
 from pathlib import Path
 
-import pytest
 
 from window.window_state import (
     is_hidden_geometry,

@@ -4,7 +4,6 @@ The real pyserial open is swapped for a fake that returns BytesIO pairs."""
 import io
 import threading
 import time
-import pytest
 
 import dental_clinic
 

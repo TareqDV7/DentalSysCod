@@ -1,4 +1,4 @@
-import requests, json, sys
+import requests
 BASE = "http://localhost:5000"
 
 OK="PASS"; BAD="FAIL"

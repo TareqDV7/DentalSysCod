@@ -1,7 +1,6 @@
 # tests/test_data_tools_api.py
 """Route tests for the Settings -> Data Tools surface."""
 import io
-import os
 import sqlite3
 import zipfile
 

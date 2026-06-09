@@ -5,12 +5,9 @@ Three rules in priority order:
   2. Frozen exe with no env var -> %ProgramData%\\DentaCare
   3. Running from source -> directory containing the .py file
 """
-import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 from window.data_dir import resolve_data_dir
 

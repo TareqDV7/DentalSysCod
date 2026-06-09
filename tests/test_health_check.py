@@ -8,7 +8,6 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import pytest
 
 from window.health_check import wait_for_service
 

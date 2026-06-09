@@ -4,7 +4,6 @@ zip-bundle build/extract (zip-slip-safe). No Flask."""
 from __future__ import annotations
 
 import os
-import sqlite3
 import zipfile
 
 _SQLITE_MAGIC = b'SQLite format 3\x00'

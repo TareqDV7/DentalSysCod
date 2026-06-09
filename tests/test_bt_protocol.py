@@ -8,7 +8,6 @@ from dental_clinic import (
     BT_PROTOCOL_VERSION,
     _bt_handle_request,
     init_database,
-    DB_NAME,
 )
 
 

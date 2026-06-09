@@ -6,7 +6,6 @@ duplicates ignored), then the table dropped. A second ``init_database()`` call
 must be a no-op (idempotent).
 """
 
-import os
 import sqlite3
 
 import pytest

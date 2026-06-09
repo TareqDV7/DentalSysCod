@@ -8,7 +8,6 @@ Run: py dental_clinic.py (Windows) or python dental_clinic.py (Linux/Mac)
 import sys
 import subprocess
 import os
-import platform
 import sqlite3
 import base64
 import binascii
@@ -3323,15 +3322,6 @@ def reports_weekly():
         AND treatment_procedure != 'مراجعة'
     ''', (start_str, end_str))
     distinct_teeth = cursor.fetchone()[0] or 0
-
-    # Count follow-ups (مراجعة entries)
-    cursor.execute('''
-        SELECT COUNT(*) FROM patient_followups 
-        WHERE date(followup_date) BETWEEN ? AND ? 
-        AND COALESCE(is_deleted, 0) = 0 
-        AND treatment_procedure = 'مراجعة'
-    ''', (start_str, end_str))
-    follow_ups_count = cursor.fetchone()[0] or 0
 
     cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     revenue = cursor.fetchone()[0]

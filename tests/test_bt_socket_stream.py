@@ -2,7 +2,6 @@
 through the same length-prefixed frame codec it uses for the COM-port path."""
 
 import io
-import pytest
 
 import dental_clinic
 

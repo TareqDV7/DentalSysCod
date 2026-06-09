@@ -51,7 +51,7 @@ def _seed_clinic_db(path, clinic_id):
     real to snapshot. Content isn't important — only that the file exists and is
     a valid SQLite DB."""
     conn = sqlite3.connect(str(path))
-    conn.execute(f"CREATE TABLE marker (clinic_id INTEGER, note TEXT)")
+    conn.execute("CREATE TABLE marker (clinic_id INTEGER, note TEXT)")
     conn.execute("INSERT INTO marker VALUES (?, ?)", (clinic_id, 'hello'))
     conn.commit()
     conn.close()
