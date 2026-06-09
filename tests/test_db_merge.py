@@ -161,3 +161,44 @@ def test_copy_medical_images_skips_when_no_uploads(tmp_path):
     assert dst.execute("SELECT COUNT(*) FROM medical_images").fetchone()[0] == 0
     assert report.images_skipped == 1
     assert any('image' in w.lower() for w in report.warnings)
+
+
+def _seed_full_clinic(conn, tag, base):
+    """Seed one patient + appointment + followup + billing + credit at colliding
+    base ids so a merge has cross-table links to rewrite."""
+    conn.execute("INSERT INTO patients (id, first_name, last_name, phone) VALUES (?, ?, 'X', '050')",
+                 (base, tag))
+    conn.execute("INSERT INTO appointments (id, patient_id, appointment_date) VALUES (?, ?, '2026-02-02')",
+                 (base, base))
+    conn.execute("INSERT INTO patient_followups (id, patient_id, followup_date, price) VALUES (?, ?, '2026-02-02', 300)",
+                 (base, base))
+    conn.execute("INSERT INTO billing (id, patient_id, amount, paid_amount) VALUES (?, ?, 300, 100)",
+                 (base, base))
+    conn.execute("INSERT INTO patient_credit_transactions (id, patient_id, amount, type, invoice_id) VALUES (?, ?, 20, 'manual', ?)",
+                 (base, base, base))
+    conn.commit()
+
+
+def test_merge_database_full_roundtrip(tmp_path):
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+    _seed_full_clinic(dst, 'DstPatient', 1)
+    _seed_full_clinic(src, 'SrcPatient', 1)   # colliding id=1 everywhere
+
+    report = db_merge.merge_database(dst, str(tmp_path / 'src.db'),
+                                     include_images=True, include_credit=True)
+    dst.commit()
+
+    # Destination still has its own patient at id 1.
+    assert dst.execute("SELECT first_name FROM patients WHERE id=1").fetchone()['first_name'] == 'DstPatient'
+    # Both clinics' patients now present (2 total).
+    assert dst.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 2
+    # The imported patient's appointment/followup/billing point at the imported patient.
+    src_pid = dst.execute("SELECT id FROM patients WHERE first_name='SrcPatient'").fetchone()['id']
+    assert dst.execute("SELECT patient_id FROM appointments WHERE patient_id=?", (src_pid,)).fetchone() is not None
+    assert dst.execute("SELECT patient_id FROM patient_followups WHERE patient_id=?", (src_pid,)).fetchone() is not None
+    # Credit invoice_id rewritten to the imported billing row.
+    src_bill = dst.execute("SELECT id FROM billing WHERE patient_id=?", (src_pid,)).fetchone()['id']
+    cred = dst.execute("SELECT invoice_id FROM patient_credit_transactions WHERE patient_id=?", (src_pid,)).fetchone()
+    assert cred['invoice_id'] == src_bill
+    assert report.total_added() >= 5

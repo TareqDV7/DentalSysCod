@@ -198,6 +198,62 @@ def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
     return id_map
 
 
+# (table, {fk_column: remap_key}) in foreign-key dependency order.
+_GENERIC_ORDER = [
+    ('appointments',         {'patient_id': 'patients'}),
+    ('visits',               {'patient_id': 'patients', 'appointment_id': 'appointments'}),
+    ('treatments',           {'patient_id': 'patients', 'appointment_id': 'appointments'}),
+    ('treatment_plans',      {'patient_id': 'patients'}),
+    ('treatment_plan_teeth', {'plan_id': 'treatment_plans'}),
+    ('patient_followups',    {'patient_id': 'patients', 'procedure_id': 'treatment_procedures'}),
+    ('billing',              {'patient_id': 'patients', 'treatment_id': 'treatments'}),
+]
+
+
+def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
+                   include_images=True, include_credit=True) -> MergeReport:
+    """Additively merge the SQLite DB at src_db_path into dst_conn. Caller commits."""
+    report = MergeReport()
+    src_conn = sqlite3.connect(f'file:{src_db_path}?mode=ro', uri=True)
+    src_conn.row_factory = sqlite3.Row
+    try:
+        dst_cur = dst_conn.cursor()
+        src_cur = src_conn.cursor()
+        remaps = {}
+        # Catalogs first (deduped by name) so followups/tooth-chart can remap to them.
+        remaps['treatment_procedures'] = _dedupe_catalog(dst_cur, src_cur, 'treatment_procedures', report)
+        remaps['tooth_conditions'] = _dedupe_catalog(dst_cur, src_cur, 'tooth_conditions', report)
+        # Patients next, then everything that hangs off them.
+        remaps['patients'] = _copy_table(dst_cur, src_cur, 'patients', {}, remaps, report)
+        for table, fk_cols in _GENERIC_ORDER:
+            remaps[table] = _copy_table(dst_cur, src_cur, table, fk_cols, remaps, report)
+        _copy_expenses(dst_cur, src_cur, remaps, report)
+        remaps['patient_tooth_chart'] = _copy_table(
+            dst_cur, src_cur, 'patient_tooth_chart',
+            {'patient_id': 'patients', 'condition_id': 'tooth_conditions'}, remaps, report)
+        if include_images:
+            _copy_medical_images(dst_cur, src_cur, remaps, src_uploads, dst_uploads, report)
+        if include_credit:
+            _copy_table(dst_cur, src_cur, 'patient_credit_transactions',
+                        {'patient_id': 'patients', 'invoice_id': 'billing'}, remaps, report)
+        # Recompute running balances for every imported patient.
+        for new_pid in remaps['patients'].values():
+            try:
+                _recompute_balances(dst_cur, new_pid)
+            except sqlite3.Error:
+                pass
+    finally:
+        src_conn.close()
+    return report
+
+
+def _recompute_balances(dst_cur, patient_id):
+    """Defer to dental_clinic's ledger recompute. Imported here lazily to keep
+    db_merge import-light and avoid a circular import at module load."""
+    import dental_clinic
+    dental_clinic._recompute_followup_balances(dst_cur, patient_id)
+
+
 def _dedupe_catalog(dst_cur, src_cur, table: str, report: MergeReport, name_col: str = 'name') -> dict:
     """Merge a name-unique catalog. Reuse the destination row when the name
     already exists (keeping the destination's values); otherwise insert as new.
