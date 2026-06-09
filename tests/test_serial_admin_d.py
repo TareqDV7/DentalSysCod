@@ -100,6 +100,26 @@ def test_mint_clinic_level_when_no_devices(vendor):
     assert ok is True
 
 
+def test_mint_clinic_level_serials_are_unique_across_calls(vendor):
+    """Re-minting a clinic-level key must NOT reuse one serial. The cloud
+    registers idempotently by serial, so a repeated serial would bind every
+    "new" key to the same clinic — which is the bug this guards against."""
+    s1 = _mint(vendor, devices=[]).get_json()['records'][0]['serial']
+    s2 = _mint(vendor, devices=[]).get_json()['records'][0]['serial']
+    assert s1 != s2
+    # Same request, same device input — uniqueness comes from the serial itself.
+    same_device = lambda: _mint(vendor, devices=['LAPTOP-01']).get_json()['records'][0]['serial']
+    assert same_device() != same_device()
+
+
+def test_generate_device_serial_number_is_unique_and_well_formed():
+    a = serial_generator.generate_device_serial_number('SMD', 'CLINIC-SMD', 1)
+    b = serial_generator.generate_device_serial_number('SMD', 'CLINIC-SMD', 1)
+    assert a != b
+    assert a.startswith('DENTAL-SMD-')
+    assert len(a) >= 8  # cloud register floor
+
+
 def test_mint_without_key_400(tmp_path, monkeypatch):
     monkeypatch.setattr(serial_admin, 'KEY_FILE', str(tmp_path / 'missing.json'))
     with serial_admin.app.test_client() as c:

@@ -11,8 +11,8 @@ import json
 import base64
 import binascii
 import argparse
+import secrets
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey,
@@ -75,29 +75,48 @@ def verify_serial_token(token: str, public_key_b64: str) -> tuple[bool, dict | N
 SERIAL_PREFIX = "DENTAL"
 SERIAL_SEPARATOR = "-"
 
+# Alphabet for the random serial suffix: uppercase letters + digits, minus the
+# easily-confused 0/O/1/I so the serial stays legible if read aloud.
+_SERIAL_SUFFIX_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_SERIAL_SUFFIX_LEN = 6
+
+
+def _unique_serial_suffix() -> str:
+    """A short, unguessable code that makes every minted serial distinct."""
+    return ''.join(secrets.choice(_SERIAL_SUFFIX_ALPHABET)
+                   for _ in range(_SERIAL_SUFFIX_LEN))
+
+
 def generate_device_serial_number(clinic_code: str, device_id: str, counter: int = 1) -> str:
     """
-    Generate a human-readable serial number format:
-    DENTAL-CLINIC-DEVICE-XXXXXXXX
-    
+    Generate a human-readable, **unique** serial number:
+    DENTAL-CLINIC-DEVICE-XXXXXX
+
+    The final segment is a random code, so every call returns a DISTINCT serial.
+    This matters because the cloud authority registers idempotently *by serial* —
+    a deterministic serial meant re-minting a clinic-level key (or the same
+    device) produced the identical serial and re-bound every "new" key to the
+    same clinic. `counter` is retained for backward-compatible call sites but no
+    longer drives uniqueness.
+
     Args:
         clinic_code: Short clinic identifier (max 4 chars)
-        device_id: Device identifier/hash
-        counter: Sequential counter for multiple serials per device
-    
+        device_id: Device identifier/hash (informational; first 5 chars are shown)
+        counter: Unused for uniqueness; kept for signature compatibility
+
     Returns:
-        Formatted serial string like: DENTAL-CLINIC-A1B2C-00001
+        Formatted serial string like: DENTAL-SMD-LAPTO-7F3KQ9
     """
     # Create clinic code (max 4 chars, alphanumeric, uppercase)
     clinic_part = clinic_code[:4].upper().replace(" ", "")
-    
+
     # Create device part (take first 5 chars of device hash)
     device_part = device_id[:5].upper()
-    
-    # Create counter part (padded to 5 digits)
-    counter_part = f"{counter:05d}"
-    
-    serial = f"{SERIAL_PREFIX}{SERIAL_SEPARATOR}{clinic_part}{SERIAL_SEPARATOR}{device_part}{SERIAL_SEPARATOR}{counter_part}"
+
+    # Random suffix → guarantees a fresh serial on every mint
+    unique_part = _unique_serial_suffix()
+
+    serial = f"{SERIAL_PREFIX}{SERIAL_SEPARATOR}{clinic_part}{SERIAL_SEPARATOR}{device_part}{SERIAL_SEPARATOR}{unique_part}"
     return serial
 
 
@@ -313,12 +332,12 @@ Examples:
         parser.error(f'{e}. Generate one first: python serial_generator.py --genkey')
 
     print(f"\n{'='*60}")
-    print(f"   DENTAL CLINIC - SERIAL LICENSE GENERATOR")
+    print("   DENTAL CLINIC - SERIAL LICENSE GENERATOR")
     print(f"{'='*60}\n")
     
     # Single device
     if args.device:
-        print(f"Generating serial for:")
+        print("Generating serial for:")
         print(f"  Clinic: {args.clinic}")
         print(f"  Device: {args.device}")
         print(f"  Plan: {args.plan}")
@@ -335,7 +354,7 @@ Examples:
         )
         
         print(f"✓ SERIAL NUMBER: {serial}\n")
-        print(f"Offline License Token (copy to device):")
+        print("Offline License Token (copy to device):")
         print(f"{license_data['offline_token']}\n")
         print(f"Issued: {license_data['issued_at']}")
         print(f"Expires: {license_data['expires_at']}\n")
@@ -375,7 +394,7 @@ Examples:
             
             print(f"\n{'='*60}")
             print(f"Generated {len(devices)} device-locked serials ✓")
-            print(f"Each serial is locked to its device and cannot be transferred")
+            print("Each serial is locked to its device and cannot be transferred")
             print(f"{'='*60}\n")
             
         except FileNotFoundError:
