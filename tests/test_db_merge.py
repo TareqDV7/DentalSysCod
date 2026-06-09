@@ -61,3 +61,29 @@ def test_copy_table_remaps_fk_and_assigns_new_id(tmp_path):
     # The appointment's patient_id was rewritten to the new patient id.
     new_aid = appt_map[5]
     assert dst.execute('SELECT patient_id FROM appointments WHERE id = ?', (new_aid,)).fetchone()['patient_id'] == new_pid
+
+
+def test_dedupe_catalog_by_name(tmp_path):
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+    # Use names not in the default seed set to get predictable IDs.
+    dst.execute("INSERT INTO treatment_procedures (name, default_price) VALUES ('TestProc_A', 100)")
+    dst.commit()
+    dst_id = dst.execute("SELECT id FROM treatment_procedures WHERE name='TestProc_A'").fetchone()['id']
+    src.execute("INSERT INTO treatment_procedures (id, name, default_price) VALUES (999, 'TestProc_A', 250)")
+    src.execute("INSERT INTO treatment_procedures (id, name, default_price) VALUES (998, 'TestProc_B', 400)")
+    src.commit()
+
+    report = db_merge.MergeReport()
+    id_map = db_merge._dedupe_catalog(dst.cursor(), src.cursor(), 'treatment_procedures', report)
+    dst.commit()
+
+    # 'TestProc_A' existed in dst -> reused, price NOT overwritten.
+    assert id_map[999] == dst_id
+    assert dst.execute("SELECT default_price FROM treatment_procedures WHERE id = ?", (dst_id,)).fetchone()[0] == 100
+    # 'TestProc_B' was new -> inserted under a fresh id.
+    assert id_map[998] != 998
+    assert id_map[998] != 999
+    names_in_dst = {r[0] for r in dst.execute("SELECT name FROM treatment_procedures").fetchall()}
+    assert 'TestProc_A' in names_in_dst
+    assert 'TestProc_B' in names_in_dst

@@ -92,3 +92,42 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
         added += 1
     report.add(table, added, skipped)
     return id_map
+
+
+def _dedupe_catalog(dst_cur, src_cur, table: str, report: MergeReport, name_col: str = 'name') -> dict:
+    """Merge a name-unique catalog. Reuse the destination row when the name
+    already exists (keeping the destination's values); otherwise insert as new.
+    Returns old_id -> resolved_id."""
+    dst_cur.execute(f'SELECT id, {name_col} FROM {table}')
+    existing = {str(r[1]).strip().lower(): r[0] for r in dst_cur.fetchall()}
+    cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
+    src_cur.execute(f'SELECT * FROM {table} ORDER BY id ASC')
+    rows = [dict(r) for r in src_cur.fetchall()]
+    id_map = {}
+    added = skipped = 0
+    for row in rows:
+        old_id = row.get('id')
+        key = str(row.get(name_col) or '').strip().lower()
+        if not key:
+            skipped += 1
+            continue
+        if key in existing:
+            id_map[old_id] = existing[key]
+            skipped += 1
+            continue
+        placeholders = ', '.join('?' for _ in cols)
+        try:
+            dst_cur.execute(
+                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+                tuple(row.get(c) for c in cols),
+            )
+        except sqlite3.Error as exc:
+            skipped += 1
+            report.warnings.append(f'{table}: skipped a row ({exc})')
+            continue
+        new_id = dst_cur.lastrowid
+        id_map[old_id] = new_id
+        existing[key] = new_id
+        added += 1
+    report.add(table, added, skipped)
+    return id_map
