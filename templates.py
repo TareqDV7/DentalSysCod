@@ -2655,6 +2655,19 @@ HTML_TEMPLATE = '''
                          role="alert" aria-live="polite"></div>
                 </div>
 
+                <h3 style="margin-top:18px;" data-i18n="data_tools">Data Tools</h3>
+                <div class="section-card data-tools-card" style="max-width:560px;margin-bottom:18px;">
+                  <p class="muted" style="margin:0 0 12px;font-size:0.9em;line-height:1.6;" data-i18n="data_tools_hint">Export a portable copy, merge another clinic&#39;s data, or replace this database.</p>
+                  <div class="data-tools-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+                    <button class="btn" onclick="exportBundle()" data-i18n="export_bundle">&#11015;&#65039; Export bundle (.zip)</button>
+                    <label class="btn" for="merge-file" style="cursor:pointer;" data-i18n="merge_db">&#128256; Merge another clinic</label>
+                    <input type="file" id="merge-file" accept=".zip,.db" style="display:none" onchange="startDataImport('merge', this)">
+                    <label class="btn btn-danger" for="replace-file" style="cursor:pointer;" data-i18n="replace_db">&#9851;&#65039; Replace database</label>
+                    <input type="file" id="replace-file" accept=".zip,.db" style="display:none" onchange="startDataImport('replace', this)">
+                  </div>
+                  <div id="data-tools-result" class="muted" style="font-size:0.88em;min-height:1.2em;"></div>
+                </div>
+
                 <h3 style="margin-top:4px;" data-i18n="audit_log">Audit Log</h3>
                 <div class="table-container" style="margin-top:12px;">
                     <table>
@@ -3006,6 +3019,11 @@ HTML_TEMPLATE = '''
                 name: 'Name',
                 actions: 'Actions',
                 download_backup: 'Download Backup',
+                data_tools: 'Data Tools',
+                data_tools_hint: "Export a portable copy, merge another clinic's data, or replace this database.",
+                export_bundle: 'Export bundle (.zip)',
+                merge_db: 'Merge another clinic',
+                replace_db: 'Replace database',
                 logout: 'Logout',
                 account: 'Account',
                 current_password: 'Current Password',
@@ -3378,6 +3396,11 @@ HTML_TEMPLATE = '''
                 name: 'الاسم',
                 actions: 'الإجراءات',
                 download_backup: 'تنزيل نسخة احتياطية',
+                data_tools: 'أدوات البيانات',
+                data_tools_hint: 'صدّر نسخة محمولة، أو ادمج بيانات عيادة أخرى، أو استبدل قاعدة البيانات.',
+                export_bundle: 'تصدير حزمة (.zip)',
+                merge_db: 'دمج عيادة أخرى',
+                replace_db: 'استبدال قاعدة البيانات',
                 logout: 'تسجيل الخروج',
                 account: 'الحساب',
                 current_password: 'كلمة المرور الحالية',
@@ -5712,6 +5735,40 @@ HTML_TEMPLATE = '''
 
         async function downloadBackup() {
             window.location.href = '/api/backup';
+        }
+
+        function exportBundle() {
+            window.location.href = '/api/data/export-bundle';
+        }
+
+        async function startDataImport(mode, input) {
+            const file = input.files[0];
+            input.value = '';
+            if (!file) return;
+            const verb = mode === 'replace' ? 'REPLACE' : 'MERGE';
+            const warn = mode === 'replace'
+                ? 'This REPLACES all current data with the imported file. A safety backup is taken first.'
+                : "This MERGES the imported clinic's records into your current data. Existing data is kept.";
+            const typed = prompt(warn + '\\n\\nType ' + verb + ' to confirm:');
+            if (typed !== verb) return;
+            const result = document.getElementById('data-tools-result');
+            result.textContent = 'Working… do not close this window.';
+            const fd = new FormData();
+            fd.append('file', file);
+            try {
+                const resp = await fetch('/api/data/' + mode, { method: 'POST', body: fd });
+                const body = await resp.json();
+                if (!resp.ok) { result.textContent = 'Error: ' + (body.error || resp.status); return; }
+                if (mode === 'merge') {
+                    const r = body.report || {};
+                    result.textContent = 'Merged ' + (r.total_added || 0) + ' records. Backup: ' + (body.backup_path || '—');
+                } else {
+                    result.textContent = 'Database replaced. Reloading… Backup: ' + (body.backup_path || '—');
+                    setTimeout(() => window.location.reload(), 1500);
+                }
+            } catch (e) {
+                result.textContent = 'Error: ' + e;
+            }
         }
 
         async function changeAccountPassword() {
