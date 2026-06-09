@@ -195,7 +195,13 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) {
+          setState(() => _index = i);
+          // Re-opening the kept-alive Dashboard: nudge it to reload so stats
+          // reflect edits just made on the Financial / Patients / Appointments
+          // tabs (e.g. a billing receipt) instead of a stale cached value.
+          if (i == 0) context.read<AppState>().pingDashboard();
+        },
         destinations: [
           NavigationDestination(
             icon: const Icon(Icons.dashboard_outlined),

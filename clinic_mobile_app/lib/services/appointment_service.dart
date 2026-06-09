@@ -46,7 +46,13 @@ class AppointmentService {
       await _db.upsertAppointment(remote.copyWith(isSynced: true));
       return remote;
     } on ApiException catch (error) {
-      if (!error.isNetwork && (error.statusCode ?? 500) < 500) {
+      final code = error.statusCode ?? 500;
+      // A 409 means the server already has an overlapping appointment. The phone
+      // intentionally allows overlaps (the user is only warned at booking time),
+      // and the delta-sync import path upserts without a conflict check — so
+      // keep the local row and let it propagate there rather than failing the
+      // save with a hard error.
+      if (!error.isNetwork && code < 500 && code != 409) {
         rethrow;
       }
       return Appointment.fromDb({...local.toDb(), 'id': localId});

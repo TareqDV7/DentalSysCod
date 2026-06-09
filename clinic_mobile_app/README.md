@@ -2,6 +2,24 @@
 
 Flutter application for device-locked license activation and offline token verification.
 
+## Recent fixes (2026-06)
+
+- **Dashboard Revenue now includes Billing.** The Revenue stat (and its
+  sparkline) sums both visit/follow-up payments **and** Financial → Billing
+  paid amounts, so any recorded transaction is reflected. The kept-alive
+  dashboard also reloads when you switch back to it, so figures are never stale
+  after edits made on other tabs.
+- **Appointment booking warns on taken slots.** When the chosen time overlaps an
+  existing scheduled appointment, the add-appointment sheet shows a
+  "this time is already booked" warning (naming the clashing time) — but still
+  lets you save (warn-but-allow; supports running more than one chair). Overlap
+  logic lives in `lib/utils/appointment_overlap.dart`.
+- **Larger launcher icon.** The home-screen icon is regenerated from a tighter
+  crop of the logo (`dentacare_icon_launcher.png` / `dentacare_icon_fg.png`) so
+  it no longer floats small inside a sea of white. The in-app logo
+  (`dentacare_icon.png`) is unchanged. Regenerate with
+  `dart run flutter_launcher_icons`.
+
 ## Features
 
 - ✅ Hardware-based device ID detection (Android/iOS/Windows/macOS/Linux)

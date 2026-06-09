@@ -138,6 +138,9 @@ class _BillingTabState extends State<_BillingTab> {
           try {
             await context.read<AppState>().billing.addBillingRecord(b);
             if (mounted) {
+              // Push the new receipt now (parity with delete) so other devices
+              // — and the kept-alive dashboard via the sync stream — see it.
+              unawaited(context.read<AppState>().sync.syncNow());
               _load();
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -463,7 +466,10 @@ class _ExpensesTabState extends State<_ExpensesTab> {
       builder: (_) => _AddExpenseSheet(
         onSaved: (e) async {
           await context.read<AppState>().billing.addExpense(e);
-          if (mounted) _load();
+          if (mounted) {
+            unawaited(context.read<AppState>().sync.syncNow());
+            _load();
+          }
         },
       ),
     );

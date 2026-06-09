@@ -182,6 +182,8 @@ class AppStrings {
       // ── Appointments ──
       'holiday': 'عطلة',
       'appointment_saved': 'تم حفظ الموعد بنجاح',
+      'slot_taken_title': 'هذا الوقت محجوز',
+      'slot_taken_hint': 'لا يزال بإمكانك حفظ الموعد.',
       'friday_closed': 'الجمعة — العيادة مغلقة',
       'no_appointments_on_day': 'لا توجد مواعيد في هذا اليوم',
       'add': 'إضافة',
@@ -391,6 +393,8 @@ class AppStrings {
       // ── Appointments ──
       'holiday': 'Holiday',
       'appointment_saved': 'Appointment saved successfully',
+      'slot_taken_title': 'This time is already booked',
+      'slot_taken_hint': 'You can still save this appointment.',
       'friday_closed': 'Friday — Clinic closed',
       'no_appointments_on_day': 'No appointments on this day',
       'add': 'Add',

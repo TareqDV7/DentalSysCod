@@ -42,6 +42,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   ConnectivitySyncService get sync => _connectivity;
 
+  /// Bumped each time the user (re)opens the Dashboard tab. The dashboard is
+  /// kept alive in the home IndexedStack, so without an explicit nudge its
+  /// cached stats go stale after edits made on other tabs — a billing receipt,
+  /// a new visit, an appointment. The dashboard listens to this and silently
+  /// reloads, so the numbers are current the moment you switch back to it.
+  final ValueNotifier<int> dashboardFocusTick = ValueNotifier<int>(0);
+  void pingDashboard() => dashboardFocusTick.value++;
+
   String _clinicName = 'Clinic';
   String _locale = 'en';
   ThemeMode _themeMode = ThemeMode.light;
@@ -450,6 +458,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _connectivity.stopBluetoothAutoLoop();
     _connectivity.dispose();
+    dashboardFocusTick.dispose();
     super.dispose();
   }
 }

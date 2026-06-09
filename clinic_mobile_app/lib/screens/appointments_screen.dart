@@ -13,6 +13,7 @@ import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
 import '../utils/app_strings.dart';
+import '../utils/appointment_overlap.dart';
 import '../utils/date_format_helper.dart';
 
 class AppointmentsScreen extends StatefulWidget {
@@ -504,6 +505,10 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
   bool _saving = false;
   bool _loadingData = true;
   String? _loadError;
+  // Existing appointments on the selected day + the subset that overlaps the
+  // chosen time/duration. Drives the "this time is already booked" warning.
+  List<Appointment> _dayAppointments = [];
+  List<Appointment> _conflicts = [];
 
   void _showError(String message) {
     if (!mounted) return;
@@ -521,7 +526,41 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
     super.initState();
     _dateTime = widget.initialDate.copyWith(
         hour: 9, minute: 0, second: 0, millisecond: 0);
+    // A shorter/longer slot can create or clear a clash, so re-check on edit.
+    _durationCtrl.addListener(_recomputeConflicts);
     _loadData();
+    _loadDayAppointments();
+  }
+
+  /// Pull the selected day's appointments so we can warn about overlaps. A
+  /// failure here is non-fatal — it just means no warning is shown.
+  Future<void> _loadDayAppointments() async {
+    try {
+      final appts = await context
+          .read<AppState>()
+          .appointments
+          .getAppointments(date: _dateTime);
+      if (mounted) setState(() => _dayAppointments = appts);
+    } catch (_) {
+      // ignore — booking still works, only the warning is unavailable
+    }
+    _recomputeConflicts();
+  }
+
+  void _recomputeConflicts() {
+    final duration =
+        int.tryParse(_durationCtrl.text) ?? kDefaultAppointmentMinutes;
+    final conflicts =
+        findAppointmentConflicts(_dayAppointments, _dateTime, duration);
+    if (mounted) setState(() => _conflicts = conflicts);
+  }
+
+  String _conflictName(Appointment a, bool isArabic) {
+    final raw = a.patientName?.trim();
+    if (raw != null && raw.isNotEmpty && raw.toLowerCase() != 'null') {
+      return raw;
+    }
+    return '${AppStrings.t('patient', isArabic: isArabic)} #${a.patientId}';
   }
 
   Future<void> _loadData() async {
@@ -566,6 +605,8 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
     if (time == null) return;
     setState(() => _dateTime =
         date.copyWith(hour: time.hour, minute: time.minute));
+    // The day may have changed — reload its appointments and re-check overlaps.
+    _loadDayAppointments();
   }
 
   Future<void> _save() async {
@@ -595,6 +636,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
 
   @override
   void dispose() {
+    _durationCtrl.removeListener(_recomputeConflicts);
     _durationCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
@@ -738,6 +780,66 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                                   ),
                                 ),
                               ),
+                              if (_conflicts.isNotEmpty) ...[
+                                const SizedBox(height: 12),
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        scheme.errorContainer.withAlpha(140),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                        color: scheme.error.withAlpha(90)),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(Icons.warning_amber_rounded,
+                                          color: scheme.error, size: 20),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              AppStrings.t('slot_taken_title',
+                                                  isArabic: ar),
+                                              style: TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                  color: scheme.error,
+                                                  fontSize: 13),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            ..._conflicts.map((c) => Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 2),
+                                                  child: Text(
+                                                    '• ${DateFormat('h:mm a').format(c.dateTime)} — ${_conflictName(c, ar)}',
+                                                    style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: scheme
+                                                            .onErrorContainer),
+                                                  ),
+                                                )),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              AppStrings.t('slot_taken_hint',
+                                                  isArabic: ar),
+                                              style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: scheme
+                                                      .onSurfaceVariant),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 24),
 
                               // ─────────────────────────────────────

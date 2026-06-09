@@ -1110,12 +1110,20 @@ class DatabaseService {
     final visitCount = Sqflite.firstIntValue(
             await db.rawQuery('SELECT COUNT(*) FROM followups')) ??
         0;
-    // Revenue mirrors the canonical follow-up ledger (see getReceivables),
-    // not billing_records, which most clinics don't use day-to-day.
-    final revenueRows = await db
-        .rawQuery('SELECT COALESCE(SUM(payment), 0) AS total FROM followups');
+    // Revenue = cash collected across BOTH ledgers: follow-up/visit payments
+    // (the canonical day-to-day ledger, see getReceivables) plus Billing-tab
+    // paid amounts. They live in separate tables, so summing them means any
+    // recorded transaction — a visit payment or a billing receipt — shows up
+    // here. Deleted billing rows are physically removed + tombstoned, so they
+    // drop out of the SUM on their own.
+    final followupRevenue = (await db.rawQuery(
+            'SELECT COALESCE(SUM(payment), 0) AS total FROM followups'))
+        .first['total'] as num?;
+    final billingRevenue = (await db.rawQuery(
+            'SELECT COALESCE(SUM(paid_amount), 0) AS total FROM billing_records'))
+        .first['total'] as num?;
     final totalRevenue =
-        (revenueRows.first['total'] as num?)?.toDouble() ?? 0.0;
+        (followupRevenue?.toDouble() ?? 0.0) + (billingRevenue?.toDouble() ?? 0.0);
     return {
       'total_patients': patientCount,
       'today_appointments': todayAppts,
@@ -1162,6 +1170,13 @@ class DatabaseService {
     final visits = await grouped('followups', 'followup_date', 'COUNT(*)');
     final revenue =
         await grouped('followups', 'followup_date', 'COALESCE(SUM(payment), 0)');
+    // Billing-tab receipts count toward revenue too (see getStats); fold them
+    // into the same daily series so the sparkline matches the headline figure.
+    final billingRevenue = await grouped(
+        'billing_records', 'payment_date', 'COALESCE(SUM(paid_amount), 0)');
+    for (final entry in billingRevenue.entries) {
+      revenue[entry.key] = (revenue[entry.key] ?? 0.0) + entry.value;
+    }
 
     List<double> project(Map<String, double> m) =>
         [for (final d in axis) m[d] ?? 0.0];

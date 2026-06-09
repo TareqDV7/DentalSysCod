@@ -29,6 +29,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Appointment> _recent = [];
   bool _loading = true;
   StreamSubscription<SyncStatus>? _syncSub;
+  ValueNotifier<int>? _focusTick;
 
   @override
   void initState() {
@@ -39,11 +40,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _syncSub = context.read<AppState>().sync.statusStream.listen((status) {
       if (status == SyncStatus.synced && mounted) _load(silent: true);
     });
+    // Also reload whenever the user switches back to the Dashboard tab, so a
+    // billing receipt / visit / appointment entered elsewhere shows up at once
+    // (a local edit fires no sync event, so the stream alone isn't enough).
+    _focusTick = context.read<AppState>().dashboardFocusTick
+      ..addListener(_onFocusPing);
+  }
+
+  void _onFocusPing() {
+    if (mounted) _load(silent: true);
   }
 
   @override
   void dispose() {
     _syncSub?.cancel();
+    _focusTick?.removeListener(_onFocusPing);
     super.dispose();
   }
 
