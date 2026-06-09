@@ -10,8 +10,17 @@ import db_import
 
 def test_is_sqlite_file_true_for_real_db(tmp_path):
     db = tmp_path / 'real.db'
-    sqlite3.connect(str(db)).close()
+    conn = sqlite3.connect(str(db))
+    conn.execute('CREATE TABLE t (x)')
+    conn.commit()
+    conn.close()
     assert db_import.is_sqlite_file(str(db)) is True
+
+
+def test_is_sqlite_file_false_for_empty(tmp_path):
+    empty = tmp_path / 'empty.db'
+    empty.write_bytes(b'')
+    assert db_import.is_sqlite_file(str(empty)) is False
 
 
 def test_is_sqlite_file_false_for_junk(tmp_path):
@@ -22,7 +31,10 @@ def test_is_sqlite_file_false_for_junk(tmp_path):
 
 def test_build_then_extract_bundle_roundtrip(tmp_path):
     db = tmp_path / 'dental_clinic.db'
-    sqlite3.connect(str(db)).close()
+    conn = sqlite3.connect(str(db))
+    conn.execute('CREATE TABLE t (x)')
+    conn.commit()
+    conn.close()
     uploads = tmp_path / 'uploads'
     uploads.mkdir()
     (uploads / 'x.png').write_bytes(b'img')

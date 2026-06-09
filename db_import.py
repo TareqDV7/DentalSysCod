@@ -15,12 +15,7 @@ _UPLOADS_PREFIX = 'uploads/'
 def is_sqlite_file(path: str) -> bool:
     try:
         with open(path, 'rb') as fh:
-            header = fh.read(16)
-        # A freshly-created SQLite file may be 0 bytes until the first write;
-        # treat it as valid (sqlite3 itself accepts 0-byte files).
-        if header == b'':
-            return True
-        return header == _SQLITE_MAGIC
+            return fh.read(16) == _SQLITE_MAGIC
     except OSError:
         return False
 
