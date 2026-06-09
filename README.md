@@ -87,6 +87,7 @@ The SQLite database runs in **WAL mode** (set once in `init_database()`), so rea
   - **Local server** (single-tenant): one file per snapshot, written directly to `backups/dental_clinic_YYYYMMDD_HHMMSS.db`. Restore by stopping the server, copying a backup over `dental_clinic.db`, and restarting.
   - **Cloud node** (`CLINIC_CLOUD_MODE=1`): one snapshot per tenant per cycle, written to `backups/<label>/<label>_YYYYMMDD_HHMMSS.db` — `backups/master/` for `cloud_master.db` and `backups/clinic_<id>/` for each clinic DB. Retention is tracked per subfolder, so a 20-cap and 6h cadence give ~5 days of recovery per clinic. Restore by copying a backup over the matching `clinic_<id>.db` (or `cloud_master.db`) inside the `dentacare-data` volume and restarting the stack. One tenant's failure (e.g. a corrupt clinic file) is logged and skipped without aborting the others.
 - **Manual** — the dashboard's **Download Backup** button (`GET /api/backup`, login required) downloads the current database on demand. (Local server only — the cloud node has no portal.)
+- **Data tools (import / merge / replace)** — **Settings → Data Tools** (local server, login required) adds three actions: **Export bundle** writes a `.zip` of a consistent DB snapshot plus the `uploads/` folder (so X-rays travel with it); **Merge another clinic** *additively* imports another DentaCare database — every incoming record is re-numbered and all its foreign keys (including the soft links `expenses.reference_id`→follow-up and `credit.invoice_id`→billing) are rewritten, catalogs are deduped by name, and your existing data is **never overwritten**; **Replace database** swaps in an uploaded DB/bundle via a brief live maintenance window. A **safety backup is taken automatically before every merge or replace** and its path is returned. Merging X-rays requires the `.zip` bundle (a bare `.db` carries no image files); uploads are size-capped by `CLINIC_MAX_UPLOAD_MB` (default `1024`). Backed by `db_merge.py` (purely additive engine — current rows are never updated or deleted) and `db_import.py` (SQLite-magic validation + zip-slip-safe extraction); disabled on the cloud node.
 - **Cloud node — offsite-friendly sidecar** — the in-app snapshots above land on the same `dentacare-data` volume as the live DBs, so the cloud `docker-compose.yml` also runs a separate **`backup` container** (`cloud/backup.py`, stdlib-only) that mounts the data volume **read-only** and writes to its own `dentacare-backups` volume. Each run snapshots every `*.db` (master + each `clinic_<id>.db`) via the same online-backup API into one timestamped folder (`<BACKUP_DIR>/2026-06-03T12-30-00Z/…`), optionally gzipped (`BACKUP_GZIP=1`), then prunes folders older than `BACKUP_RETENTION_DAYS` (default `14`) while always keeping at least `BACKUP_MIN_KEEP` (default `7`). It runs daily in `--loop` mode (`BACKUP_INTERVAL_HOURS`, default `24`); a single failing tenant is logged and skipped. Because it's a separate process on a separate volume, a mistake or volume problem on the live data path can't take the backups down with it — see [`DEPLOY_CLOUD.md`](DEPLOY_CLOUD.md) "Backups & restore".
 - Tune with env vars: `CLINIC_BACKUP_INTERVAL_HOURS` (default `6`; set `0` to disable the automatic loop), `CLINIC_BACKUP_RETENTION` (default `20`).
 
@@ -235,6 +236,8 @@ class AppBranding {
 clinic/
 ├── dental_clinic.py          # Backend: Flask app + REST API + SQLite schema
 ├── templates.py              # HTML/CSS/JS for the web portal, mobile-download page, and login
+├── db_merge.py               # Additive cross-clinic database-merge engine (re-numbers + rewrites FKs)
+├── db_import.py              # SQLite validation + zip-slip-safe bundle build/extract for Data Tools
 ├── requirements.txt          # Flask, Flask-CORS, pyserial, waitress, qrcode
 ├── serial_generator.py       # CLI tool to generate and batch-export license serials
 ├── serial_admin.py           # Vendor-only loopback GUI (http://127.0.0.1:8787) for keypair generation + serial minting
@@ -259,7 +262,7 @@ clinic/
 │   ├── Caddyfile             #   TLS / reverse proxy for app.dentacare.tech
 │   ├── backup.py             #   tenant-DB backup sidecar (RO data mount → backups volume, rotation)
 │   └── legal/                #   Privacy + TOS templates (starting point — fill placeholders + lawyer-review)
-├── tests/                    # 404 tests across 47 suites
+├── tests/                    # 432 tests across 50 suites
 │   ├── test_api_fuzz.py             # Public API never returns 500 on malformed input
 │   ├── test_appointment_api.py
 │   ├── test_appointment_flow.py
@@ -304,6 +307,9 @@ clinic/
 │   ├── test_tooth_chart_badges.py    # Computed has_plan / unpaid_balance + legacy tooth_no auto-adopt
 │   ├── test_tooth_chart_sync.py      # Odontogram tables export/import + tombstone propagation
 │   ├── test_treatment_plan_teeth.py  # Multi-tooth treatment plans (treatment_plan_teeth link table)
+│   ├── test_db_merge.py             # Additive cross-clinic merge engine (colliding-ids, FK/soft-link remap, catalog dedupe, images, schema drift)
+│   ├── test_db_import.py            # SQLite-magic validation + zip-slip-safe bundle build/extract
+│   ├── test_data_tools_api.py      # /api/data/export-bundle · merge · replace (auth, cloud-disabled, size cap, safety backup, maintenance guard)
 │   └── test_window_state.py         # pywebview window-state persistence
 ├── tools/
 │   ├── db_check.py           # Quick SQLite inspection helper
@@ -463,6 +469,9 @@ All endpoints are served by `dental_clinic.py` on port `5000`. Endpoints marked 
 | DELETE | `/api/holidays/<id>` | Remove holiday |
 | GET | `/api/audit-logs` | Activity audit trail |
 | GET | `/api/backup` | Download SQLite database backup — requires login |
+| GET | `/api/data/export-bundle` | Download a `.zip` bundle (consistent DB snapshot + `uploads/`) — login, local server only |
+| POST | `/api/data/merge` | Additively merge an uploaded `.db`/`.zip` from another clinic; takes a safety backup, returns a per-table report — login, local server only |
+| POST | `/api/data/replace` | Replace the current database with an uploaded `.db`/`.zip` (live swap, safety backup first) — login, local server only |
 | GET / POST | `/api/medical-images` | Patient X-rays / images |
 | GET / POST | `/api/support` | Support tickets |
 
