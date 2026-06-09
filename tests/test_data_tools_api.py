@@ -99,3 +99,42 @@ def test_merge_disabled_on_cloud(client, monkeypatch):
     monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
     resp = client.post('/api/data/merge', data={}, content_type='multipart/form-data')
     assert resp.status_code == 404
+
+
+def test_replace_requires_login(client):
+    assert client.post('/api/data/replace').status_code == 401
+
+
+def test_replace_swaps_database(client, tmp_path):
+    _login(client)
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Local', 'Owner')")
+    conn.commit(); conn.close()
+
+    src = tmp_path / 'replacement.db'
+    _make_source_db(src)   # has 'Imported Patient', no 'Local Owner'
+    with open(src, 'rb') as fh:
+        data = {'file': (io.BytesIO(fh.read()), 'replacement.db')}
+        resp = client.post('/api/data/replace', data=data, content_type='multipart/form-data')
+    assert resp.status_code == 200
+    assert resp.get_json()['backup_path']
+
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    names = {r[0] for r in conn.execute("SELECT first_name FROM patients").fetchall()}
+    conn.close()
+    assert names == {'Imported'}              # local data replaced, not merged
+
+
+def test_replace_disabled_on_cloud(client, monkeypatch):
+    _login(client)
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
+    resp = client.post('/api/data/replace', data={}, content_type='multipart/form-data')
+    assert resp.status_code == 404
+
+
+def test_maintenance_guard_blocks_api(client, monkeypatch):
+    _login(client)
+    monkeypatch.setattr(dental_clinic, '_MAINTENANCE', True)
+    resp = client.get('/api/patients')
+    assert resp.status_code == 503
+    assert resp.get_json().get('maintenance') is True

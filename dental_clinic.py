@@ -1886,6 +1886,18 @@ _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure
                         '/api/data/export-bundle', '/api/data/merge', '/api/data/replace'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
+# Set to True briefly during /api/data/replace to block concurrent API calls.
+_MAINTENANCE = False
+
+
+@app.before_request
+def _maintenance_gate():
+    if _MAINTENANCE and (request.path or '').startswith('/api/') \
+            and not (request.path or '').startswith('/api/data/'):
+        return jsonify({'maintenance': True,
+                        'error': 'Database maintenance in progress — retry shortly.'}), 503
+    return None
+
 
 @app.before_request
 def _require_login_for_portal():
@@ -3747,6 +3759,47 @@ def data_merge():
     finally:
         conn.close()
     return jsonify({'success': True, 'report': report.as_dict(), 'backup_path': backup_path})
+
+
+@app.route('/api/data/replace', methods=['POST'])
+def data_replace():
+    global _MAINTENANCE
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    tmpdir = tempfile.mkdtemp(prefix='dc_replace_')
+    db_path, uploads_dir, err = _save_and_resolve_upload(tmpdir)
+    if err:
+        return jsonify({'error': err}), 400
+    backups = run_database_backup()
+    backup_path = backups[0] if backups else None
+    _MAINTENANCE = True
+    try:
+        target = str(DB_NAME)
+        # Release WAL sidecars on the live DB before overwriting.
+        try:
+            c = sqlite3.connect(target)
+            c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            c.close()
+        except sqlite3.Error:
+            pass
+        for sidecar in (target + '-wal', target + '-shm'):
+            try:
+                os.remove(sidecar)
+            except OSError:
+                pass
+        shutil.copy2(db_path, target)
+        # Swap uploads when the bundle carried them.
+        if uploads_dir and os.path.isdir(uploads_dir):
+            if UPLOAD_FOLDER.exists():
+                shutil.rmtree(UPLOAD_FOLDER, ignore_errors=True)
+            shutil.copytree(uploads_dir, str(UPLOAD_FOLDER))
+        # Migrate the incoming DB forward to the current schema.
+        init_database()
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({'error': f'Replace failed: {exc}', 'backup_path': backup_path}), 500
+    finally:
+        _MAINTENANCE = False
+    return jsonify({'success': True, 'backup_path': backup_path})
 
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])
