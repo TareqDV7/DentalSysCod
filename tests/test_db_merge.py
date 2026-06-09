@@ -228,3 +228,40 @@ def test_merge_garbage_source_raises_cleanly(tmp_path):
         db_merge.merge_database(dst, str(junk))
     # Destination untouched (caller would roll back; here nothing was inserted).
     assert dst.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 0
+
+
+def test_copy_table_orphan_fk_becomes_null(tmp_path):
+    """An FK value that has NO entry in the remap must become NULL (not a stale id).
+
+    Uses visits.appointment_id which is a nullable INTEGER FK. We pass a remaps dict
+    whose 'appointments' map is empty, so the source appointment_id (99) is an orphan.
+    The inserted row's appointment_id must be NULL rather than 99.
+    """
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+
+    # Insert a patient into src so we have a valid patient_id to remap.
+    src.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Src', 'Patient')")
+    # Insert a visit whose appointment_id (99) does NOT exist in the remap.
+    src.execute(
+        "INSERT INTO visits (id, patient_id, appointment_id, visit_date) VALUES (7, 1, 99, '2026-01-15')"
+    )
+    src.commit()
+
+    # Insert the source patient into dst first to get a remapped patient id.
+    report = db_merge.MergeReport()
+    patient_map = db_merge._copy_table(dst.cursor(), src.cursor(), 'patients', {}, {}, report)
+    dst.commit()
+
+    # Now copy visits; 'appointments' remap is empty — appointment_id=99 is orphaned.
+    remaps = {'patients': patient_map, 'appointments': {}}
+    db_merge._copy_table(dst.cursor(), src.cursor(), 'visits',
+                         {'patient_id': 'patients', 'appointment_id': 'appointments'},
+                         remaps, report)
+    dst.commit()
+
+    row = dst.execute("SELECT appointment_id FROM visits").fetchone()
+    assert row is not None, "visit row should have been inserted"
+    assert row['appointment_id'] is None, (
+        f"orphan FK should map to NULL, got {row['appointment_id']}"
+    )

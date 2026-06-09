@@ -19,10 +19,10 @@ from datetime import datetime
 
 @dataclass
 class MergeReport:
-    tables: dict = field(default_factory=dict)   # table -> {'added': int, 'skipped': int}
+    tables: dict[str, dict[str, int]] = field(default_factory=dict)   # table -> {'added': int, 'skipped': int}
     images_copied: int = 0
     images_skipped: int = 0
-    warnings: list = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def add(self, table: str, added: int, skipped: int = 0) -> None:
         entry = self.tables.setdefault(table, {'added': 0, 'skipped': 0})
@@ -65,6 +65,7 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
     raise a per-row SQLite error are counted as skipped without aborting.
     """
     cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
+    sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     src_cur.execute(f'SELECT * FROM {table} ORDER BY id ASC')
     rows = [dict(r) for r in src_cur.fetchall()]
     id_map = {}
@@ -77,12 +78,8 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
             if col in fk_cols:
                 val = _remap_value(val, remaps.get(fk_cols[col], {}))
             values.append(val)
-        placeholders = ', '.join('?' for _ in cols)
         try:
-            dst_cur.execute(
-                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
-                tuple(values),
-            )
+            dst_cur.execute(sql, tuple(values))
         except sqlite3.Error as exc:
             skipped += 1
             report.warnings.append(f'{table}: skipped a row ({exc})')
@@ -137,9 +134,25 @@ def _copy_medical_images(dst_cur, src_cur, remaps: dict, src_uploads, dst_upload
             report.images_skipped += 1
             report.warnings.append(f"medical image missing on disk: {row.get('file_name')}")
             continue
-        dest_file = _unique_dest_name(dst_uploads, row.get('file_name') or os.path.basename(source_file))
+        # Atomically claim a unique destination path then copy bytes into the
+        # exclusively-opened file descriptor, avoiding a TOCTOU race.
         try:
-            shutil.copy2(source_file, dest_file)
+            stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+            base = os.path.basename(row.get('file_name') or os.path.basename(source_file) or 'image')
+            candidate = os.path.join(dst_uploads, f'merged_{stamp}_{base}')
+            n = 0
+            while True:
+                try:
+                    fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                except FileExistsError:
+                    n += 1
+                    candidate = os.path.join(dst_uploads, f'merged_{stamp}_{n}_{base}')
+                    continue
+                break
+            dest_file = candidate
+            with os.fdopen(fd, 'wb') as out_fh, open(source_file, 'rb') as src_fh:
+                shutil.copyfileobj(src_fh, out_fh)
+            shutil.copystat(source_file, dest_file)
         except OSError as exc:
             report.images_skipped += 1
             report.warnings.append(f"could not copy image {row.get('file_name')}: {exc}")
@@ -165,6 +178,7 @@ def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
     reference_id via the follow-up map ONLY when source_type == 'followup'
     (otherwise reference_id is unrelated bookkeeping and is preserved)."""
     cols = [c for c in _dst_columns(dst_cur, 'expenses') if c != 'id']
+    sql = f"INSERT INTO expenses ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     src_cur.execute('SELECT * FROM expenses ORDER BY id ASC')
     rows = [dict(r) for r in src_cur.fetchall()]
     patient_map = remaps.get('patients', {})
@@ -181,12 +195,8 @@ def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
             out['treatment_id'] = _remap_value(row.get('treatment_id'), treatment_map)
         if 'reference_id' in cols and str(row.get('source_type') or '') == 'followup':
             out['reference_id'] = _remap_value(row.get('reference_id'), followup_map)
-        placeholders = ', '.join('?' for _ in cols)
         try:
-            dst_cur.execute(
-                f"INSERT INTO expenses ({', '.join(cols)}) VALUES ({placeholders})",
-                tuple(out.get(c) for c in cols),
-            )
+            dst_cur.execute(sql, tuple(out.get(c) for c in cols))
         except sqlite3.Error as exc:
             skipped += 1
             report.warnings.append(f'expenses: skipped a row ({exc})')
@@ -195,6 +205,42 @@ def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
             id_map[old_id] = dst_cur.lastrowid
         added += 1
     report.add('expenses', added, skipped)
+    return id_map
+
+
+def _dedupe_catalog(dst_cur, src_cur, table: str, report: MergeReport, name_col: str = 'name') -> dict:
+    """Merge a name-unique catalog. Reuse the destination row when the name
+    already exists (keeping the destination's values); otherwise insert as new.
+    Returns old_id -> resolved_id."""
+    dst_cur.execute(f'SELECT id, {name_col} FROM {table}')
+    existing = {str(r[1]).strip().lower(): r[0] for r in dst_cur.fetchall()}
+    cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
+    sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
+    src_cur.execute(f'SELECT * FROM {table} ORDER BY id ASC')
+    rows = [dict(r) for r in src_cur.fetchall()]
+    id_map = {}
+    added = skipped = 0
+    for row in rows:
+        old_id = row.get('id')
+        key = str(row.get(name_col) or '').strip().lower()
+        if not key:
+            skipped += 1
+            continue
+        if key in existing:
+            id_map[old_id] = existing[key]
+            skipped += 1
+            continue
+        try:
+            dst_cur.execute(sql, tuple(row.get(c) for c in cols))
+        except sqlite3.Error as exc:
+            skipped += 1
+            report.warnings.append(f'{table}: skipped a row ({exc})')
+            continue
+        new_id = dst_cur.lastrowid
+        id_map[old_id] = new_id
+        existing[key] = new_id
+        added += 1
+    report.add(table, added, skipped)
     return id_map
 
 
@@ -240,8 +286,8 @@ def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
         for new_pid in remaps['patients'].values():
             try:
                 _recompute_balances(dst_cur, new_pid)
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as exc:
+                report.warnings.append(f'balance recompute failed for patient {new_pid}: {exc}')
     finally:
         src_conn.close()
     return report
@@ -252,42 +298,3 @@ def _recompute_balances(dst_cur, patient_id):
     db_merge import-light and avoid a circular import at module load."""
     import dental_clinic
     dental_clinic._recompute_followup_balances(dst_cur, patient_id)
-
-
-def _dedupe_catalog(dst_cur, src_cur, table: str, report: MergeReport, name_col: str = 'name') -> dict:
-    """Merge a name-unique catalog. Reuse the destination row when the name
-    already exists (keeping the destination's values); otherwise insert as new.
-    Returns old_id -> resolved_id."""
-    dst_cur.execute(f'SELECT id, {name_col} FROM {table}')
-    existing = {str(r[1]).strip().lower(): r[0] for r in dst_cur.fetchall()}
-    cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
-    src_cur.execute(f'SELECT * FROM {table} ORDER BY id ASC')
-    rows = [dict(r) for r in src_cur.fetchall()]
-    id_map = {}
-    added = skipped = 0
-    for row in rows:
-        old_id = row.get('id')
-        key = str(row.get(name_col) or '').strip().lower()
-        if not key:
-            skipped += 1
-            continue
-        if key in existing:
-            id_map[old_id] = existing[key]
-            skipped += 1
-            continue
-        placeholders = ', '.join('?' for _ in cols)
-        try:
-            dst_cur.execute(
-                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
-                tuple(row.get(c) for c in cols),
-            )
-        except sqlite3.Error as exc:
-            skipped += 1
-            report.warnings.append(f'{table}: skipped a row ({exc})')
-            continue
-        new_id = dst_cur.lastrowid
-        id_map[old_id] = new_id
-        existing[key] = new_id
-        added += 1
-    report.add(table, added, skipped)
-    return id_map
