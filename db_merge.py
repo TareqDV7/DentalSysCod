@@ -91,17 +91,6 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
     return id_map
 
 
-def _unique_dest_name(dst_uploads: str, file_name: str) -> str:
-    stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
-    base = os.path.basename(file_name or 'image')
-    candidate = os.path.join(dst_uploads, f'merged_{stamp}_{base}')
-    n = 0
-    while os.path.exists(candidate):
-        n += 1
-        candidate = os.path.join(dst_uploads, f'merged_{stamp}_{n}_{base}')
-    return candidate
-
-
 def _copy_medical_images(dst_cur, src_cur, remaps: dict, src_uploads, dst_uploads,
                          report: MergeReport) -> None:
     patient_map = remaps.get('patients', {})
@@ -295,6 +284,8 @@ def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
 
 def _recompute_balances(dst_cur, patient_id):
     """Defer to dental_clinic's ledger recompute. Imported here lazily to keep
-    db_merge import-light and avoid a circular import at module load."""
+    db_merge import-light and avoid a circular import at module load. Runtime
+    requirement: `dental_clinic` must be importable when merge_database runs
+    (always true in the app and in tests, which import it for the schema)."""
     import dental_clinic
     dental_clinic._recompute_followup_balances(dst_cur, patient_id)

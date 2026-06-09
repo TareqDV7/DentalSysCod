@@ -1899,6 +1899,9 @@ _MAINTENANCE = False
 
 @app.before_request
 def _maintenance_gate():
+    # /api/data/* is intentionally exempt: data_replace has its own _MAINTENANCE
+    # 503 check, and data_merge is allowed to run during a replace (separate
+    # connection, additive-only). Don't fold the replace guard into this gate.
     if _MAINTENANCE and (request.path or '').startswith('/api/') \
             and not (request.path or '').startswith('/api/data/'):
         return jsonify({'maintenance': True,

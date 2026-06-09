@@ -204,6 +204,8 @@ def test_merge_database_full_roundtrip(tmp_path):
     assert report.total_added() >= 5
 
 
+@pytest.mark.skipif(sqlite3.sqlite_version_info < (3, 35, 0),
+                    reason="ALTER TABLE ... DROP COLUMN requires SQLite >= 3.35.0")
 def test_merge_tolerates_older_source_missing_column(tmp_path):
     dst = _new_db(tmp_path / 'dst.db')
     src = _new_db(tmp_path / 'src.db')
