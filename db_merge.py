@@ -40,3 +40,55 @@ class MergeReport:
             'warnings': self.warnings,
             'total_added': self.total_added(),
         }
+
+
+def _dst_columns(dst_cur, table: str) -> list:
+    dst_cur.execute(f'PRAGMA table_info({table})')
+    return [r[1] for r in dst_cur.fetchall()]
+
+
+def _remap_value(old_value, id_map: dict):
+    """Translate one foreign-key value through an id map.
+
+    None/0/'' stay null (no link). A value with no entry in the map (orphan)
+    becomes None so we never point at a non-existent row."""
+    if old_value in (None, 0, ''):
+        return None
+    return id_map.get(old_value)
+
+
+def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, report: MergeReport) -> dict:
+    """Additively copy every row of `table` from source to destination.
+
+    fk_cols maps a column name -> the remap key (an earlier table's id map) to
+    rewrite it through. Returns this table's own old_id -> new_id map. Rows that
+    raise a per-row SQLite error are counted as skipped without aborting.
+    """
+    cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
+    src_cur.execute(f'SELECT * FROM {table} ORDER BY id ASC')
+    rows = [dict(r) for r in src_cur.fetchall()]
+    id_map = {}
+    added = skipped = 0
+    for row in rows:
+        old_id = row.get('id')
+        values = []
+        for col in cols:
+            val = row.get(col)
+            if col in fk_cols:
+                val = _remap_value(val, remaps.get(fk_cols[col], {}))
+            values.append(val)
+        placeholders = ', '.join('?' for _ in cols)
+        try:
+            dst_cur.execute(
+                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+                tuple(values),
+            )
+        except sqlite3.Error as exc:
+            skipped += 1
+            report.warnings.append(f'{table}: skipped a row ({exc})')
+            continue
+        if old_id is not None:
+            id_map[old_id] = dst_cur.lastrowid
+        added += 1
+    report.add(table, added, skipped)
+    return id_map
