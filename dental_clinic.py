@@ -65,7 +65,7 @@ def check_and_install_dependencies():
 check_and_install_dependencies()
 
 # Now import the packages
-from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for, g
+from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for, g, after_this_request
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -107,6 +107,12 @@ if not os.environ.get('CLINIC_CLOUD_MODE', '0').strip().lower() in ('1', 'true',
 # - Set send-file cache age to 0 to avoid stale static assets.
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('CLINIC_MAX_UPLOAD_MB', '1024')) * 1024 * 1024
+
+
+@app.errorhandler(413)
+def _request_entity_too_large(_e):
+    return jsonify({'error': 'Upload is too large'}), 413
 
 
 def _load_or_create_secret_key():
@@ -209,7 +215,8 @@ DEFAULT_LICENSE_GRACE_DAYS = 7
 
 # Endpoints reachable on the cloud node without a clinic token.
 _CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/api/license/admin/revoke', '/healthz', '/logo', '/favicon.ico'}
-# /api/data/ is open on the cloud so the handlers can return their own 404 (CLOUD_MODE gate).
+# /api/data/ is forwarded through on the cloud node so each handler can enforce its OWN
+# CLOUD_MODE 404 gate. INVARIANT: every /api/data/* route MUST start with `if CLOUD_MODE: return 404`.
 _CLOUD_OPEN_PREFIXES = ('/static/', '/api/data/')
 # Not available on the cloud node: uploads aren't part of cloud sync and the
 # folder isn't tenant-scoped; the /api/cloud/* endpoints are for a clinic's own
@@ -3698,6 +3705,12 @@ def data_export_bundle():
         return jsonify({'error': 'Not available on the cloud node'}), 404
     # Snapshot the live DB consistently (online backup) into a temp file, then zip.
     tmpdir = tempfile.mkdtemp(prefix='dc_export_')
+
+    @after_this_request
+    def _cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
+
     snap = os.path.join(tmpdir, 'dental_clinic.db')
     src = sqlite3.connect(str(DB_NAME))
     try:
@@ -3741,24 +3754,30 @@ def data_merge():
     if CLOUD_MODE:
         return jsonify({'error': 'Not available on the cloud node'}), 404
     tmpdir = tempfile.mkdtemp(prefix='dc_merge_')
-    db_path, uploads_dir, err = _save_and_resolve_upload(tmpdir)
-    if err:
-        return jsonify({'error': err}), 400
-    backups = run_database_backup()
-    backup_path = backups[0] if backups else None
-    conn = sqlite3.connect(str(DB_NAME))
     try:
-        report = db_merge.merge_database(
-            conn, db_path, src_uploads=uploads_dir, dst_uploads=str(UPLOAD_FOLDER),
-            include_images=True, include_credit=True)
-        conn.commit()
-    except Exception as exc:  # noqa: BLE001 — any failure must roll back the whole merge
-        conn.rollback()
-        return jsonify({'error': f'Merge failed and was rolled back: {exc}',
-                        'backup_path': backup_path}), 500
+        db_path, uploads_dir, err = _save_and_resolve_upload(tmpdir)
+        if err:
+            return jsonify({'error': err}), 400
+        backups = run_database_backup()
+        backup_path = backups[0] if backups else None
+        conn = sqlite3.connect(str(DB_NAME))
+        try:
+            report = db_merge.merge_database(
+                conn, db_path, src_uploads=uploads_dir, dst_uploads=str(UPLOAD_FOLDER),
+                include_images=True, include_credit=True)
+            conn.commit()
+            # Note: image files copied before any rollback remain on disk as harmless
+            # orphans (prefixed 'merged_') and are recoverable via the safety backup.
+        except Exception:  # noqa: BLE001 — any failure must roll back the whole merge
+            conn.rollback()
+            app.logger.exception('Data merge failed')
+            return jsonify({'error': 'Merge failed and was rolled back. See server log for details.',
+                            'backup_path': backup_path}), 500
+        finally:
+            conn.close()
+        return jsonify({'success': True, 'report': report.as_dict(), 'backup_path': backup_path})
     finally:
-        conn.close()
-    return jsonify({'success': True, 'report': report.as_dict(), 'backup_path': backup_path})
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 @app.route('/api/data/replace', methods=['POST'])
@@ -3766,40 +3785,49 @@ def data_replace():
     global _MAINTENANCE
     if CLOUD_MODE:
         return jsonify({'error': 'Not available on the cloud node'}), 404
+    if _MAINTENANCE:
+        return jsonify({'error': 'Another replace operation is already in progress.'}), 503
     tmpdir = tempfile.mkdtemp(prefix='dc_replace_')
-    db_path, uploads_dir, err = _save_and_resolve_upload(tmpdir)
-    if err:
-        return jsonify({'error': err}), 400
-    backups = run_database_backup()
-    backup_path = backups[0] if backups else None
-    _MAINTENANCE = True
     try:
-        target = str(DB_NAME)
-        # Release WAL sidecars on the live DB before overwriting.
+        db_path, uploads_dir, err = _save_and_resolve_upload(tmpdir)
+        if err:
+            return jsonify({'error': err}), 400
+        backups = run_database_backup()
+        backup_path = backups[0] if backups else None
+        if backup_path is None:
+            return jsonify({'error': 'Could not create a safety backup — replace aborted.'}), 500
+        _MAINTENANCE = True
         try:
-            c = sqlite3.connect(target)
-            c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-            c.close()
-        except sqlite3.Error:
-            pass
-        for sidecar in (target + '-wal', target + '-shm'):
+            target = str(DB_NAME)
+            # Release WAL sidecars on the live DB before overwriting.
             try:
-                os.remove(sidecar)
-            except OSError:
+                c = sqlite3.connect(target)
+                c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                c.close()
+            except sqlite3.Error:
                 pass
-        shutil.copy2(db_path, target)
-        # Swap uploads when the bundle carried them.
-        if uploads_dir and os.path.isdir(uploads_dir):
-            if UPLOAD_FOLDER.exists():
-                shutil.rmtree(UPLOAD_FOLDER, ignore_errors=True)
-            shutil.copytree(uploads_dir, str(UPLOAD_FOLDER))
-        # Migrate the incoming DB forward to the current schema.
-        init_database()
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({'error': f'Replace failed: {exc}', 'backup_path': backup_path}), 500
+            for sidecar in (target + '-wal', target + '-shm'):
+                try:
+                    os.remove(sidecar)
+                except OSError:
+                    pass
+            shutil.copy2(db_path, target)
+            # Swap uploads when the bundle carried them.
+            if uploads_dir and os.path.isdir(uploads_dir):
+                if UPLOAD_FOLDER.exists():
+                    shutil.rmtree(UPLOAD_FOLDER, ignore_errors=True)
+                shutil.copytree(uploads_dir, str(UPLOAD_FOLDER))
+            # Migrate the incoming DB forward to the current schema.
+            init_database()
+        except Exception:  # noqa: BLE001
+            app.logger.exception('Data replace failed')
+            return jsonify({'error': 'Replace failed. See server log for details.',
+                            'backup_path': backup_path}), 500
+        finally:
+            _MAINTENANCE = False
+        return jsonify({'success': True, 'backup_path': backup_path})
     finally:
-        _MAINTENANCE = False
-    return jsonify({'success': True, 'backup_path': backup_path})
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])
