@@ -55,7 +55,10 @@ def test_hidden_utility_is_authoritative():
     # visually inert -- the activation card stays on screen and "re-pops" after a
     # licensed reload. Pin that `.hidden` forces display:none authoritatively.
     css = templates.HTML_TEMPLATE
-    m = re.search(r'\.hidden\s*\{[^}]*\}', css)
+    # Match the standalone `.hidden { ... }` utility, NOT a compound selector like
+    # `.license-chip.hidden { ... }` (the negative lookbehind rejects a preceding
+    # identifier/`-` char, so we don't grab the wrong rule and misreport).
+    m = re.search(r'(?<![\w-])\.hidden\s*\{[^}]*\}', css)
     assert m, '.hidden rule not found in portal CSS'
     assert 'display:none!important' in re.sub(r'\s+', '', m.group(0)), (
         '.hidden must be `display:none !important` so the licensing overlay/banners '
