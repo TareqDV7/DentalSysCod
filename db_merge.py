@@ -94,6 +94,44 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
     return id_map
 
 
+def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
+    """Copy expenses, rewriting patient_id and treatment_id via their maps, and
+    reference_id via the follow-up map ONLY when source_type == 'followup'
+    (otherwise reference_id is unrelated bookkeeping and is preserved)."""
+    cols = [c for c in _dst_columns(dst_cur, 'expenses') if c != 'id']
+    src_cur.execute('SELECT * FROM expenses ORDER BY id ASC')
+    rows = [dict(r) for r in src_cur.fetchall()]
+    patient_map = remaps.get('patients', {})
+    treatment_map = remaps.get('treatments', {})
+    followup_map = remaps.get('patient_followups', {})
+    id_map = {}
+    added = skipped = 0
+    for row in rows:
+        old_id = row.get('id')
+        out = dict(row)
+        if 'patient_id' in cols:
+            out['patient_id'] = _remap_value(row.get('patient_id'), patient_map)
+        if 'treatment_id' in cols:
+            out['treatment_id'] = _remap_value(row.get('treatment_id'), treatment_map)
+        if 'reference_id' in cols and str(row.get('source_type') or '') == 'followup':
+            out['reference_id'] = _remap_value(row.get('reference_id'), followup_map)
+        placeholders = ', '.join('?' for _ in cols)
+        try:
+            dst_cur.execute(
+                f"INSERT INTO expenses ({', '.join(cols)}) VALUES ({placeholders})",
+                tuple(out.get(c) for c in cols),
+            )
+        except sqlite3.Error as exc:
+            skipped += 1
+            report.warnings.append(f'expenses: skipped a row ({exc})')
+            continue
+        if old_id is not None:
+            id_map[old_id] = dst_cur.lastrowid
+        added += 1
+    report.add('expenses', added, skipped)
+    return id_map
+
+
 def _dedupe_catalog(dst_cur, src_cur, table: str, report: MergeReport, name_col: str = 'name') -> dict:
     """Merge a name-unique catalog. Reuse the destination row when the name
     already exists (keeping the destination's values); otherwise insert as new.

@@ -87,3 +87,32 @@ def test_dedupe_catalog_by_name(tmp_path):
     names_in_dst = {r[0] for r in dst.execute("SELECT name FROM treatment_procedures").fetchall()}
     assert 'TestProc_A' in names_in_dst
     assert 'TestProc_B' in names_in_dst
+
+
+def test_copy_expenses_remaps_followup_reference(tmp_path):
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+    src.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'S', 'One')")
+    src.execute("INSERT INTO patient_followups (id, patient_id, followup_date) VALUES (9, 1, '2026-01-01')")
+    # A followup-sourced expense (auto lab cost) referencing followup id 9 ...
+    # (expenses.category is NOT NULL; there is no 'description' column.)
+    src.execute("""INSERT INTO expenses (id, category, amount, source_type, reference_id, patient_id)
+                   VALUES (4, 'Lab', 50, 'followup', 9, 1)""")
+    # ... and a manual expense whose reference_id must be left untouched.
+    src.execute("""INSERT INTO expenses (id, category, amount, source_type, reference_id)
+                   VALUES (5, 'Rent', 800, 'manual', 999)""")
+    src.commit()
+
+    remaps = {
+        'patients': {1: 100},
+        'treatments': {},
+        'patient_followups': {9: 700},
+    }
+    report = db_merge.MergeReport()
+    db_merge._copy_expenses(dst.cursor(), src.cursor(), remaps, report)
+    dst.commit()
+
+    lab = dst.execute("SELECT patient_id, reference_id FROM expenses WHERE category = 'Lab'").fetchone()
+    assert (lab['patient_id'], lab['reference_id']) == (100, 700)   # both links rewritten
+    rent = dst.execute("SELECT reference_id FROM expenses WHERE category = 'Rent'").fetchone()
+    assert rent['reference_id'] == 999                              # manual reference_id preserved
