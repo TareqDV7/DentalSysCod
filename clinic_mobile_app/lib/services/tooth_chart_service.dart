@@ -17,8 +17,10 @@ ToothChart parseToothChart(Map<String, dynamic> body) {
       .toList();
   final teethMap = <String, ToothChartEntry>{};
   ((body['teeth'] as Map?) ?? const {}).forEach((k, v) {
-    teethMap['$k'] =
-        ToothChartEntry.fromJson('$k', Map<String, dynamic>.from(v as Map));
+    teethMap['$k'] = ToothChartEntry.fromJson(
+      '$k',
+      Map<String, dynamic>.from(v as Map),
+    );
   });
   return ToothChart(conditions: conditions, teeth: teethMap);
 }
@@ -39,18 +41,22 @@ class ToothChartService {
     return parseToothChart(resp);
   }
 
-  /// Set or clear (conditionId == null) a tooth's condition.
-  Future<void> setTooth(
+  /// Replace a tooth's full condition set. Empty list clears the tooth.
+  Future<void> setToothConditions(
     int patientId,
     String toothNo,
-    int? conditionId, {
-    String? note,
-  }) async {
-    await _api.post('/api/patients/$patientId/tooth-chart', body: {
-      'tooth_no': toothNo,
-      'condition_id': conditionId,
-      'note': note,
-    });
+    List<({int conditionId, String? note})> conditions,
+  ) async {
+    await _api.post(
+      '/api/patients/$patientId/tooth-chart',
+      body: {
+        'tooth_no': toothNo,
+        'conditions': [
+          for (final c in conditions)
+            {'condition_id': c.conditionId, 'note': c.note},
+        ],
+      },
+    );
   }
 
   Future<void> clearTooth(int patientId, String toothNo) async {
@@ -61,11 +67,13 @@ class ToothChartService {
 
   /// Fetches the active conditions (or all when [all] is true).
   Future<List<ToothCondition>> getConditions({bool all = false}) async {
-    final resp =
-        await _api.getList('/api/tooth-conditions${all ? '?all=1' : ''}');
+    final resp = await _api.getList(
+      '/api/tooth-conditions${all ? '?all=1' : ''}',
+    );
     return resp
-        .map((c) =>
-            ToothCondition.fromJson(Map<String, dynamic>.from(c as Map)))
+        .map(
+          (c) => ToothCondition.fromJson(Map<String, dynamic>.from(c as Map)),
+        )
         .toList();
   }
 

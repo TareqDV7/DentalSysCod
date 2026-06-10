@@ -12,42 +12,45 @@ void main() {
             'name': 'Healthy',
             'color': '#22c55e',
             'sort_order': 0,
-            'active': 1
+            'active': 1,
           },
           {
             'id': 2,
             'name': 'Decay',
             'color': '#ef4444',
             'sort_order': 1,
-            'active': 1
+            'active': 1,
           },
         ],
         'teeth': {
           '16': {
-            'condition_id': 2,
-            'condition_name': 'Decay',
-            'color': '#ef4444',
-            'note': null,
+            'conditions': [
+              {
+                'condition_id': 2,
+                'condition_name': 'Decay',
+                'color': '#ef4444',
+                'note': 'distal',
+              },
+            ],
             'source': 'chart',
             'has_plan': true,
-            'unpaid_balance': 0
+            'unpaid_balance': 0,
           },
           '26': {
-            'condition_id': null,
-            'condition_name': null,
-            'color': null,
-            'note': null,
+            'conditions': [],
             'source': 'legacy',
             'has_plan': false,
-            'unpaid_balance': 200
+            'unpaid_balance': 200,
           },
         },
       });
       expect(result.conditions, isA<List<ToothCondition>>());
       expect(result.conditions.length, 2);
+      expect(result.teeth['16']!.conditions.single.name, 'Decay');
       expect(result.teeth['16']!.hasPlan, true);
       expect(result.teeth['26']!.unpaidBalance, 200);
       expect(result.teeth['26']!.source, 'legacy');
+      expect(result.teeth['26']!.conditions, isEmpty);
     });
 
     test('empty chart yields no teeth', () {

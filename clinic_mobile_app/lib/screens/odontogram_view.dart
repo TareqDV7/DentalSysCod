@@ -7,12 +7,40 @@ import '../services/tooth_chart_service.dart';
 import '../state/app_state.dart';
 
 const _upperFdi = [
-  '18', '17', '16', '15', '14', '13', '12', '11',
-  '21', '22', '23', '24', '25', '26', '27', '28',
+  '18',
+  '17',
+  '16',
+  '15',
+  '14',
+  '13',
+  '12',
+  '11',
+  '21',
+  '22',
+  '23',
+  '24',
+  '25',
+  '26',
+  '27',
+  '28',
 ];
 const _lowerFdi = [
-  '48', '47', '46', '45', '44', '43', '42', '41',
-  '31', '32', '33', '34', '35', '36', '37', '38',
+  '48',
+  '47',
+  '46',
+  '45',
+  '44',
+  '43',
+  '42',
+  '41',
+  '31',
+  '32',
+  '33',
+  '34',
+  '35',
+  '36',
+  '37',
+  '38',
 ];
 
 String _fdiClass(String fdi) {
@@ -34,8 +62,11 @@ Color _colorFromHex(String? hex) {
 /// without spinning up a real ClinicApi / DatabaseService.
 abstract class ToothChartReader {
   Future<ToothChart> getChart(int patientId);
-  Future<void> setTooth(int patientId, String toothNo, int? conditionId,
-      {String? note});
+  Future<void> setToothConditions(
+    int patientId,
+    String toothNo,
+    List<({int conditionId, String? note})> conditions,
+  );
   Future<void> clearTooth(int patientId, String toothNo);
   Future<List<ToothCondition>> getConditions({bool all = false});
 }
@@ -49,8 +80,11 @@ class _RealChartReader implements ToothChartReader {
   Future<ToothChart> getChart(int id) => _svc.getChart(id);
 
   @override
-  Future<void> setTooth(int pid, String t, int? cid, {String? note}) =>
-      _svc.setTooth(pid, t, cid, note: note);
+  Future<void> setToothConditions(
+    int pid,
+    String t,
+    List<({int conditionId, String? note})> conditions,
+  ) => _svc.setToothConditions(pid, t, conditions);
 
   @override
   Future<void> clearTooth(int pid, String t) => _svc.clearTooth(pid, t);
@@ -89,7 +123,8 @@ class _OdontogramViewState extends State<OdontogramView> {
   @override
   void initState() {
     super.initState();
-    _reader = widget.reader ??
+    _reader =
+        widget.reader ??
         _RealChartReader(
           ToothChartService(
             context.read<AppState>().db,
@@ -188,7 +223,9 @@ class _OdontogramViewState extends State<OdontogramView> {
                 child: Text(
                   isArabic ? 'دليل الألوان' : 'Legend',
                   style: const TextStyle(
-                      fontWeight: FontWeight.w700, fontSize: 13),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
                 ),
               ),
               Wrap(
@@ -224,13 +261,17 @@ class _OdontogramViewState extends State<OdontogramView> {
               children: [
                 _badgeDot(const Color(0xFF7C3AED)),
                 const SizedBox(width: 4),
-                Text(isArabic ? 'خطة علاجية' : 'In plan',
-                    style: const TextStyle(fontSize: 11)),
+                Text(
+                  isArabic ? 'خطة علاجية' : 'In plan',
+                  style: const TextStyle(fontSize: 11),
+                ),
                 const SizedBox(width: 12),
                 _badgeDot(const Color(0xFFF59E0B)),
                 const SizedBox(width: 4),
-                Text(isArabic ? 'رصيد غير مدفوع' : 'Unpaid balance',
-                    style: const TextStyle(fontSize: 11)),
+                Text(
+                  isArabic ? 'رصيد غير مدفوع' : 'Unpaid balance',
+                  style: const TextStyle(fontSize: 11),
+                ),
               ],
             ),
             const SizedBox(height: 16),
@@ -238,30 +279,20 @@ class _OdontogramViewState extends State<OdontogramView> {
             // Upper arch label
             Text(
               isArabic ? 'الفك العلوي' : 'Upper',
-              style: TextStyle(
-                  fontSize: 11, color: scheme.onSurfaceVariant),
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 6),
-            _ArchRow(
-              teeth: _upperFdi,
-              chart: chart.teeth,
-              onTap: _tapTooth,
-            ),
+            _ArchRow(teeth: _upperFdi, chart: chart.teeth, onTap: _tapTooth),
 
             const SizedBox(height: 8),
 
             // Lower arch label
             Text(
               isArabic ? 'الفك السفلي' : 'Lower',
-              style: TextStyle(
-                  fontSize: 11, color: scheme.onSurfaceVariant),
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 6),
-            _ArchRow(
-              teeth: _lowerFdi,
-              chart: chart.teeth,
-              onTap: _tapTooth,
-            ),
+            _ArchRow(teeth: _lowerFdi, chart: chart.teeth, onTap: _tapTooth),
 
             const SizedBox(height: 24),
           ],
@@ -271,10 +302,10 @@ class _OdontogramViewState extends State<OdontogramView> {
   }
 
   Widget _badgeDot(Color c) => Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(color: c, shape: BoxShape.circle),
-      );
+    width: 10,
+    height: 10,
+    decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+  );
 }
 
 /// A single row of 16 teeth (upper or lower arch).
@@ -291,15 +322,18 @@ class _ArchRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: teeth.map((fdi) {
-        final entry = chart[fdi];
-        return GestureDetector(
-          onTap: () => onTap(fdi),
-          child: _ToothCell(fdi: fdi, entry: entry),
-        );
-      }).toList(),
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: teeth.map((fdi) {
+          final entry = chart[fdi];
+          return GestureDetector(
+            onTap: () => onTap(fdi),
+            child: _ToothCell(fdi: fdi, entry: entry),
+          );
+        }).toList(),
+      ),
     );
   }
 }
@@ -314,12 +348,12 @@ class _ToothCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final fillColor = entry?.color != null
-        ? _colorFromHex(entry!.color)
-        : Colors.transparent;
-    final hasFill = entry?.conditionId != null;
     final hasPlan = entry?.hasPlan ?? false;
     final hasUnpaid = (entry?.unpaidBalance ?? 0) > 0;
+    final bandColors = [
+      for (final c in (entry?.conditions ?? const <ToothConditionTag>[]))
+        _colorFromHex(c.color),
+    ];
 
     return Padding(
       padding: const EdgeInsets.all(1.5),
@@ -333,9 +367,9 @@ class _ToothCell extends StatelessWidget {
               size: const Size(18, 24),
               painter: _ToothPainter(
                 toothClass: _fdiClass(fdi),
-                fillColor: hasFill ? fillColor : Colors.transparent,
-                outlineColor: hasFill
-                    ? fillColor.withAlpha(200)
+                bandColors: bandColors,
+                outlineColor: (entry?.hasConditions ?? false)
+                    ? const Color(0xFF334155)
                     : scheme.outlineVariant,
               ),
             ),
@@ -376,62 +410,71 @@ class _ToothCell extends StatelessWidget {
 
 class _ToothPainter extends CustomPainter {
   final String toothClass;
-  final Color fillColor;
+  final List<Color> bandColors;
   final Color outlineColor;
 
   const _ToothPainter({
     required this.toothClass,
-    required this.fillColor,
+    required this.bandColors,
     required this.outlineColor,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final fill = Paint()
-      ..color = fillColor
-      ..style = PaintingStyle.fill;
-    final stroke = Paint()
-      ..color = outlineColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-
     final path = _buildPath(size);
-    canvas.drawPath(path, fill);
-    canvas.drawPath(path, stroke);
+    if (bandColors.isNotEmpty) {
+      canvas.save();
+      canvas.clipPath(path);
+      final bandH = size.height / bandColors.length;
+      for (var i = 0; i < bandColors.length; i++) {
+        final r = Rect.fromLTWH(0, i * bandH, size.width, bandH);
+        canvas.drawRect(r, Paint()..color = bandColors[i]);
+      }
+      canvas.restore();
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = outlineColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
   }
 
   Path _buildPath(Size s) {
     final w = s.width;
     final h = s.height;
     final path = Path();
-
     switch (toothClass) {
       case 'molar':
-        // Rounded rectangle with flat cusp hint at top
-        path.addRRect(RRect.fromRectAndRadius(
-          Rect.fromLTWH(1, 2, w - 2, h - 3),
-          const Radius.circular(3),
-        ));
+        path.addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(1, 2, w - 2, h - 3),
+            const Radius.circular(4),
+          ),
+        );
       case 'premolar':
-        path.addRRect(RRect.fromRectAndRadius(
-          Rect.fromLTWH(1.5, 3, w - 3, h - 4),
-          const Radius.circular(3),
-        ));
+        path.addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(2, 3, w - 4, h - 4),
+            const Radius.circular(4),
+          ),
+        );
       case 'canine':
-        // Pointed tip
         path
           ..moveTo(w / 2, 1)
-          ..lineTo(w - 1.5, 5)
-          ..lineTo(w - 1.5, h - 2)
-          ..arcToPoint(Offset(1.5, h - 2),
-              radius: const Radius.circular(2))
-          ..lineTo(1.5, 5)
+          ..lineTo(w - 2, 6)
+          ..lineTo(w - 2.5, h - 3)
+          ..arcToPoint(Offset(2.5, h - 3), radius: const Radius.circular(3))
+          ..lineTo(2, 6)
           ..close();
-      default: // incisor — blade shape
-        path.addRRect(RRect.fromRectAndRadius(
-          Rect.fromLTWH(2, 3, w - 4, h - 4),
-          const Radius.circular(2),
-        ));
+      default: // incisor — flat blade
+        path.addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(2.5, 3, w - 5, h - 4),
+            const Radius.circular(2),
+          ),
+        );
     }
     return path;
   }
@@ -439,8 +482,16 @@ class _ToothPainter extends CustomPainter {
   @override
   bool shouldRepaint(_ToothPainter old) =>
       old.toothClass != toothClass ||
-      old.fillColor != fillColor ||
-      old.outlineColor != outlineColor;
+      old.outlineColor != outlineColor ||
+      !_sameColors(old.bandColors, bandColors);
+
+  static bool _sameColors(List<Color> a, List<Color> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 }
 
 // ─── Tap sheet ──────────────────────────────────────────────────────────────
@@ -471,46 +522,69 @@ class _ToothSheet extends StatefulWidget {
 }
 
 class _ToothSheetState extends State<_ToothSheet> {
-  int? _selectedConditionId;
-  late final TextEditingController _note;
+  // condition_id -> note controller
+  final Map<int, TextEditingController> _notes = {};
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    _selectedConditionId = widget.entry?.conditionId;
-    _note = TextEditingController(text: widget.entry?.note ?? '');
+    for (final c in (widget.entry?.conditions ?? const <ToothConditionTag>[])) {
+      _notes[c.conditionId] = TextEditingController(text: c.note ?? '');
+    }
   }
 
   @override
   void dispose() {
-    _note.dispose();
+    for (final c in _notes.values) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  void _toggle(int conditionId) {
+    setState(() {
+      if (_notes.containsKey(conditionId)) {
+        _notes.remove(conditionId)!.dispose();
+      } else {
+        _notes[conditionId] = TextEditingController();
+      }
+    });
   }
 
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      if (_selectedConditionId == null) {
-        await widget.reader.clearTooth(widget.patientId, widget.fdi);
-      } else {
-        await widget.reader.setTooth(
-          widget.patientId,
-          widget.fdi,
-          _selectedConditionId,
-          note: _note.text.trim().isEmpty ? null : _note.text.trim(),
-        );
-      }
+      final list = <({int conditionId, String? note})>[
+        for (final e in _notes.entries)
+          (
+            conditionId: e.key,
+            note: e.value.text.trim().isEmpty ? null : e.value.text.trim(),
+          ),
+      ];
+      await widget.reader.setToothConditions(
+        widget.patientId,
+        widget.fdi,
+        list,
+      );
       if (mounted) Navigator.pop(context);
       widget.onSaved();
-    } catch (e) {
+    } on Exception catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  String _condName(int id, bool isArabic) {
+    final matches = widget.conditions.where((x) => x.id == id);
+    if (matches.isEmpty) return '#$id';
+    final cc = matches.first;
+    return isArabic && cc.nameAr != null ? cc.nameAr! : cc.name;
   }
 
   @override
@@ -518,36 +592,10 @@ class _ToothSheetState extends State<_ToothSheet> {
     final isArabic = context.select<AppState, bool>((s) => s.isArabic);
     final scheme = Theme.of(context).colorScheme;
 
-    final conditionItems = [
-      DropdownMenuItem<int?>(
-        value: null,
-        child: Text(isArabic ? 'سليم / مسح' : 'Healthy / clear'),
-      ),
-      ...widget.conditions.map(
-        (c) => DropdownMenuItem<int?>(
-          value: c.id,
-          child: Row(
-            children: [
-              Container(
-                width: 12,
-                height: 12,
-                margin: const EdgeInsets.only(left: 4),
-                decoration: BoxDecoration(
-                  color: _colorFromHex(c.color),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(isArabic && c.nameAr != null ? c.nameAr! : c.name),
-            ],
-          ),
-        ),
-      ),
-    ];
-
     return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
       child: Container(
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
@@ -555,7 +603,7 @@ class _ToothSheetState extends State<_ToothSheet> {
         ),
         child: SafeArea(
           top: false,
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -577,24 +625,40 @@ class _ToothSheetState extends State<_ToothSheet> {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<int?>(
-                  initialValue: _selectedConditionId,
-                  decoration: InputDecoration(
-                    labelText: isArabic ? 'الحالة' : 'Condition',
-                    border: const OutlineInputBorder(),
-                  ),
-                  items: conditionItems,
-                  onChanged: (v) => setState(() => _selectedConditionId = v),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: widget.conditions
+                      .where((c) => c.name != 'Healthy')
+                      .map((c) {
+                        final selected = _notes.containsKey(c.id);
+                        return FilterChip(
+                          label: Text(
+                            isArabic && c.nameAr != null ? c.nameAr! : c.name,
+                          ),
+                          avatar: CircleAvatar(
+                            backgroundColor: _colorFromHex(c.color),
+                            radius: 7,
+                          ),
+                          selected: selected,
+                          onSelected: (_) => _toggle(c.id!),
+                        );
+                      })
+                      .toList(),
                 ),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: _note,
-                  decoration: InputDecoration(
-                    labelText: isArabic ? 'ملاحظة' : 'Note',
-                    border: const OutlineInputBorder(),
+                for (final e in _notes.entries) ...[
+                  TextField(
+                    controller: e.value,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      labelText: _condName(e.key, isArabic),
+                      border: const OutlineInputBorder(),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
+                  const SizedBox(height: 8),
+                ],
+                const SizedBox(height: 4),
                 FilledButton.icon(
                   onPressed: _saving ? null : _save,
                   icon: const Icon(Icons.save_outlined),
@@ -618,8 +682,7 @@ class _ToothSheetState extends State<_ToothSheet> {
                       widget.onAddToPlan!(widget.fdi);
                     },
                     icon: const Icon(Icons.playlist_add_outlined),
-                    label:
-                        Text(isArabic ? '+ إضافة للخطة' : '+ Add to plan'),
+                    label: Text(isArabic ? '+ إضافة للخطة' : '+ Add to plan'),
                   ),
                 ],
                 const SizedBox(height: 8),

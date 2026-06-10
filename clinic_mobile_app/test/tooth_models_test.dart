@@ -25,13 +25,14 @@ void main() {
 
     test('toJson uses snake_case server keys', () {
       const c = ToothCondition(
-          id: 1,
-          name: 'Veneer',
-          nameAr: 'فينير',
-          color: '#10b981',
-          icon: null,
-          sortOrder: 9,
-          active: true);
+        id: 1,
+        name: 'Veneer',
+        nameAr: 'فينير',
+        color: '#10b981',
+        icon: null,
+        sortOrder: 9,
+        active: true,
+      );
       final j = c.toJson();
       expect(j['name'], 'Veneer');
       expect(j['name_ar'], 'فينير');
@@ -40,36 +41,46 @@ void main() {
   });
 
   group('ToothChartEntry', () {
-    test('parses a marked tooth with computed badges', () {
+    test('parses a tooth with multiple conditions', () {
       final e = ToothChartEntry.fromJson('16', {
-        'condition_id': 2,
-        'condition_name': 'Decay',
-        'color': '#ef4444',
-        'note': 'distal',
+        'conditions': [
+          {
+            'condition_id': 2,
+            'condition_name': 'Decay',
+            'color': '#ef4444',
+            'note': 'distal',
+          },
+          {
+            'condition_id': 3,
+            'condition_name': 'Crown',
+            'color': '#a855f7',
+            'note': null,
+          },
+        ],
         'source': 'chart',
         'has_plan': true,
         'unpaid_balance': 150.0,
       });
       expect(e.toothNo, '16');
-      expect(e.conditionId, 2);
-      expect(e.conditionName, 'Decay');
-      expect(e.color, '#ef4444');
+      expect(e.conditions.length, 2);
+      expect(e.conditions.first.conditionId, 2);
+      expect(e.conditions.first.name, 'Decay');
+      expect(e.conditions.first.note, 'distal');
+      expect(e.hasConditions, true);
       expect(e.hasPlan, true);
       expect(e.unpaidBalance, 150.0);
       expect(e.source, 'chart');
     });
 
-    test('legacy tooth has null condition but may carry badges', () {
+    test('legacy tooth has empty conditions but may carry badges', () {
       final e = ToothChartEntry.fromJson('26', {
-        'condition_id': null,
-        'condition_name': null,
-        'color': null,
-        'note': null,
+        'conditions': [],
         'source': 'legacy',
         'has_plan': false,
         'unpaid_balance': 200.0,
       });
-      expect(e.conditionId, isNull);
+      expect(e.conditions, isEmpty);
+      expect(e.hasConditions, false);
       expect(e.source, 'legacy');
       expect(e.unpaidBalance, 200.0);
     });
@@ -91,8 +102,11 @@ void _planTests() {
     });
 
     test('defaults to empty teeth when absent', () {
-      final p = TreatmentPlan.fromJson(
-          {'id': 1, 'patient_id': 5, 'plan_name': 'X'});
+      final p = TreatmentPlan.fromJson({
+        'id': 1,
+        'patient_id': 5,
+        'plan_name': 'X',
+      });
       expect(p.teeth, isEmpty);
     });
 

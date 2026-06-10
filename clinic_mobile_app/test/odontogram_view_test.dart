@@ -22,19 +22,20 @@ class _FakeReader implements ToothChartReader {
     conditions: [_cond],
     teeth: {
       '16': ToothChartEntry.fromJson('16', {
-        'condition_id': 1,
-        'condition_name': 'Decay',
-        'color': '#ef4444',
-        'note': null,
+        'conditions': [
+          {
+            'condition_id': 1,
+            'condition_name': 'Decay',
+            'color': '#ef4444',
+            'note': null,
+          },
+        ],
         'source': 'chart',
         'has_plan': true,
         'unpaid_balance': 0,
       }),
       '46': ToothChartEntry.fromJson('46', {
-        'condition_id': null,
-        'condition_name': null,
-        'color': null,
-        'note': null,
+        'conditions': [],
         'source': 'legacy',
         'has_plan': false,
         'unpaid_balance': 200.0,
@@ -46,14 +47,19 @@ class _FakeReader implements ToothChartReader {
   Future<ToothChart> getChart(int patientId) async => _chart;
 
   @override
-  Future<void> setTooth(int pid, String t, int? cid, {String? note}) async {}
+  Future<void> setToothConditions(
+    int pid,
+    String t,
+    List<({int conditionId, String? note})> conditions,
+  ) async {}
 
   @override
   Future<void> clearTooth(int pid, String t) async {}
 
   @override
-  Future<List<ToothCondition>> getConditions({bool all = false}) async =>
-      [_cond];
+  Future<List<ToothCondition>> getConditions({bool all = false}) async => [
+    _cond,
+  ];
 }
 
 Widget _wrap(Widget child) {
@@ -65,9 +71,9 @@ Widget _wrap(Widget child) {
 
 void main() {
   testWidgets('renders 32 tooth cells', (tester) async {
-    await tester.pumpWidget(_wrap(
-      OdontogramView(patientId: 1, reader: _FakeReader()),
-    ));
+    await tester.pumpWidget(
+      _wrap(OdontogramView(patientId: 1, reader: _FakeReader())),
+    );
     // Pump once to kick initState + complete the Future.
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
@@ -80,9 +86,9 @@ void main() {
   });
 
   testWidgets('shows legend condition name', (tester) async {
-    await tester.pumpWidget(_wrap(
-      OdontogramView(patientId: 1, reader: _FakeReader()),
-    ));
+    await tester.pumpWidget(
+      _wrap(OdontogramView(patientId: 1, reader: _FakeReader())),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
