@@ -1471,6 +1471,11 @@ HTML_TEMPLATE = '''
         body[data-theme="dark"] .form-panel > summary { background: #111c30; }
         body[data-theme="dark"] .form-panel-body { background: #0f1728; }
 
+        /* ── Settings group headings ── */
+        .settings-group { margin:26px 0 10px; padding-bottom:6px; font-size:1.05em;
+            border-bottom:1px solid var(--border,#e2e8f0); color:var(--text); }
+        .settings-group:first-of-type { margin-top:8px; }
+
         /* ── 3-col form row ── */
         .form-row-3 {
             display: grid;
@@ -2618,7 +2623,8 @@ HTML_TEMPLATE = '''
                 <div class="page-header">
                     <h2 data-i18n="settings">Settings</h2>
                 </div>
-                <h3 style="margin-top:4px;" data-i18n="account">Account</h3>
+
+                <h3 class="settings-group" data-i18n="account">Account</h3>
                 <div class="section-card" style="max-width:460px;margin-bottom:18px;">
                     <div class="form-group">
                         <label data-i18n="current_password">Current Password</label>
@@ -2635,7 +2641,7 @@ HTML_TEMPLATE = '''
                     <button class="btn btn-primary" type="button" onclick="changeAccountPassword()" data-i18n="change_password">Change Password</button>
                 </div>
 
-                <h3 style="margin-top:18px;" data-en="Cloud Sync" data-ar="المزامنة السحابية">Cloud Sync</h3>
+                <h3 class="settings-group" data-en="Sync &amp; Connectivity" data-ar="المزامنة والاتصال">Sync &amp; Connectivity</h3>
                 <div class="section-card" style="max-width:560px;margin-bottom:18px;">
                     <p style="margin:0 0 12px;color:var(--muted);font-size:0.9em;line-height:1.6;"
                        data-en="Cloud sync is automatic. Your clinic's data backs up online whenever there's an internet connection, so it stays reachable from your phone — no setup. To use the same data on a phone, just enter the same activation key in the mobile app."
@@ -2643,8 +2649,6 @@ HTML_TEMPLATE = '''
                     <div id="cloud-status-line" style="font-size:0.92em;line-height:1.7;margin-bottom:14px;color:var(--text,#1f2d2f);"></div>
                     <button class="btn btn-secondary" type="button" onclick="cloudSyncNow(this)" data-en="Sync now" data-ar="مزامنة الآن">Sync now</button>
                 </div>
-
-                <h3 style="margin-top:18px;" data-en="Bluetooth sync" data-ar="مزامنة بلوتوث">Bluetooth sync</h3>
                 <div class="section-card" id="bt-sync-card" style="max-width:560px;margin-bottom:18px;">
                     <p style="margin:0 0 12px;color:var(--muted);font-size:0.9em;line-height:1.6;"
                        data-en="When the phone can't reach Wi-Fi or the cloud, it syncs with this PC over Bluetooth. Pair your phone in Windows Bluetooth settings once, then flip the toggle."
@@ -2663,7 +2667,7 @@ HTML_TEMPLATE = '''
                          role="alert" aria-live="polite"></div>
                 </div>
 
-                <h3 style="margin-top:18px;" data-i18n="data_tools">Data Tools</h3>
+                <h3 class="settings-group" data-en="Data" data-ar="البيانات">Data</h3>
                 <div class="section-card data-tools-card" style="max-width:560px;margin-bottom:18px;">
                   <p class="muted" style="margin:0 0 12px;font-size:0.9em;line-height:1.6;" data-i18n="data_tools_hint">Export a portable copy, merge another clinic&#39;s data, or replace this database.</p>
                   <div class="data-tools-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
@@ -2672,25 +2676,29 @@ HTML_TEMPLATE = '''
                     <input type="file" id="merge-file" accept=".zip,.db" style="display:none" onchange="startDataImport('merge', this)">
                     <label class="btn btn-danger" for="replace-file" style="cursor:pointer;" data-i18n="replace_db">&#9851;&#65039; Replace database</label>
                     <input type="file" id="replace-file" accept=".zip,.db" style="display:none" onchange="startDataImport('replace', this)">
+                    <button class="btn btn-danger" type="button" onclick="clearCatalogs()" data-en="🧹 Clear catalogs" data-ar="🧹 إفراغ القوائم">🧹 Clear catalogs</button>
                   </div>
                   <div id="data-tools-result" class="muted" style="font-size:0.88em;min-height:1.2em;"></div>
                 </div>
-
-                <h3 style="margin-top:4px;" data-i18n="audit_log">Audit Log</h3>
-                <div class="table-container" style="margin-top:12px;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th data-i18n="date_time">Date and Time</th>
-                                <th data-i18n="action">Action</th>
-                                <th data-i18n="entity">Entity</th>
-                                <th data-i18n="details">Details</th>
-                            </tr>
-                        </thead>
+                <details class="form-panel" id="audit-log-panel" style="margin-bottom:18px;">
+                  <summary>🧾 <span data-i18n="audit_log">Audit Log</span></summary>
+                  <div class="form-panel-body">
+                    <div class="table-container">
+                      <table>
+                        <thead><tr>
+                          <th>ID</th>
+                          <th data-i18n="date_time">Date and Time</th>
+                          <th data-i18n="action">Action</th>
+                          <th data-i18n="entity">Entity</th>
+                          <th data-i18n="details">Details</th>
+                        </tr></thead>
                         <tbody id="audit-logs-body"><tr><td colspan="5" data-i18n="no_data">No data</td></tr></tbody>
-                    </table>
-                </div>
+                      </table>
+                    </div>
+                  </div>
+                </details>
+
+                <h3 class="settings-group" data-en="Help" data-ar="المساعدة">Help</h3>
                 <div id="support-content"></div>
                 <div style="margin-top:20px;">
                     <button class="btn btn-primary" onclick="loadSupportSection()" data-i18n="refresh_help">Refresh Help</button>
@@ -5183,7 +5191,6 @@ HTML_TEMPLATE = '''
 
         async function loadSupportSection() {
             await loadSupportTips();
-            await loadAuditLogs();
             await loadCloudSyncSettings();
             loadBluetoothSyncSettings();
             bindBluetoothSyncControls();
@@ -5629,6 +5636,15 @@ HTML_TEMPLATE = '''
             `).join('');
         }
 
+        (function(){
+          const panel = document.getElementById('audit-log-panel');
+          if (!panel) return;
+          let auditLoaded = false;
+          panel.addEventListener('toggle', () => {
+            if (panel.open && !auditLoaded) { auditLoaded = true; loadAuditLogs(); }
+          });
+        })();
+
         async function loadExpenses() {
             const expenses = await fetch('/api/expenses').then(r => r.json());
             const selectedPeriod = document.getElementById('expense-filter-period')?.value || 'all';
@@ -5774,6 +5790,25 @@ HTML_TEMPLATE = '''
             } catch (e) {
                 result.textContent = 'Error: ' + e;
             }
+        }
+
+        async function clearCatalogs() {
+          const msg = (currentLanguage === 'ar')
+            ? 'سيتم إفراغ كل الإجراءات وحالات الأسنان من القوائم (تبقى بيانات المرضى كما هي). متابعة؟'
+            : 'This empties every procedure and tooth condition from the catalogs (patient data is kept). Continue?';
+          if (!confirm(msg)) return;
+          const out = document.getElementById('data-tools-result');
+          if (out) out.textContent = (currentLanguage === 'ar') ? 'جارٍ الإفراغ…' : 'Clearing…';
+          try {
+            const r = await fetch('/api/data/clear-catalogs', { method: 'POST' });
+            const b = await r.json();
+            if (!r.ok) throw new Error(b.error || 'failed');
+            if (out) out.textContent = (currentLanguage === 'ar')
+              ? `تم إفراغ ${b.procedures_cleared} إجراء و ${b.conditions_cleared} حالة.`
+              : `Cleared ${b.procedures_cleared} procedures and ${b.conditions_cleared} conditions.`;
+          } catch (e) {
+            if (out) out.textContent = ((currentLanguage === 'ar') ? 'فشل الإفراغ: ' : 'Clear failed: ') + e.message;
+          }
         }
 
         async function changeAccountPassword() {
