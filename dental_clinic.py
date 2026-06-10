@@ -1219,7 +1219,7 @@ def init_database():
 
     cursor.execute('''
         INSERT OR IGNORE INTO treatment_procedures (id, name, requires_lab, active)
-        VALUES (0, 'مراجعة', 0, 1)
+        VALUES (0, 'مراجعة', 0, 0)
     ''')
 
     # Seed a default admin account on first run (no users yet). The password can be
@@ -1857,7 +1857,8 @@ def _safe_next_url(target):
 # offline-first mobile app keeps working unchanged.
 _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure',
                         '/api/cloud/pairing-qr',
-                        '/api/data/export-bundle', '/api/data/merge', '/api/data/replace'}
+                        '/api/data/export-bundle', '/api/data/merge', '/api/data/replace',
+                        '/api/data/clear-catalogs'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
@@ -3789,6 +3790,35 @@ def data_replace():
         return jsonify({'success': True, 'backup_path': backup_path})
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.route('/api/data/clear-catalogs', methods=['POST'])
+def data_clear_catalogs():
+    """Soft-delete + tombstone every procedure and tooth-condition row.
+
+    Patient data is untouched. Tombstones propagate the wipe to the cloud
+    node and paired phones on the next sync. Disabled on the cloud node.
+    """
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    conn = sqlite3.connect(str(DB_NAME))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    procedures = 0
+    conditions = 0
+    cursor.execute('SELECT id FROM treatment_procedures WHERE active = 1')
+    for row in cursor.fetchall():
+        cursor.execute('UPDATE treatment_procedures SET active = 0 WHERE id = ?', (row['id'],))
+        record_tombstone(cursor, 'treatment_procedures', row['id'])
+        procedures += 1
+    cursor.execute('SELECT id FROM tooth_conditions WHERE active = 1')
+    for row in cursor.fetchall():
+        cursor.execute('UPDATE tooth_conditions SET active = 0 WHERE id = ?', (row['id'],))
+        record_tombstone(cursor, 'tooth_conditions', row['id'])
+        conditions += 1
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'procedures_cleared': procedures, 'conditions_cleared': conditions})
 
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])

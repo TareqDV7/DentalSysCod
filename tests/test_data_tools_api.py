@@ -187,3 +187,32 @@ def test_concurrent_replace_returns_503(client, monkeypatch):
     assert resp.status_code == 503
     body = resp.get_json()
     assert 'error' in body
+
+
+def test_clear_catalogs_empties_active_lists_and_tombstones(client):
+    _login(client)
+    client.post('/api/treatment-procedures', json={'name': 'Cleaning', 'default_price': 200})
+    client.post('/api/tooth-conditions', json={'name': 'Decay', 'color': '#ef4444'})
+
+    r = client.post('/api/data/clear-catalogs')
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['procedures_cleared'] >= 1
+    assert body['conditions_cleared'] >= 1
+
+    assert client.get('/api/treatment-procedures').get_json() == []
+    assert client.get('/api/tooth-conditions').get_json() == []
+
+    import sqlite3, dental_clinic
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    tp = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='treatment_procedures'").fetchone()[0]
+    tc = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='tooth_conditions'").fetchone()[0]
+    conn.close()
+    assert tp >= 1 and tc >= 1
+
+
+def test_clear_catalogs_blocked_on_cloud_node(client, monkeypatch):
+    _login(client)
+    import dental_clinic
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
+    assert client.post('/api/data/clear-catalogs').status_code == 404

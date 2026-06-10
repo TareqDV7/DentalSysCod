@@ -14,8 +14,8 @@ def fresh_db(tmp_path, monkeypatch):
 
 def test_no_seeded_procedures(fresh_db):
     conn = sqlite3.connect(fresh_db)
-    # id=0 is the reserved system procedure ('مراجعة') — not a doctor-managed catalog row.
-    n = conn.execute('SELECT COUNT(*) FROM treatment_procedures WHERE id > 0').fetchone()[0]
+    # Fresh installs show an empty picker (the reserved id=0 sentinel ships inactive).
+    n = conn.execute('SELECT COUNT(*) FROM treatment_procedures WHERE active = 1').fetchone()[0]
     conn.close()
     assert n == 0
 
