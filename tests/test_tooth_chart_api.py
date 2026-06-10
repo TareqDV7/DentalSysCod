@@ -7,12 +7,21 @@ import pytest
 import dental_clinic
 
 
+_STANDARD_CONDITIONS = [
+    {'name': 'Decay',  'name_ar': 'تسوّس', 'color': '#ef4444', 'sort_order': 1},
+    {'name': 'Crown',  'name_ar': 'تاج',   'color': '#a855f7', 'sort_order': 3},
+    {'name': 'Filled', 'name_ar': 'حشوة',  'color': '#3b82f6', 'sort_order': 2},
+]
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     test_db = tmp_path / 'clinic_test.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(test_db))
     dental_clinic.init_database()
     with dental_clinic.app.test_client() as test_client:
+        for cond in _STANDARD_CONDITIONS:
+            test_client.post('/api/tooth-conditions', json=cond)
         yield test_client
 
 

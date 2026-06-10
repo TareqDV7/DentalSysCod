@@ -9,6 +9,17 @@ import dental_clinic
 
 AUTH = {'X-Device-Token': 'test-token'}
 
+_STANDARD_CONDITIONS = [
+    {'name': 'Healthy',          'name_ar': 'سليم',       'color': '#22c55e', 'sort_order': 0},
+    {'name': 'Decay',            'name_ar': 'تسوّس',      'color': '#ef4444', 'sort_order': 1},
+    {'name': 'Filled',           'name_ar': 'حشوة',       'color': '#3b82f6', 'sort_order': 2},
+    {'name': 'Crown',            'name_ar': 'تاج',        'color': '#a855f7', 'sort_order': 3},
+    {'name': 'Root canal',       'name_ar': 'علاج عصب',   'color': '#f59e0b', 'sort_order': 4},
+    {'name': 'Missing',          'name_ar': 'مفقود',      'color': '#6b7280', 'sort_order': 5},
+    {'name': 'Implant',          'name_ar': 'زرعة',       'color': '#06b6d4', 'sort_order': 6},
+    {'name': 'Needs extraction', 'name_ar': 'يحتاج خلع',  'color': '#dc2626', 'sort_order': 7},
+]
+
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
@@ -22,6 +33,8 @@ def client(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
     with dental_clinic.app.test_client() as test_client:
+        for cond in _STANDARD_CONDITIONS:
+            test_client.post('/api/tooth-conditions', json=cond)
         yield test_client
 
 

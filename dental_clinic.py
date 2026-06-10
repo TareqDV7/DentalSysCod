@@ -1162,38 +1162,6 @@ def init_database():
     for table_name in SYNC_TABLES:
         ensure_updated_at_trigger(cursor, table_name)
 
-    default_procedures = [
-        ('Checkup', 0, 0, 0),
-        ('Cleaning', 0, 200, 0),
-        ('Filling', 0, 250, 0),
-        ('Root Canal', 0, 600, 0),
-        ('Extraction', 0, 300, 0),
-        ('Whitening', 0, 800, 0),
-        ('Zircon Crown', 1, 700, 300),
-        ('Porcelain Crown', 1, 900, 450),
-        ('Braces', 1, 3500, 1000),
-    ]
-    cursor.executemany('''
-        INSERT OR IGNORE INTO treatment_procedures (name, requires_lab, default_price, default_lab_expense)
-        VALUES (?, ?, ?, ?)
-    ''', default_procedures)
-
-    default_tooth_conditions = [
-        # name, name_ar, color, sort_order
-        ('Healthy', 'سليم', '#22c55e', 0),
-        ('Decay', 'تسوّس', '#ef4444', 1),
-        ('Filled', 'حشوة', '#3b82f6', 2),
-        ('Crown', 'تاج', '#a855f7', 3),
-        ('Root canal', 'علاج عصب', '#f59e0b', 4),
-        ('Missing', 'مفقود', '#6b7280', 5),
-        ('Implant', 'زرعة', '#06b6d4', 6),
-        ('Needs extraction', 'يحتاج خلع', '#dc2626', 7),
-    ]
-    cursor.executemany('''
-        INSERT OR IGNORE INTO tooth_conditions (name, name_ar, color, sort_order)
-        VALUES (?, ?, ?, ?)
-    ''', default_tooth_conditions)
-
     # One-time migration: the legacy "treatment_catalog" was merged into the procedure catalog.
     # If an old database still has that table, copy any custom rows into treatment_procedures
     # (matched by name; duplicates are ignored), then mark the migration done.

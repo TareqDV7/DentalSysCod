@@ -92,7 +92,7 @@ def test_legacy_rows_migrate_into_procedures(legacy_db):
     # New names from the catalog ended up in procedures.
     assert 'Special Filling' in names
     assert 'OnlyArabic' in names
-    # Clashing name ('Cleaning') stayed as the seeded default — no duplicates.
+    # Clashing name ('Cleaning') from the legacy catalog is not duplicated.
     assert names.count('Cleaning') == 1
     # And the legacy table was dropped + the flag set.
     assert not _table_exists(legacy_db, 'treatment_catalog')
