@@ -1719,7 +1719,7 @@ HTML_TEMPLATE = '''
         }
         /* ── Odontogram ──────────────────────────────────────── */
         .odontogram-card { padding: 16px; }
-        .arch { margin: 4px 0; overflow: visible; }
+        .arch { margin: 4px 0; overflow: visible; direction: ltr; }
         .tooth { cursor: pointer; transition: filter 150ms ease; }
         .tooth:hover, .tooth:focus-visible { filter: brightness(0.88) drop-shadow(0 2px 4px rgba(0,0,0,.3)); outline: none; }
         .tooth:focus-visible { filter: brightness(0.88) drop-shadow(0 0 0 3px var(--brand, #2563eb)); }
@@ -1727,10 +1727,18 @@ HTML_TEMPLATE = '''
         .tooth-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
         .tooth-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text, #1e293b); }
         .tooth-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid #334155; flex-shrink: 0; }
+        .tooth-chip-row { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 2px; }
+        .tooth-chip { display:inline-flex; align-items:center; gap:6px; padding:6px 10px;
+            border-radius:999px; border:1.5px solid var(--border,#cbd5e1); cursor:pointer;
+            font-size:0.86em; user-select:none; }
+        .tooth-chip i { width:12px; height:12px; border-radius:3px; display:inline-block; }
+        .tooth-chip.selected { border-color:#334155; font-weight:600; }
+        [data-theme="dark"] .tooth-chip.selected { border-color:#cbd5e1; }
+        .tooth-note-row { display:flex; align-items:center; gap:8px; margin:6px 0; }
+        .tooth-note-row label { font-size:0.8em; min-width:90px; color:var(--muted); }
         [data-theme="dark"] .tooth-num { fill: #94a3b8; }
         [data-theme="dark"] path[stroke="#94a3b8"] { stroke: #475569; }
-        [dir="rtl"] .tooth-row { transform: scaleX(-1); }
-        [dir="rtl"] .tooth-num { transform: scaleX(-1); transform-origin: center; }
+
         /* `.hidden` must beat component display rules defined after it (e.g.
            `.license-overlay`/`.license-banner` use display:flex), otherwise
            toggling the class is visually inert and the activation overlay
@@ -2932,12 +2940,9 @@ HTML_TEMPLATE = '''
         <h3 id="tooth-popup-title">—</h3>
         <div class="form-group">
           <label data-i18n="condition">Condition</label>
-          <select id="tooth-popup-condition"></select>
+          <div id="tooth-popup-conditions" class="tooth-chip-row"></div>
         </div>
-        <div class="form-group">
-          <label data-i18n="notes">Note</label>
-          <input type="text" id="tooth-popup-note" autocomplete="off">
-        </div>
+        <div id="tooth-popup-notes"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
           <button class="btn btn-primary" id="tooth-popup-save" data-i18n="save">Save</button>
           <button class="btn" id="tooth-popup-log" data-i18n="log_treatment">+ Log treatment</button>
@@ -6305,10 +6310,11 @@ HTML_TEMPLATE = '''
         // Tooth silhouettes in a 40x56 cell (crown on top, root tapering down).
         // Distinct per class; refine visually in Task 9's review.
         const TOOTH_PATHS = {
-          molar:    'M6,10 Q8,4 12,8 Q16,3 20,8 Q24,3 28,8 Q32,4 34,10 Q38,16 34,26 Q34,40 28,52 Q24,56 20,52 Q16,56 12,52 Q6,40 6,26 Q2,16 6,10 Z',
-          premolar: 'M9,10 Q14,3 20,8 Q26,3 31,10 Q35,18 31,28 Q31,42 26,52 Q20,57 14,52 Q9,42 9,28 Q5,18 9,10 Z',
-          canine:   'M20,3 Q27,9 30,18 Q33,30 28,44 Q24,56 20,53 Q16,56 12,44 Q7,30 10,18 Q13,9 20,3 Z',
-          incisor:  'M11,5 Q20,2 29,5 Q33,14 30,26 Q29,42 24,52 Q20,57 16,52 Q11,42 10,26 Q7,14 11,5 Z',
+          // crown on top (y small), root tapering toward y=56
+          molar:    'M5,16 Q5,9 10,9 Q12,5 15,9 Q20,5 25,9 Q28,5 30,9 Q35,9 35,16 Q37,24 33,30 L33,40 Q33,50 28,54 Q24,56 22,52 Q20,56 16,54 Q11,50 11,40 L11,30 Q3,24 5,16 Z',
+          premolar: 'M9,16 Q9,9 15,9 Q17,5 20,9 Q23,5 25,9 Q31,9 31,16 Q33,23 29,29 L29,40 Q29,50 24,54 Q20,56 16,52 Q11,50 11,40 L11,29 Q7,23 9,16 Z',
+          canine:   'M20,4 Q25,10 27,18 Q29,24 26,30 L26,42 Q26,52 22,55 Q20,56 18,54 Q14,52 14,42 L14,30 Q11,24 13,18 Q15,10 20,4 Z',
+          incisor:  'M12,8 Q12,6 20,6 Q28,6 28,8 Q30,16 27,26 L26,42 Q26,52 22,55 Q20,56 18,54 Q14,52 14,42 L13,26 Q10,16 12,8 Z',
         };
 
         // Build one row of teeth as inline SVG. `chart` is the {teeth:{}} map from the API.
@@ -6318,20 +6324,40 @@ HTML_TEMPLATE = '''
           fdiList.forEach((fdi, i) => {
             const x = i * cellW + pad;
             const entry = (chart.teeth || {})[fdi];
-            const fill = entry && entry.color ? entry.color
-                       : entry ? '#cbd5e1'          // legacy/unknown tint
-                       : 'transparent';             // healthy = outline only
-            const stroke = entry ? '#334155' : '#94a3b8';
+            const conds = (entry && entry.conditions) ? entry.conditions : [];
+            const ty = isLower ? 6 : 14;
+            const xform = `translate(${x},${ty}) ${isLower ? 'rotate(180 20 28)' : ''}`;
+            const pathD = TOOTH_PATHS[fdiToothClass(fdi)];
+            const stroke = conds.length ? '#334155' : '#94a3b8';
+
+            let fillSvg;
+            if (conds.length === 0) {
+              fillSvg = `<path d="${pathD}" transform="${xform}" fill="transparent" stroke="${stroke}" stroke-width="1.5"/>`;
+            } else {
+              const clipId = `tc-${fdi}-${isLower ? 'l' : 'u'}`;
+              const bandH = 56 / conds.length;
+              const bands = conds.map((c, bi) =>
+                `<rect x="0" y="${bi * bandH}" width="40" height="${bandH}" fill="${c.color || '#cbd5e1'}"/>`
+              ).join('');
+              fillSvg =
+                `<clipPath id="${clipId}"><path d="${pathD}"/></clipPath>` +
+                `<g transform="${xform}"><g clip-path="url(#${clipId})">${bands}</g>` +
+                `<path d="${pathD}" fill="none" stroke="${stroke}" stroke-width="1.5"/></g>`;
+            }
+
             const dot = entry && entry.has_plan
               ? `<circle cx="${x+34}" cy="6" r="4" fill="#7c3aed"><title>${t('has_plan','Has plan')}</title></circle>` : '';
             const warn = entry && entry.unpaid_balance > 0
               ? `<circle cx="${x+34}" cy="${cellH-8}" r="4" fill="#f59e0b"><title>${t('unpaid','Unpaid')}: ₪ ${entry.unpaid_balance.toFixed(2)}</title></circle>` : '';
             const label = `<text x="${x+20}" y="${isLower ? cellH-1 : 10}" text-anchor="middle" class="tooth-num">${fdi}</text>`;
-            const path = `<path d="${TOOTH_PATHS[fdiToothClass(fdi)]}" transform="translate(${x},${isLower ? 6 : 14}) ${isLower ? 'rotate(180 20 28)' : ''}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
-            cells += `<g class="tooth" data-fdi="${fdi}" tabindex="0" role="button" aria-label="${t('tooth','Tooth')} ${fdi}">${path}${label}${dot}${warn}</g>`;
+            const titleNames = conds.map(c => c.condition_name).filter(Boolean).join(', ');
+            const titleTag = titleNames ? `<title>${fdi}: ${titleNames}</title>` : '';
+            cells += `<g class="tooth" data-fdi="${fdi}" tabindex="0" role="button" aria-label="${t('tooth','Tooth')} ${fdi}">${titleTag}${fillSvg}${label}${dot}${warn}</g>`;
           });
+          const midX = 8 * cellW + pad;
+          const midline = `<line x1="${midX}" y1="2" x2="${midX}" y2="${cellH-2}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3 3"/>`;
           const w = fdiList.length * cellW + pad * 2;
-          return `<svg viewBox="0 0 ${w} ${cellH}" width="100%" preserveAspectRatio="xMidYMid meet" class="tooth-row">${cells}</svg>`;
+          return `<svg viewBox="0 0 ${w} ${cellH}" width="100%" preserveAspectRatio="xMidYMid meet" class="tooth-row">${midline}${cells}</svg>`;
         }
 
         function buildToothArchSvg(chart) {
@@ -6407,19 +6433,47 @@ HTML_TEMPLATE = '''
 
         let _popupPatientId = null, _popupFdi = null;
 
+        let _popupSel = {};   // {condition_id: note}
+
+        function _renderToothNotes() {
+          const wrap = document.getElementById('tooth-popup-notes');
+          wrap.innerHTML = Object.keys(_popupSel).map(cid => {
+            const c = currentChartConditions.find(x => String(x.id) === String(cid));
+            const nm = c ? ((currentLanguage==='ar' && c.name_ar) ? c.name_ar : c.name) : cid;
+            const val = (_popupSel[cid] || '').replace(/"/g, '&quot;');
+            return `<div class="tooth-note-row"><label>${nm}</label>`
+                 + `<input type="text" data-note-for="${cid}" value="${val}" `
+                 + `placeholder="${t('notes','Note')}" style="flex:1;"></div>`;
+          }).join('');
+          wrap.querySelectorAll('input[data-note-for]').forEach(inp => {
+            inp.addEventListener('input', e => { _popupSel[e.target.dataset.noteFor] = e.target.value; });
+          });
+        }
+
         function openToothPopup(patientId, fdi, chart) {
           _popupPatientId = patientId; _popupFdi = fdi;
           const entry = (chart.teeth || {})[fdi] || {};
           document.getElementById('tooth-popup-title').textContent = `${t('tooth','Tooth')} ${fdi}`;
-          const sel = document.getElementById('tooth-popup-condition');
-          // First option = Healthy/clear (sends null).
-          sel.innerHTML = `<option value="">${t('healthy','Healthy')}</option>` +
-            currentChartConditions
-              .filter(c => c.name !== 'Healthy')
-              .map(c => `<option value="${c.id}">${(currentLanguage==='ar' && c.name_ar) ? c.name_ar : c.name}</option>`)
-              .join('');
-          sel.value = entry.condition_id ? String(entry.condition_id) : '';
-          document.getElementById('tooth-popup-note').value = entry.note || '';
+          _popupSel = {};
+          (entry.conditions || []).forEach(c => { _popupSel[c.condition_id] = c.note || ''; });
+          const row = document.getElementById('tooth-popup-conditions');
+          row.innerHTML = currentChartConditions
+            .filter(c => c.name !== 'Healthy')
+            .map(c => {
+              const nm = (currentLanguage==='ar' && c.name_ar) ? c.name_ar : c.name;
+              const on = Object.prototype.hasOwnProperty.call(_popupSel, String(c.id));
+              return `<span class="tooth-chip${on ? ' selected' : ''}" data-cid="${c.id}">`
+                   + `<i style="background:${c.color}"></i>${nm}</span>`;
+            }).join('');
+          row.querySelectorAll('.tooth-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+              const cid = chip.dataset.cid;
+              if (Object.prototype.hasOwnProperty.call(_popupSel, cid)) { delete _popupSel[cid]; chip.classList.remove('selected'); }
+              else { _popupSel[cid] = ''; chip.classList.add('selected'); }
+              _renderToothNotes();
+            });
+          });
+          _renderToothNotes();
           document.getElementById('tooth-popup').style.display = 'flex';
         }
 
@@ -6428,14 +6482,13 @@ HTML_TEMPLATE = '''
         document.getElementById('tooth-popup-close').addEventListener('click', closeToothPopup);
 
         document.getElementById('tooth-popup-save').addEventListener('click', async () => {
-          const condVal = document.getElementById('tooth-popup-condition').value;
+          const conditions = Object.keys(_popupSel).map(cid => ({
+            condition_id: parseInt(cid, 10),
+            note: (_popupSel[cid] || '').trim() || null,
+          }));
           await fetch(`/api/patients/${_popupPatientId}/tooth-chart`, {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              tooth_no: _popupFdi,
-              condition_id: condVal ? parseInt(condVal, 10) : null,   // '' → null = clear to healthy
-              note: document.getElementById('tooth-popup-note').value || null,
-            }),
+            body: JSON.stringify({ tooth_no: _popupFdi, conditions }),
           });
           closeToothPopup();
           renderOdontogram(_popupPatientId);
