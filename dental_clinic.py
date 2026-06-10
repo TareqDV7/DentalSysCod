@@ -2980,43 +2980,70 @@ def patient_tooth_chart_collection(patient_id):
             conn.close()
             return jsonify({'error': 'Invalid FDI tooth number'}), 400
 
-        condition_id = data.get('condition_id')
-        if condition_id in (None, '', 0, '0'):
-            cursor.execute(
-                'SELECT id FROM patient_tooth_chart WHERE patient_id = ? AND tooth_no = ?',
-                (patient_id, tooth_no),
-            )
-            for row in cursor.fetchall():
-                cursor.execute('DELETE FROM patient_tooth_chart WHERE id = ?', (row['id'],))
-                record_tombstone(cursor, 'patient_tooth_chart', row['id'])
-            conn.commit()
-            conn.close()
-            return jsonify({'success': True})
+        # New multi-condition shape; tolerate the legacy single {condition_id, note}.
+        if 'conditions' in data:
+            raw = data.get('conditions') or []
+        else:
+            cid = data.get('condition_id')
+            raw = [] if cid in (None, '', 0, '0') else [{'condition_id': cid, 'note': data.get('note')}]
 
-        cursor.execute('SELECT id FROM tooth_conditions WHERE id = ?', (condition_id,))
-        if cursor.fetchone() is None:
-            conn.close()
-            return jsonify({'error': 'Unknown condition_id'}), 400
+        requested = []          # [(condition_id:int, note)]
+        seen = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            cid = item.get('condition_id')
+            if cid in (None, '', 0, '0'):
+                continue
+            try:
+                cid = int(cid)
+            except (TypeError, ValueError):
+                conn.close()
+                return jsonify({'error': 'Invalid condition_id'}), 400
+            if cid in seen:
+                continue
+            seen.add(cid)
+            requested.append((cid, (item.get('note') or None)))
 
-        note = (data.get('note') or None)
+        for cid, _ in requested:
+            cursor.execute('SELECT id FROM tooth_conditions WHERE id = ?', (cid,))
+            if cursor.fetchone() is None:
+                conn.close()
+                return jsonify({'error': 'Unknown condition_id'}), 400
+
         cursor.execute(
-            'SELECT id FROM patient_tooth_chart WHERE patient_id = ? AND tooth_no = ? ORDER BY updated_at DESC',
+            'SELECT id, condition_id FROM patient_tooth_chart WHERE patient_id = ? AND tooth_no = ?',
             (patient_id, tooth_no),
         )
-        rows = cursor.fetchall()
-        if rows:
-            cursor.execute(
-                'UPDATE patient_tooth_chart SET condition_id = ?, note = ? WHERE id = ?',
-                (condition_id, note, rows[0]['id']),
-            )
-            for extra in rows[1:]:
-                cursor.execute('DELETE FROM patient_tooth_chart WHERE id = ?', (extra['id'],))
-                record_tombstone(cursor, 'patient_tooth_chart', extra['id'])
-        else:
-            cursor.execute(
-                'INSERT INTO patient_tooth_chart (patient_id, tooth_no, condition_id, note) VALUES (?, ?, ?, ?)',
-                (patient_id, tooth_no, condition_id, note),
-            )
+        existing_by_cond = {}
+        for row in cursor.fetchall():
+            existing_by_cond.setdefault(row['condition_id'], []).append(row['id'])
+
+        requested_ids = {cid for cid, _ in requested}
+
+        # Remove rows whose condition is no longer requested.
+        for cond_id, ids in existing_by_cond.items():
+            if cond_id not in requested_ids:
+                for rid in ids:
+                    cursor.execute('DELETE FROM patient_tooth_chart WHERE id = ?', (rid,))
+                    record_tombstone(cursor, 'patient_tooth_chart', rid)
+
+        # Upsert each requested condition (collapse any duplicate rows to one).
+        for cid, note in requested:
+            ids = existing_by_cond.get(cid, [])
+            if ids:
+                cursor.execute(
+                    'UPDATE patient_tooth_chart SET condition_id = ?, note = ? WHERE id = ?',
+                    (cid, note, ids[0]),
+                )
+                for extra in ids[1:]:
+                    cursor.execute('DELETE FROM patient_tooth_chart WHERE id = ?', (extra,))
+                    record_tombstone(cursor, 'patient_tooth_chart', extra)
+            else:
+                cursor.execute(
+                    'INSERT INTO patient_tooth_chart (patient_id, tooth_no, condition_id, note) VALUES (?, ?, ?, ?)',
+                    (patient_id, tooth_no, cid, note),
+                )
         conn.commit()
         conn.close()
         return jsonify({'success': True})
@@ -3031,36 +3058,35 @@ def patient_tooth_chart_collection(patient_id):
 
     cursor.execute('''
         SELECT c.tooth_no, c.condition_id, c.note,
-               tc.name AS condition_name, tc.color AS color
+               tc.name AS condition_name, tc.color AS color, tc.sort_order AS sort_order
         FROM patient_tooth_chart c
         LEFT JOIN tooth_conditions tc ON tc.id = c.condition_id
         WHERE c.patient_id = ?
-        ORDER BY c.updated_at ASC
+        ORDER BY COALESCE(tc.sort_order, 999) ASC, c.updated_at ASC
     ''', (patient_id,))
     teeth = {}
     for r in cursor.fetchall():
-        teeth[r['tooth_no']] = {
+        entry = teeth.setdefault(r['tooth_no'], {'conditions': [], 'source': 'chart'})
+        entry['conditions'].append({
             'condition_id': r['condition_id'],
             'condition_name': r['condition_name'],
             'color': r['color'],
             'note': r['note'],
-            'source': 'chart',
-        }
+        })
 
     # Legacy auto-adopt: surface valid-FDI teeth that have a follow-up or a plan
-    # but no explicit chart row, so badges show even before the tooth is charted.
+    # but no explicit chart row, so badges show before the tooth is charted.
+    def _adopt(tooth_no):
+        if _is_valid_fdi(tooth_no) and tooth_no not in teeth:
+            teeth[tooth_no] = {'conditions': [], 'source': 'legacy'}
+
     cursor.execute(
         'SELECT DISTINCT tooth_no FROM patient_followups '
         'WHERE patient_id = ? AND tooth_no IS NOT NULL AND COALESCE(is_deleted, 0) = 0',
         (patient_id,),
     )
     for r in cursor.fetchall():
-        t = r['tooth_no']
-        if _is_valid_fdi(t) and t not in teeth:
-            teeth[t] = {
-                'condition_id': None, 'condition_name': None, 'color': None,
-                'note': None, 'source': 'legacy',
-            }
+        _adopt(r['tooth_no'])
 
     cursor.execute(
         '''SELECT DISTINCT tpt.tooth_no
@@ -3070,12 +3096,7 @@ def patient_tooth_chart_collection(patient_id):
         (patient_id,),
     )
     for r in cursor.fetchall():
-        t = r['tooth_no']
-        if _is_valid_fdi(t) and t not in teeth:
-            teeth[t] = {
-                'condition_id': None, 'condition_name': None, 'color': None,
-                'note': None, 'source': 'legacy',
-            }
+        _adopt(r['tooth_no'])
 
     # Badges, computed once (read-time, never stored). Up to ~32 teeth; two
     # batched queries instead of per-tooth N+1.

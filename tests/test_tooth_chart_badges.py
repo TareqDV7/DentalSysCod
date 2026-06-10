@@ -64,12 +64,13 @@ def test_marked_tooth_has_condition_and_color(client):
     pid = _patient()
     decay = _condition_id(client, 'Decay')
     client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': decay, 'note': 'distal'})
-    teeth = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']
-    assert teeth['16']['condition_id'] == decay
-    assert teeth['16']['condition_name'] == 'Decay'
-    assert teeth['16']['color'].startswith('#')
-    assert teeth['16']['note'] == 'distal'
-    assert teeth['16']['source'] == 'chart'
+    tooth = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']['16']
+    assert tooth['source'] == 'chart'
+    c = tooth['conditions'][0]
+    assert c['condition_id'] == decay
+    assert c['condition_name'] == 'Decay'
+    assert c['color'].startswith('#')
+    assert c['note'] == 'distal'
 
 
 def test_unpaid_balance_badge_from_followups(client):
@@ -104,7 +105,7 @@ def test_explicit_mark_overrides_legacy_source(client):
     client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': filled})
     teeth = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']
     assert teeth['16']['source'] == 'chart'
-    assert teeth['16']['condition_name'] == 'Filled'
+    assert teeth['16']['conditions'][0]['condition_name'] == 'Filled'
 
 
 def test_chart_scoped_to_patient(client):

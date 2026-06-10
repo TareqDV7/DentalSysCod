@@ -78,3 +78,19 @@ def test_chart_delete_tombstone_propagates(client):
 
     exported = client.get('/api/sync/export', headers=AUTH).get_json()
     assert any(t['table_name'] == 'patient_tooth_chart' for t in exported['tombstones'])
+
+
+def test_multi_condition_rows_export_and_tombstone(client):
+    pid = _patient()
+    conds = client.get('/api/tooth-conditions').get_json()
+    decay = next(c['id'] for c in conds if c['name'] == 'Decay')
+    crown = next(c['id'] for c in conds if c['name'] == 'Crown')
+    client.post(f'/api/patients/{pid}/tooth-chart',
+                json={'tooth_no': '16', 'conditions': [{'condition_id': decay}, {'condition_id': crown}]})
+    rows = client.get('/api/sync/export', headers=AUTH).get_json()['tables']['patient_tooth_chart']
+    assert sum(1 for r in rows if r['tooth_no'] == '16') == 2
+    # drop one → tombstone propagates
+    client.post(f'/api/patients/{pid}/tooth-chart',
+                json={'tooth_no': '16', 'conditions': [{'condition_id': crown}]})
+    exported = client.get('/api/sync/export', headers=AUTH).get_json()
+    assert any(t['table_name'] == 'patient_tooth_chart' for t in exported['tombstones'])

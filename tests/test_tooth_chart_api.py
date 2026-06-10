@@ -8,9 +8,10 @@ import dental_clinic
 
 
 _STANDARD_CONDITIONS = [
-    {'name': 'Decay',  'name_ar': 'تسوّس', 'color': '#ef4444', 'sort_order': 1},
-    {'name': 'Crown',  'name_ar': 'تاج',   'color': '#a855f7', 'sort_order': 3},
-    {'name': 'Filled', 'name_ar': 'حشوة',  'color': '#3b82f6', 'sort_order': 2},
+    {'name': 'Decay',     'name_ar': 'تسوّس',   'color': '#ef4444', 'sort_order': 1},
+    {'name': 'Crown',     'name_ar': 'تاج',     'color': '#a855f7', 'sort_order': 3},
+    {'name': 'Filled',    'name_ar': 'حشوة',    'color': '#3b82f6', 'sort_order': 2},
+    {'name': 'Root canal','name_ar': 'علاج عصب','color': '#f59e0b', 'sort_order': 4},
 ]
 
 
@@ -41,6 +42,11 @@ def _condition_id(client, name):
     return next(r['id'] for r in rows if r['name'] == name)
 
 
+def _post_conditions(client, pid, tooth, items):
+    return client.post(f'/api/patients/{pid}/tooth-chart',
+                       json={'tooth_no': tooth, 'conditions': items})
+
+
 def test_chart_table_exists(client):
     conn = sqlite3.connect(dental_clinic.DB_NAME)
     cur = conn.cursor()
@@ -58,33 +64,66 @@ def test_is_valid_fdi():
         assert dental_clinic._is_valid_fdi(s) is False, s
 
 
-def test_upsert_then_update_keeps_one_row(client):
+def test_get_returns_conditions_list(client):
     pid = _patient()
     decay = _condition_id(client, 'Decay')
     crown = _condition_id(client, 'Crown')
-    client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': decay})
-    client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': crown})
+    _post_conditions(client, pid, '16', [
+        {'condition_id': decay, 'note': 'distal'},
+        {'condition_id': crown, 'note': 'PFM'},
+    ])
+    conds = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']['16']['conditions']
+    assert {c['condition_name'] for c in conds} == {'Decay', 'Crown'}
+    notes = {c['condition_name']: c['note'] for c in conds}
+    assert notes['Decay'] == 'distal' and notes['Crown'] == 'PFM'
+    assert all('color' in c and 'condition_id' in c for c in conds)
+
+
+def test_post_conditions_replaces_set(client):
+    pid = _patient()
+    decay = _condition_id(client, 'Decay')
+    crown = _condition_id(client, 'Crown')
+    rc = _condition_id(client, 'Root canal')
+    _post_conditions(client, pid, '16', [{'condition_id': decay}, {'condition_id': crown}])
+    _post_conditions(client, pid, '16', [{'condition_id': crown}, {'condition_id': rc}])
+    conds = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']['16']['conditions']
+    assert {c['condition_name'] for c in conds} == {'Crown', 'Root canal'}
     conn = sqlite3.connect(dental_clinic.DB_NAME)
-    cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM patient_tooth_chart WHERE patient_id=? AND tooth_no=?', (pid, '16'))
-    assert cur.fetchone()[0] == 1
+    n = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='patient_tooth_chart'").fetchone()[0]
     conn.close()
-    teeth = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']
-    assert teeth['16']['condition_name'] == 'Crown'
+    assert n >= 1
 
 
-def test_null_condition_clears_tooth(client):
+def test_post_empty_conditions_clears_tooth(client):
+    pid = _patient()
+    decay = _condition_id(client, 'Decay')
+    _post_conditions(client, pid, '16', [{'condition_id': decay}])
+    assert _post_conditions(client, pid, '16', []).status_code == 200
+    assert '16' not in client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']
+
+
+def test_legacy_single_condition_still_works(client):
     pid = _patient()
     decay = _condition_id(client, 'Decay')
     client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': decay})
-    r = client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': None})
-    assert r.status_code == 200
+    conds = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']['16']['conditions']
+    assert [c['condition_name'] for c in conds] == ['Decay']
+
+
+def test_legacy_null_condition_clears_tooth(client):
+    pid = _patient()
+    decay = _condition_id(client, 'Decay')
+    client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': decay})
+    assert client.post(f'/api/patients/{pid}/tooth-chart', json={'tooth_no': '16', 'condition_id': None}).status_code == 200
     assert '16' not in client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='patient_tooth_chart'")
-    assert cur.fetchone()[0] == 1
-    conn.close()
+
+
+def test_post_dedupes_repeated_condition(client):
+    pid = _patient()
+    decay = _condition_id(client, 'Decay')
+    _post_conditions(client, pid, '16', [{'condition_id': decay}, {'condition_id': decay, 'note': 'x'}])
+    conds = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']['16']['conditions']
+    assert len(conds) == 1
 
 
 def test_delete_endpoint_clears_tooth(client):
