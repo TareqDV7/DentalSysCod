@@ -1854,8 +1854,10 @@ def get_mobile_download_options(cursor):
 CLINIC_CONFIG = {
     'SYSTEM_NAME':   'DentaCare',
     'CLINIC_NAME':   'Dental Management System',
-    'DOCTOR_NAME':   'Dr. Wasfy Barzaq',
-    'DOCTOR_NAME_AR': 'د. وصفي برزق',
+    # Ships empty — a fresh install starts with no doctor name; the clinic sets it
+    # from the header badge (persisted to app_settings) on first use.
+    'DOCTOR_NAME':   '',
+    'DOCTOR_NAME_AR': '',
     'CLINIC_TAGLINE': 'Patient Care & Practice Management',
 }
 # ─────────────────────────────────────────────────────────────────────────────

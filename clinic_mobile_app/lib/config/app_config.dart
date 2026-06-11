@@ -4,8 +4,9 @@
 class AppBranding {
   static const String systemName = 'DentaCare';
   static const String clinicName = 'Dental Management System';
-  static const String doctorName = 'Dr. Wasfy Barzaq';
-  static const String doctorNameAr = 'د. وصفي برزق';
+  // Ship empty — the clinic name is filled in on the desktop and syncs over.
+  static const String doctorName = '';
+  static const String doctorNameAr = '';
   static const String tagline = 'Patient Care & Practice Management';
   static const String appVersion = '1.0.0';
 }

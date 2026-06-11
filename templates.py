@@ -239,6 +239,8 @@ HTML_TEMPLATE = '''
             transition: opacity 0.18s;
         }
         .doctor-badge:hover .doctor-edit-icon { opacity: 1; }
+        /* Empty doctor name (fresh install): show a faint "add" prompt, not a blank gap. */
+        .doctor-badge-name.is-placeholder { opacity: 0.6; font-style: italic; font-weight: 600; }
 
         /* License card (Settings → License) — moved off the header into Settings */
         .license-card__serial-row { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
@@ -1880,7 +1882,7 @@ HTML_TEMPLATE = '''
                 </div>
                 <div class="header-meta">
                     <div class="doctor-badge" id="doctor-badge-el" onclick="toggleDoctorEditPopover(event)" title="Click to edit doctor name">
-                        <span data-i18n="doctor_name" class="doctor-badge-name" id="doctor-name-display">{{ DOCTOR_NAME }}</span>
+                        <span class="doctor-badge-name" id="doctor-name-display">{{ DOCTOR_NAME }}</span>
                         <span class="doctor-edit-icon">✏ edit</span>
                     </div>
                     <button id="theme-toggle" class="theme-toggle" title="Night Mode" aria-label="Night Mode">🌙</button>
@@ -2606,13 +2608,6 @@ HTML_TEMPLATE = '''
                     <button class="btn btn-primary" type="button" onclick="changeAccountPassword()" data-i18n="change_password">Change Password</button>
                 </div>
 
-                <h3 class="settings-group" data-en="License" data-ar="الترخيص">License</h3>
-                <div class="section-card" id="license-card" style="max-width:460px;margin-bottom:18px;">
-                    <div class="license-preview__grid" id="license-card-grid"></div>
-                    <div id="license-card-empty" class="muted" style="display:none;font-size:0.9em;line-height:1.6;"
-                         data-en="No active license on this server." data-ar="لا يوجد ترخيص نشط على هذا الخادم.">No active license on this server.</div>
-                </div>
-
                 <h3 class="settings-group" data-en="Sync &amp; Connectivity" data-ar="المزامنة والاتصال">Sync &amp; Connectivity</h3>
                 <div class="section-card" style="max-width:560px;margin-bottom:18px;">
                     <p style="margin:0 0 12px;color:var(--muted);font-size:0.9em;line-height:1.6;"
@@ -2670,10 +2665,11 @@ HTML_TEMPLATE = '''
                   </div>
                 </details>
 
-                <h3 class="settings-group" data-en="Help" data-ar="المساعدة">Help</h3>
-                <div id="support-content"></div>
-                <div style="margin-top:20px;">
-                    <button class="btn btn-primary" onclick="loadSupportSection()" data-i18n="refresh_help">Refresh Help</button>
+                <h3 class="settings-group" data-en="License" data-ar="الترخيص">License</h3>
+                <div class="section-card" id="license-card" style="max-width:460px;margin-bottom:18px;">
+                    <div class="license-preview__grid" id="license-card-grid"></div>
+                    <div id="license-card-empty" class="muted" style="display:none;font-size:0.9em;line-height:1.6;"
+                         data-en="No active license on this server." data-ar="لا يوجد ترخيص نشط على هذا الخادم.">No active license on this server.</div>
                 </div>
             </div>
         </div>
@@ -3756,13 +3752,27 @@ HTML_TEMPLATE = '''
         }
 
         // ── Doctor name edit ──────────────────────────────────
+        // Render the header doctor badge for the current language; when no name is
+        // set (fresh install ships empty), show a faint "add doctor name" prompt
+        // instead of a blank clickable gap.
+        function refreshDoctorBadge() {
+            const el = document.getElementById('doctor-name-display');
+            if (!el) return;
+            const name = ((translations[currentLanguage] && translations[currentLanguage].doctor_name) || '').trim();
+            if (name) {
+                el.textContent = name;
+                el.classList.remove('is-placeholder');
+            } else {
+                el.textContent = currentLanguage === 'ar' ? 'أضف اسم الطبيب' : 'Add doctor name';
+                el.classList.add('is-placeholder');
+            }
+        }
         async function loadDoctorName() {
             try {
                 const d = await fetch('/api/clinic-settings').then(r => r.json());
                 if (d.doctor_name)    translations.en.doctor_name = d.doctor_name;
                 if (d.doctor_name_ar) translations.ar.doctor_name = d.doctor_name_ar;
-                const el = document.getElementById('doctor-name-display');
-                if (el) el.textContent = translations[currentLanguage]?.doctor_name || d.doctor_name || '';
+                refreshDoctorBadge();
                 const inp = document.getElementById('doctor-name-en-input');
                 const inpAr = document.getElementById('doctor-name-ar-input');
                 if (inp)   inp.value   = d.doctor_name    || '';
@@ -3800,8 +3810,7 @@ HTML_TEMPLATE = '''
                 if (!resp.ok) { alert(t('save_failed','Save failed')); return; }
                 if (nameEn) translations.en.doctor_name = nameEn;
                 if (nameAr) translations.ar.doctor_name = nameAr;
-                const el = document.getElementById('doctor-name-display');
-                if (el) el.textContent = translations[currentLanguage]?.doctor_name || nameEn;
+                refreshDoctorBadge();
                 document.getElementById('doctor-edit-popover')?.classList.remove('open');
             } catch(_) { alert(t('save_failed','Save failed')); }
         }
@@ -3844,6 +3853,7 @@ HTML_TEMPLATE = '''
 
             const langBtn = document.getElementById('language-toggle');
             if (langBtn) langBtn.textContent = currentLanguage === 'ar' ? 'EN' : 'AR';
+            refreshDoctorBadge();
 
             const activeTab = document.querySelector('.tab-content.active')?.id;
             if (activeTab === 'dashboard') loadDashboard();
@@ -5162,7 +5172,6 @@ HTML_TEMPLATE = '''
         }
 
         async function loadSupportSection() {
-            await loadSupportTips();
             await loadCloudSyncSettings();
             loadBluetoothSyncSettings();
             bindBluetoothSyncControls();
