@@ -58,6 +58,32 @@ class CloudSyncService {
     );
   }
 
+  /// Short-serial online activation: ask the cloud for the cached signed token of
+  /// [serialNumber] and claim a device slot. Returns the parsed cloud body — which
+  /// carries `valid` and, on success, `serial_token` — or null when unreachable.
+  /// Business failures come back as `{valid:false, reason:...}` (HTTP 200), not an
+  /// exception, mirroring `/api/license/validate`.
+  Future<Map<String, dynamic>?> claim({
+    required String cloudUrl,
+    required String serialNumber,
+    required String deviceFingerprint,
+    String deviceName = 'mobile',
+  }) async {
+    try {
+      return await _api.postJson(
+        baseUrl: AppConfig.normalizeBaseUrl(cloudUrl),
+        path: '/api/license/claim',
+        body: <String, dynamic>{
+          'serial_number': serialNumber.trim().toUpperCase(),
+          'device_fingerprint': deviceFingerprint,
+          'device_name': deviceName,
+        },
+      );
+    } on ApiException {
+      return null;
+    }
+  }
+
   /// Is this URL serving the API right now? For the cloud node a clinic token is
   /// required on every `/api/*` call, so pass it when checking the cloud.
   Future<bool> isReachable(String url, {String? clinicToken}) async {

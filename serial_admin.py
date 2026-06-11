@@ -11,6 +11,8 @@ import io
 import csv
 import json
 import os
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify, render_template_string
@@ -145,6 +147,61 @@ def mint():
     return jsonify({'records': records})
 
 
+_BAKED_CLOUD_URL = 'https://app.dentacare.tech'
+
+
+def _upload_records_to_cloud(records, cloud_url, admin_token):
+    """POST each minted serial's signed token to the cloud's admin register-serial
+    endpoint so a fresh clinic can later activate by short serial alone. Returns a
+    list of per-serial results. Pure stdlib HTTP; never raises (per-row errors are
+    captured into the result list)."""
+    base = str(cloud_url or '').strip().rstrip('/')
+    results = []
+    for r in records:
+        serial = r.get('serial')
+        token = r.get('offline_token')
+        if not (base and token):
+            results.append({'serial': serial, 'ok': False, 'error': 'missing url or token'})
+            continue
+        try:
+            data = json.dumps({'serial_token': token}).encode('utf-8')
+            req = urllib.request.Request(
+                f'{base}/api/license/admin/register-serial', data=data, method='POST',
+                headers={'Content-Type': 'application/json', 'X-Admin-Token': admin_token or ''})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = json.loads(resp.read().decode('utf-8') or '{}')
+            results.append({'serial': serial, 'ok': bool(body.get('success')),
+                            'already_existed': bool(body.get('already_existed'))})
+        except urllib.error.HTTPError as exc:
+            try:
+                msg = json.loads(exc.read().decode('utf-8') or '{}').get('error') or f'HTTP {exc.code}'
+            except Exception:
+                msg = f'HTTP {exc.code}'
+            results.append({'serial': serial, 'ok': False, 'error': msg})
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            results.append({'serial': serial, 'ok': False, 'error': str(exc)})
+    return results
+
+
+@app.route('/api/upload-cloud', methods=['POST'])
+def upload_cloud():
+    """Publish minted serials to the cloud registry (admin-token gated on the cloud
+    side). Loopback-only, like the rest of this console."""
+    data = request.json or {}
+    records = data.get('records')
+    cloud_url = str(data.get('cloud_url') or '').strip()
+    admin_token = str(data.get('admin_token') or '').strip()
+    if not isinstance(records, list) or not records:
+        return jsonify({'error': 'No minted serials to upload — mint first.'}), 400
+    if not cloud_url:
+        return jsonify({'error': 'cloud_url is required'}), 400
+    if not admin_token:
+        return jsonify({'error': 'admin_token is required'}), 400
+    results = _upload_records_to_cloud(records, cloud_url, admin_token)
+    ok = sum(1 for r in results if r.get('ok'))
+    return jsonify({'results': results, 'ok_count': ok, 'total': len(results)})
+
+
 INDEX_TEMPLATE = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -213,8 +270,18 @@ INDEX_TEMPLATE = r'''<!doctype html>
       <button class="ghost" onclick="downloadJson()">Download JSON</button>
       <button class="ghost" onclick="downloadCsv()">Download CSV</button>
     </div>
-    <p style="font-size:.82rem;color:#8aa0b4;margin:8px 0 4px">Give the clinic owner: the <b style="color:#3ddc97">Serial Number</b> + the <b style="color:#3ddc97">Activation Code</b>. They enter both in the app.</p>
+    <p style="font-size:.82rem;color:#8aa0b4;margin:8px 0 4px">Give the clinic owner the <b style="color:#3ddc97">Serial Number</b> only — they type it in the app and it activates online. (The full Activation Code is the offline fallback.)</p>
     <table id="results"><thead><tr><th>Serial Number</th><th>Expires</th><th>Activation Code</th><th></th></tr></thead><tbody></tbody></table>
+    <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px;">
+      <h2 style="margin-bottom:8px;">Publish to cloud (enable short-serial activation)</h2>
+      <p class="muted" style="font-size:.82rem;margin:0 0 8px;">Uploads these serials to the cloud registry so the clinic can activate by typing the short serial only. Needs the cloud admin token.</p>
+      <div class="grid grid-2">
+        <div><label>Cloud URL</label><input id="c-url" value="https://app.dentacare.tech"></div>
+        <div><label>Admin token (X-Admin-Token)</label><input id="c-token" type="password" placeholder="CLINIC_ADMIN_API_TOKEN"></div>
+      </div>
+      <button onclick="uploadCloud()">Upload minted serials to cloud</button>
+      <div id="c-result" class="muted" style="margin-top:8px;font-size:.85rem;"></div>
+    </div>
   </section>
 </main>
 <script>
@@ -284,6 +351,26 @@ INDEX_TEMPLATE = r'''<!doctype html>
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name; a.click();
     URL.revokeObjectURL(a.href);
+  }
+  async function uploadCloud() {
+    if (!lastRecords.length) { alert('Mint serials first.'); return; }
+    const out = document.getElementById('c-result');
+    out.textContent = 'Uploading…';
+    try {
+      const res = await fetch('/api/upload-cloud', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          records: lastRecords,
+          cloud_url: document.getElementById('c-url').value.trim(),
+          admin_token: document.getElementById('c-token').value.trim()
+        })
+      });
+      const body = await res.json();
+      if (!res.ok) { out.textContent = body.error || 'Upload failed.'; return; }
+      const fails = (body.results || []).filter(r => !r.ok);
+      out.textContent = 'Uploaded ' + body.ok_count + ' / ' + body.total + ' serial(s).'
+        + (fails.length ? ' Failed: ' + fails.map(f => f.serial + ' (' + (f.error || 'error') + ')').join(', ') : ' All good.');
+    } catch (e) { out.textContent = 'Network error: ' + e; }
   }
   function downloadJson() { _download('serials.json', 'application/json', JSON.stringify(lastRecords, null, 2)); }
   function downloadCsv() {

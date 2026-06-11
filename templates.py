@@ -240,73 +240,21 @@ HTML_TEMPLATE = '''
         }
         .doctor-badge:hover .doctor-edit-icon { opacity: 1; }
 
-        /* License chip (header) — always-visible active serial */
-        .license-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            padding: 8px 12px;
-            border-radius: 13px;
-            font-weight: 700;
-            font-size: 0.82rem;
-            color: #fff;
-            border: 1px solid rgba(255,255,255,0.28);
-            background: rgba(255,255,255,0.14);
-            backdrop-filter: blur(8px);
-            cursor: pointer;
-            white-space: nowrap;
-            user-select: none;
-            letter-spacing: 0.01em;
-            font-family: inherit;
-            transition: background 0.18s, border-color 0.18s, transform 0.12s;
-        }
-        .license-chip:hover {
-            background: rgba(255,255,255,0.22);
-            border-color: rgba(255,255,255,0.44);
-            transform: translateY(-1px);
-        }
-        .license-chip:active { transform: translateY(0); }
-        .license-chip.hidden { display: none; }
-        .license-chip__dot {
-            width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-            background: #46d39a; box-shadow: 0 0 0 3px rgba(70,211,154,0.25);
-        }
-        .license-chip--warn .license-chip__dot { background: #ffb13d; box-shadow: 0 0 0 3px rgba(255,177,61,0.25); }
-        .license-chip__serial { font-variant-numeric: tabular-nums; }
-
-        /* License details popover (body child to escape backdrop-filter containment) */
-        .license-pop {
-            display: none;
-            position: fixed;
-            min-width: 300px;
-            max-width: 360px;
-            background: var(--panel);
-            border: 1px solid var(--line);
-            border-radius: 16px;
-            padding: 18px;
-            box-shadow: 0 20px 48px rgba(0,0,0,0.22), 0 2px 8px rgba(0,0,0,0.1);
-            z-index: 9999;
-        }
-        .license-pop.open { display: block; animation: popoverIn 0.16s ease; }
-        .license-pop__title {
-            font-size: 0.75rem; font-weight: 800; color: var(--muted);
-            text-transform: uppercase; letter-spacing: 0.07em;
-            margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
-        }
-        .license-pop__serial-row { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
-        .license-pop__copy {
+        /* License card (Settings → License) — moved off the header into Settings */
+        .license-card__serial-row { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+        .license-card__copy {
             border: 1px solid var(--line); background: var(--bg-1); color: var(--text);
-            border-radius: 8px; padding: 5px 10px; font-size: 0.76rem; font-weight: 700;
+            border-radius: 8px; padding: 4px 10px; font-size: 0.76rem; font-weight: 700;
             cursor: pointer; font-family: inherit; transition: border-color 0.15s;
         }
-        .license-pop__copy:hover { border-color: var(--brand); }
-        .license-pop__actions { margin-top: 16px; display: flex; }
-        .license-pop__close {
-            flex: 1; padding: 9px; background: var(--bg-1); color: var(--text);
-            border: 1px solid var(--line); border-radius: 9px; font-weight: 700;
-            font-size: 0.85rem; cursor: pointer; font-family: inherit; transition: border-color 0.15s;
+        .license-card__copy:hover { border-color: var(--brand); }
+        .license-card__status { display: inline-flex; align-items: center; gap: 7px; justify-content: flex-end; }
+        .license-card__dot {
+            width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+            background: #46d39a; box-shadow: 0 0 0 3px rgba(70,211,154,0.22);
         }
-        .license-pop__close:hover { border-color: var(--brand); }
+        .license-card__dot--warn { background: #ffb13d; box-shadow: 0 0 0 3px rgba(255,177,61,0.22); }
+        .license-card__dot--off { background: var(--muted); box-shadow: none; }
 
         /* Doctor name edit popover */
         .doctor-edit-popover {
@@ -1820,6 +1768,16 @@ HTML_TEMPLATE = '''
         .license-overlay__status.is-error { color:var(--danger); }
         .license-overlay__status.is-busy { color:var(--brand-2); }
 
+        /* Air-gapped fallback: paste the full long token when there is no internet */
+        .license-airgap { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; }
+        .license-airgap > summary {
+            cursor:pointer; font-size:0.82rem; font-weight:700; color:var(--brand-2);
+            list-style:none; user-select:none;
+        }
+        .license-airgap > summary::-webkit-details-marker { display:none; }
+        .license-airgap > summary::before { content:"\\25B8 "; }
+        .license-airgap[open] > summary::before { content:"\\25BE "; }
+
         /* Confirmation card: what the pasted activation code decodes to */
         .license-preview {
             margin-top:16px; padding:14px 16px;
@@ -1874,15 +1832,26 @@ HTML_TEMPLATE = '''
           </div>
         </div>
 
-        <!-- State A: enter the activation code -->
+        <!-- State A: enter the short activation code (serial); verified online -->
         <div id="license-view-activate">
           <h2 class="license-card__title">Activate this clinic <span>تفعيل العيادة</span></h2>
-          <p class="license-card__lead">Paste the activation code from your vendor — the serial number is contained inside it.<br><span dir="rtl">الصق كود التفعيل الذي تلقيته من المورد — رقم السيريال مضمّن بداخله.</span></p>
-          <label class="license-field__label" for="license-gate-token">Activation Code · كود التفعيل</label>
-          <textarea id="license-gate-token" class="license-field" rows="4" placeholder="eyJ..." oninput="onActivationCodeInput()" spellcheck="false" autocomplete="off"></textarea>
-          <div id="license-code-preview" class="license-preview hidden"></div>
+          <p class="license-card__lead">Enter the activation code from your vendor. You will need an internet connection the first time; after that the clinic works offline.<br><span dir="rtl">أدخل كود التفعيل الذي تلقيته من المورد. يلزم اتصال بالإنترنت في المرة الأولى فقط، ثم تعمل العيادة دون إنترنت.</span></p>
+          <label class="license-field__label" for="license-gate-serial">Activation Code · كود التفعيل</label>
+          <input id="license-gate-serial" class="license-field" type="text" placeholder="DENTAL-XXXXX-XXXXX-XXXXX"
+                 spellcheck="false" autocomplete="off" autocapitalize="characters" maxlength="40"
+                 style="text-transform:uppercase;font-variant-numeric:tabular-nums;letter-spacing:0.04em;"
+                 onkeydown="if(event.key==='Enter')submitLicenseActivation()">
           <button type="button" class="btn btn-primary license-card__cta" onclick="submitLicenseActivation()">Activate · تفعيل</button>
           <div id="license-gate-status" class="license-overlay__status"></div>
+
+          <details id="license-airgap" class="license-airgap">
+            <summary>Activate offline (paste full code) · التفعيل دون إنترنت</summary>
+            <p class="license-card__lead" style="margin-top:10px;">No internet? Paste the full activation code your vendor gave you.<br><span dir="rtl">لا يوجد إنترنت؟ الصق كود التفعيل الكامل الذي زودك به المورد.</span></p>
+            <label class="license-field__label" for="license-gate-token">Full activation code · الكود الكامل</label>
+            <textarea id="license-gate-token" class="license-field" rows="4" placeholder="eyJ..." oninput="onActivationCodeInput()" spellcheck="false" autocomplete="off"></textarea>
+            <div id="license-code-preview" class="license-preview hidden"></div>
+            <button type="button" class="btn btn-primary license-card__cta" onclick="submitLicenseActivationToken()">Activate offline · تفعيل دون إنترنت</button>
+          </details>
         </div>
 
         <!-- State B: activated, offer cloud backup -->
@@ -1914,10 +1883,6 @@ HTML_TEMPLATE = '''
                         <span data-i18n="doctor_name" class="doctor-badge-name" id="doctor-name-display">{{ DOCTOR_NAME }}</span>
                         <span class="doctor-edit-icon">✏ edit</span>
                     </div>
-                    <button type="button" id="license-chip" class="license-chip hidden" onclick="toggleLicensePopover(event)" title="License details · تفاصيل الترخيص">
-                        <span class="license-chip__dot"></span>
-                        <span class="license-chip__serial" id="license-chip-label">License</span>
-                    </button>
                     <button id="theme-toggle" class="theme-toggle" title="Night Mode" aria-label="Night Mode">🌙</button>
                     <button id="language-toggle" class="language-toggle">EN</button>
                     <a id="logout-link" href="/logout" class="language-toggle" style="text-decoration:none;display:inline-flex;align-items:center;" title="Sign out" data-i18n="logout">Logout</a>
@@ -2639,6 +2604,13 @@ HTML_TEMPLATE = '''
                         <input type="password" id="acct-confirm-password" autocomplete="new-password">
                     </div>
                     <button class="btn btn-primary" type="button" onclick="changeAccountPassword()" data-i18n="change_password">Change Password</button>
+                </div>
+
+                <h3 class="settings-group" data-en="License" data-ar="الترخيص">License</h3>
+                <div class="section-card" id="license-card" style="max-width:460px;margin-bottom:18px;">
+                    <div class="license-preview__grid" id="license-card-grid"></div>
+                    <div id="license-card-empty" class="muted" style="display:none;font-size:0.9em;line-height:1.6;"
+                         data-en="No active license on this server." data-ar="لا يوجد ترخيص نشط على هذا الخادم.">No active license on this server.</div>
                 </div>
 
                 <h3 class="settings-group" data-en="Sync &amp; Connectivity" data-ar="المزامنة والاتصال">Sync &amp; Connectivity</h3>
@@ -5194,6 +5166,7 @@ HTML_TEMPLATE = '''
             await loadCloudSyncSettings();
             loadBluetoothSyncSettings();
             bindBluetoothSyncControls();
+            loadLicenseCard();
         }
 
         async function loadReceivables() {
@@ -7316,11 +7289,46 @@ HTML_TEMPLATE = '''
                           + '<div class="license-preview__grid">' + grid + '</div>';
             box.classList.remove('hidden');
         }
+        // Primary path: the short serial, verified ONLINE against the cloud (which
+        // hands back the cached signed token). Falls back to the air-gapped paste
+        // flow below when the cloud is unreachable.
         async function submitLicenseActivation() {
+            const serial = (document.getElementById('license-gate-serial').value || '').trim().toUpperCase();
+            const status = document.getElementById('license-gate-status');
+            const ar = _ar();
+            if (!serial) { setGateStatus(status, ar ? 'الرجاء إدخال كود التفعيل.' : 'Please enter the activation code.', 'is-error'); return; }
+            setGateStatus(status, ar ? 'جارٍ التفعيل...' : 'Activating...', 'is-busy');
+            try {
+                const res = await fetch('/api/license/activate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ serial_number: serial })
+                });
+                const body = await res.json();
+                if (!res.ok) {
+                    if (body.reason === 'cloud_unreachable') {
+                        setGateStatus(status, ar
+                            ? 'تعذّر الوصول إلى خادم التفعيل. تحقّق من الإنترنت، أو استخدم خيار التفعيل دون إنترنت أدناه.'
+                            : 'Could not reach the activation server. Check your internet, or use the offline option below.', 'is-error');
+                        const ag = document.getElementById('license-airgap');
+                        if (ag) ag.open = true;
+                        return;
+                    }
+                    setGateStatus(status, body.error || (ar ? 'فشل التفعيل.' : 'Activation failed.'), 'is-error');
+                    return;
+                }
+                window.__activeSerial = (body.serial_number || serial);
+                setGateStatus(status, '', null);
+                setGateView('success');
+            } catch (e) { setGateStatus(status, ar ? 'خطأ في الشبكة. تحقّق من الاتصال وحاول مجددًا.' : 'Network error. Check your connection and try again.', 'is-error'); }
+        }
+        // Air-gapped fallback: paste the full long signed token (verified locally,
+        // no internet needed). Same endpoint, serial_token instead of serial_number.
+        async function submitLicenseActivationToken() {
             const token = (document.getElementById('license-gate-token').value || '').trim();
             const status = document.getElementById('license-gate-status');
             const ar = _ar();
-            if (!token) { setGateStatus(status, ar ? 'الرجاء لصق كود التفعيل.' : 'Please paste the activation code.', 'is-error'); return; }
+            if (!token) { setGateStatus(status, ar ? 'الرجاء لصق كود التفعيل الكامل.' : 'Please paste the full activation code.', 'is-error'); return; }
             setGateStatus(status, ar ? 'جارٍ التفعيل...' : 'Activating...', 'is-busy');
             try {
                 const res = await fetch('/api/license/activate', {
@@ -7371,53 +7379,53 @@ HTML_TEMPLATE = '''
         }
         document.addEventListener('DOMContentLoaded', applyLicenseGate);
 
-        // ── License chip (header) ──
-        // Surfaces the active serial so the user can always SEE which license this
-        // install is on (the "I can't see the key anywhere" complaint). Reads the
-        // public /api/license/status — serial only, never the signed token.
+        // ── License card (Settings → License) ──
+        // The active serial + license details live in Settings now (moved off the
+        // header). Reads the public /api/license/status — serial only, never the
+        // signed token. Re-rendered by loadSupportSection() so it follows the
+        // language toggle.
         let __licenseStatus = null;
-        async function loadLicenseChip() {
+        async function loadLicenseCard() {
             try {
                 const res = await fetch('/api/license/status');
-                const s = await res.json();
-                __licenseStatus = s;
-                const chip = document.getElementById('license-chip');
-                const label = document.getElementById('license-chip-label');
-                if (!chip || !label) return;
-                if (!s || s.licensed === false || !s.serial_number) {
-                    chip.classList.add('hidden');   // gate already covers unlicensed
-                    return;
-                }
-                label.textContent = s.serial_number;
-                chip.classList.remove('hidden', 'license-chip--warn');
-                if (s.in_grace) chip.classList.add('license-chip--warn');
-            } catch (e) { /* offline / no license — leave chip hidden */ }
+                __licenseStatus = await res.json();
+            } catch (e) { __licenseStatus = null; }
+            renderLicenseCard();
         }
         function _licenseRow(k, vHtml) {
             return '<div class="license-preview__k">' + escapeHtml(k) + '</div>'
                  + '<div class="license-preview__v">' + vHtml + '</div>';
         }
-        function renderLicensePopover() {
+        function renderLicenseCard() {
+            const grid = document.getElementById('license-card-grid');
+            const empty = document.getElementById('license-card-empty');
+            if (!grid) return;
             const ar = _ar();
             const s = __licenseStatus || {};
-            const grid = document.getElementById('license-pop-grid');
-            const title = document.getElementById('license-pop-title');
-            const close = document.getElementById('license-pop-close');
-            if (title) title.textContent = ar ? 'تفاصيل الترخيص' : 'License details';
-            if (close) close.textContent = ar ? 'إغلاق' : 'Close';
+            if (!s || s.licensed === false || !s.serial_number) {
+                grid.innerHTML = '';
+                if (empty) empty.style.display = '';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
             const serial = s.serial_number || '—';
+            const dotCls = s.in_grace ? 'license-card__dot license-card__dot--warn'
+                         : (s.licensed ? 'license-card__dot' : 'license-card__dot license-card__dot--off');
             const statusTxt = s.in_grace
                 ? (ar ? 'فترة سماح' : 'Grace period')
                 : (s.licensed ? (ar ? 'نشط' : 'Active') : (ar ? 'غير نشط' : 'Inactive'));
             const serialCell =
-                '<span class="license-pop__serial-row">'
-              + '<span id="license-pop-serial">' + escapeHtml(serial) + '</span>'
-              + '<button type="button" class="license-pop__copy" id="license-pop-copy" onclick="copyLicenseSerial()">'
+                '<span class="license-card__serial-row">'
+              + '<span id="license-card-serial">' + escapeHtml(serial) + '</span>'
+              + '<button type="button" class="license-card__copy" id="license-card-copy" onclick="copyLicenseSerial()">'
               + (ar ? 'نسخ' : 'Copy') + '</button></span>';
+            const statusCell =
+                '<span class="license-card__status"><span class="' + dotCls + '"></span>'
+              + escapeHtml(statusTxt) + '</span>';
             let html = _licenseRow(ar ? 'السيريال' : 'Serial', serialCell);
             if (s.clinic_name) html += _licenseRow(ar ? 'العيادة' : 'Clinic', escapeHtml(String(s.clinic_name)));
             if (s.plan_name)   html += _licenseRow(ar ? 'الباقة' : 'Plan', escapeHtml(String(s.plan_name)));
-            html += _licenseRow(ar ? 'الحالة' : 'Status', escapeHtml(statusTxt));
+            html += _licenseRow(ar ? 'الحالة' : 'Status', statusCell);
             if (s.max_devices) {
                 const used = (s.active_devices === 0 || s.active_devices) ? String(s.active_devices) : '?';
                 html += _licenseRow(ar ? 'الأجهزة' : 'Devices', escapeHtml(used + ' / ' + String(s.max_devices)));
@@ -7425,37 +7433,11 @@ HTML_TEMPLATE = '''
             if (s.expires_at) html += _licenseRow(ar ? 'تنتهي في' : 'Expires', escapeHtml(String(s.expires_at).slice(0, 10)));
             grid.innerHTML = html;
         }
-        function toggleLicensePopover(evt) {
-            if (evt) evt.stopPropagation();
-            const pop = document.getElementById('license-pop');
-            const chip = document.getElementById('license-chip');
-            if (!pop || !chip) return;
-            if (pop.classList.contains('open')) { closeLicensePopover(); return; }
-            renderLicensePopover();
-            const r = chip.getBoundingClientRect();
-            pop.style.top = (r.bottom + 8) + 'px';
-            pop.style.left = '';
-            pop.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
-            pop.classList.add('open');
-            setTimeout(function () { document.addEventListener('click', _closeLicenseOnOutside); }, 0);
-        }
-        function closeLicensePopover() {
-            const pop = document.getElementById('license-pop');
-            if (pop) pop.classList.remove('open');
-            document.removeEventListener('click', _closeLicenseOnOutside);
-        }
-        function _closeLicenseOnOutside(e) {
-            const pop = document.getElementById('license-pop');
-            const chip = document.getElementById('license-chip');
-            if (!pop) return;
-            if (pop.contains(e.target) || (chip && chip.contains(e.target))) return;
-            closeLicensePopover();
-        }
         async function copyLicenseSerial() {
             const s = (__licenseStatus && __licenseStatus.serial_number) || '';
             if (!s) return;
             const ar = _ar();
-            const btn = document.getElementById('license-pop-copy');
+            const btn = document.getElementById('license-card-copy');
             const done = function () {
                 if (!btn) return;
                 btn.textContent = ar ? 'تم النسخ ✓' : 'Copied ✓';
@@ -7473,7 +7455,7 @@ HTML_TEMPLATE = '''
                 } catch (e2) { if (btn) btn.textContent = ar ? 'تعذّر النسخ' : 'Copy failed'; }
             }
         }
-        document.addEventListener('DOMContentLoaded', loadLicenseChip);
+        document.addEventListener('DOMContentLoaded', loadLicenseCard);
     </script>
 
     <!-- Doctor name edit popover: direct body child to escape backdrop-filter containment -->
@@ -7493,14 +7475,6 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <!-- License details popover: direct body child to escape backdrop-filter containment -->
-    <div class="license-pop" id="license-pop" onclick="event.stopPropagation()">
-        <div class="license-pop__title"><span>&#128273;</span><span id="license-pop-title">License details</span></div>
-        <div class="license-preview__grid" id="license-pop-grid"></div>
-        <div class="license-pop__actions">
-            <button type="button" class="license-pop__close" id="license-pop-close" onclick="closeLicensePopover()">Close</button>
-        </div>
-    </div>
 </body>
 </html>
 '''

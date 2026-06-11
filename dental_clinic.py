@@ -213,7 +213,7 @@ DEFAULT_LICENSE_DAYS = 30
 DEFAULT_LICENSE_GRACE_DAYS = 7
 
 # Endpoints reachable on the cloud node without a clinic token.
-_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/api/license/admin/revoke', '/healthz', '/logo', '/favicon.ico'}
+_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/api/license/claim', '/api/license/admin/revoke', '/api/license/admin/register-serial', '/healthz', '/logo', '/favicon.ico'}
 # /api/data/ is forwarded through on the cloud node so each handler can enforce its OWN
 # CLOUD_MODE 404 gate. INVARIANT: every /api/data/* route MUST start with `if CLOUD_MODE: return 404`.
 _CLOUD_OPEN_PREFIXES = ('/static/', '/api/data/')
@@ -660,6 +660,23 @@ def _validate_with_cloud(serial_token, fingerprint, device_name=''):
     return payload if isinstance(payload, dict) else None
 
 
+def _claim_with_cloud(serial_number, fingerprint, device_name=''):
+    """Short-serial online activation: ask the cloud for the cached signed token of
+    `serial_number` and claim a device slot. Returns the parsed cloud body (dict),
+    or None when the cloud is unreachable / not configured."""
+    base = _license_cloud_url()
+    if not base:
+        return None
+    body = {'serial_number': serial_number, 'device_fingerprint': fingerprint}
+    if device_name:
+        body['device_name'] = device_name
+    try:
+        _status, payload = _cloud_http_request('POST', f'{base}/api/license/claim', None, body)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def verify_offline_license_token(token, signing_key):
     payload = decode_offline_license_token(token, signing_key)
     if not payload:
@@ -1019,16 +1036,18 @@ def init_database():
     # and per-serial device caps. Only populated on the cloud master DB.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS license_serials (
-            serial      TEXT PRIMARY KEY,
-            status      TEXT NOT NULL DEFAULT 'active',
-            plan_name   TEXT,
-            max_devices INTEGER NOT NULL DEFAULT 3,
-            issued_at   TEXT,
-            expires_at  TEXT,
-            grace_until TEXT,
-            clinic_id   INTEGER,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            serial       TEXT PRIMARY KEY,
+            status       TEXT NOT NULL DEFAULT 'active',
+            plan_name    TEXT,
+            max_devices  INTEGER NOT NULL DEFAULT 3,
+            issued_at    TEXT,
+            expires_at   TEXT,
+            grace_until  TEXT,
+            clinic_id    INTEGER,
+            serial_token TEXT,
+            clinic_name  TEXT,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     cursor.execute('''
@@ -1101,6 +1120,11 @@ def init_database():
     ensure_table_column(cursor, 'expenses', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
     ensure_table_column(cursor, 'billing', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
     ensure_table_column(cursor, 'holidays', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    # Cloud authority: cache the signed token + clinic name so a clinic can later
+    # activate by short serial alone — the cloud hands the stored token back via
+    # /api/license/claim (existing master DBs predate these columns).
+    ensure_table_column(cursor, 'license_serials', 'serial_token', 'TEXT')
+    ensure_table_column(cursor, 'license_serials', 'clinic_name', 'TEXT')
 
     # New tables for features
     cursor.execute('''
@@ -4545,10 +4569,11 @@ def register_clinic():
     # Ed25519 vendor-signature gate. Mandatory by default (A1). The validate
     # endpoint is the primary authority; register still verifies for safety.
     pub = _serial_public_key()
+    serial_payload = None
     if _REQUIRE_SIGNED_SERIAL or offline_token:
         if pub is None:
             return jsonify({'error': 'Server signing key not configured'}), 500
-        ok, reason, _payload = _verify_serial_token(serial_number, offline_token)
+        ok, reason, serial_payload = _verify_serial_token(serial_number, offline_token)
         if not ok:
             return jsonify({'error': reason}), 403
 
@@ -4560,6 +4585,13 @@ def register_clinic():
     ).fetchone()
     if existing:
         active = int(existing['active']) == 1
+        # Pre-load the signed token so this serial is claimable by short serial alone.
+        if active and offline_token and serial_payload:
+            try:
+                _upsert_cloud_serial(master, serial_payload, offline_token, existing['id'])
+                master.commit()
+            except sqlite3.Error:
+                pass
         master.close()
         if not active:
             return jsonify({'error': 'This serial is registered to a deactivated clinic'}), 403
@@ -4603,6 +4635,13 @@ def register_clinic():
         return jsonify({'error': 'Failed to initialise clinic database'}), 500
     finally:
         _set_request_db_path(None)
+    # Pre-load the signed token so this serial is claimable by short serial alone.
+    if offline_token and serial_payload:
+        try:
+            _upsert_cloud_serial(master, serial_payload, offline_token, clinic_id)
+            master.commit()
+        except sqlite3.Error:
+            pass
     master.close()
 
     return jsonify({
@@ -4658,9 +4697,10 @@ def validate_license():
             expires_at, grace_until, plan_name = token_exp, payload.get('grace_until'), payload.get('plan_name')
             conn.execute(
                 'INSERT INTO license_serials (serial, status, plan_name, max_devices, '
-                'issued_at, expires_at, grace_until) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                'issued_at, expires_at, grace_until, serial_token, clinic_name) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (serial, status, plan_name, max_devices, payload.get('issued_at'),
-                 expires_at, grace_until))
+                 expires_at, grace_until, token, payload.get('clinic_name')))
         else:
             status, max_devices, expires_at, grace_until, plan_name = row
             # Renewal: a later-signed token extends the window and reactivates an
@@ -4676,9 +4716,9 @@ def validate_license():
                     status = 'active'
                 conn.execute(
                     'UPDATE license_serials SET expires_at=?, grace_until=?, '
-                    'max_devices=?, plan_name=?, status=?, updated_at=CURRENT_TIMESTAMP '
-                    'WHERE serial=?',
-                    (expires_at, grace_until, max_devices, plan_name, status, serial))
+                    'max_devices=?, plan_name=?, status=?, serial_token=?, '
+                    'updated_at=CURRENT_TIMESTAMP WHERE serial=?',
+                    (expires_at, grace_until, max_devices, plan_name, status, token, serial))
 
         # Status gate (revoked/suspended).
         if status in ('revoked', 'suspended'):
@@ -4727,6 +4767,176 @@ def validate_license():
         'expires_at': expires_at, 'grace_until': grace_until,
         'remaining_slots': max(0, int(max_devices) - used),
     })
+
+
+def _upsert_cloud_serial(conn, payload, token, clinic_id=None):
+    """Cloud master: cache a signed serial's metadata + token in license_serials so
+    it can later be activated by short serial alone (/api/license/claim). Never
+    reactivates a revoked/suspended serial; only extends the window when the
+    incoming token is newer. `conn` is an open sqlite3 connection to
+    MASTER_DB_PATH and the caller owns the transaction/commit."""
+    serial = str(payload.get('serial') or '').strip().upper()
+    if len(serial) < 8 or not token:
+        return
+    plan_name = payload.get('plan_name')
+    clinic_name = payload.get('clinic_name')
+    try:
+        max_devices = max(1, int(payload.get('max_devices') or 3))
+    except (TypeError, ValueError):
+        max_devices = 3
+    expires_at = payload.get('expires_at')
+    grace_until = payload.get('grace_until')
+    issued_at = payload.get('issued_at')
+    row = conn.execute('SELECT status, expires_at FROM license_serials WHERE serial=?',
+                       (serial,)).fetchone()
+    if row is None:
+        conn.execute(
+            'INSERT INTO license_serials (serial, status, plan_name, max_devices, '
+            'issued_at, expires_at, grace_until, serial_token, clinic_name, clinic_id) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (serial, 'active', plan_name, max_devices, issued_at, expires_at,
+             grace_until, token, clinic_name, clinic_id))
+        return
+    status, cur_exp = row
+    if status in ('revoked', 'suspended'):
+        # Keep the status + window; just refresh the cached token + clinic info.
+        conn.execute('UPDATE license_serials SET serial_token=?, '
+                     'clinic_name=COALESCE(?, clinic_name), clinic_id=COALESCE(?, clinic_id), '
+                     'updated_at=CURRENT_TIMESTAMP WHERE serial=?',
+                     (token, clinic_name, clinic_id, serial))
+        return
+    newer = bool(expires_at and (not cur_exp or expires_at > cur_exp))
+    if newer:
+        set_status = 'active' if status == 'expired' else status
+        conn.execute(
+            'UPDATE license_serials SET status=?, plan_name=?, max_devices=?, '
+            'expires_at=?, grace_until=?, serial_token=?, '
+            'clinic_name=COALESCE(?, clinic_name), clinic_id=COALESCE(?, clinic_id), '
+            'updated_at=CURRENT_TIMESTAMP WHERE serial=?',
+            (set_status, plan_name, max_devices, expires_at, grace_until, token,
+             clinic_name, clinic_id, serial))
+    else:
+        conn.execute('UPDATE license_serials SET serial_token=?, '
+                     'clinic_name=COALESCE(?, clinic_name), clinic_id=COALESCE(?, clinic_id), '
+                     'updated_at=CURRENT_TIMESTAMP WHERE serial=?',
+                     (token, clinic_name, clinic_id, serial))
+
+
+@app.route('/api/license/claim', methods=['POST'])
+def claim_license():
+    """Cloud node only: short-serial online activation. Given a serial the cloud
+    already knows (pre-loaded by the vendor via /api/license/admin/register-serial,
+    or seen earlier through validate/register), return its cached signed token +
+    license window and atomically claim a device slot — so a clinic activates by
+    typing just the ~22-char serial instead of pasting the long token. Business
+    failures are HTTP 200 with valid=false, mirroring /api/license/validate."""
+    if not CLOUD_MODE:
+        return jsonify({'error': 'Not available on a local server'}), 404
+    limited = _check_validate_rate_limit()
+    if limited is not None:
+        return limited
+
+    data = request.json or {}
+    serial = str(data.get('serial_number') or data.get('serial') or '').strip().upper()
+    fingerprint = str(data.get('device_fingerprint') or '').strip()
+    device_name = str(data.get('device_name') or '').strip()
+    if len(serial) < 8 or not fingerprint:
+        return jsonify({'error': 'serial_number and device_fingerprint are required'}), 400
+    if len(fingerprint) > 256 or len(device_name) > 256:
+        return jsonify({'error': 'device_fingerprint / device_name too long'}), 400
+
+    conn = sqlite3.connect(MASTER_DB_PATH)
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute(
+            'SELECT status, max_devices, expires_at, grace_until, plan_name, serial_token '
+            'FROM license_serials WHERE serial = ?', (serial,)).fetchone()
+        if row is None:
+            conn.commit()
+            return jsonify({'valid': False, 'reason': 'not_found'})
+        status, max_devices, expires_at, grace_until, plan_name, serial_token = row
+        if not serial_token:
+            # Known serial but the signed token was never cached (legacy row) — the
+            # client falls back to the air-gapped paste flow.
+            conn.commit()
+            return jsonify({'valid': False, 'reason': 'no_token'})
+        if status in ('revoked', 'suspended'):
+            conn.commit()
+            return jsonify({'valid': False, 'reason': status, 'status': status})
+        if grace_until:
+            try:
+                if _naive_utc_now() > datetime.fromisoformat(str(grace_until).rstrip('Z')):
+                    conn.execute("UPDATE license_serials SET status='expired', "
+                                 "updated_at=CURRENT_TIMESTAMP WHERE serial=?", (serial,))
+                    conn.commit()
+                    return jsonify({'valid': False, 'reason': 'expired', 'status': 'expired',
+                                    'expires_at': expires_at, 'grace_until': grace_until})
+            except ValueError:
+                pass
+
+        slot = conn.execute(
+            'SELECT id FROM license_device_slots WHERE serial=? AND device_fingerprint=?',
+            (serial, fingerprint)).fetchone()
+        if slot is not None:
+            conn.execute('UPDATE license_device_slots SET last_seen_at=CURRENT_TIMESTAMP, '
+                         'is_active=1, device_name=? WHERE id=?', (device_name, slot[0]))
+        else:
+            active = conn.execute(
+                'SELECT COUNT(*) FROM license_device_slots WHERE serial=? AND is_active=1',
+                (serial,)).fetchone()[0]
+            if active >= int(max_devices):
+                conn.commit()
+                return jsonify({'valid': False, 'reason': 'device_cap_reached',
+                                'status': status, 'max_devices': int(max_devices)})
+            conn.execute('INSERT INTO license_device_slots (serial, device_fingerprint, device_name) '
+                         'VALUES (?, ?, ?)', (serial, fingerprint, device_name))
+        used = conn.execute(
+            'SELECT COUNT(*) FROM license_device_slots WHERE serial=? AND is_active=1',
+            (serial,)).fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({
+        'valid': True, 'serial_token': serial_token, 'status': status,
+        'plan_name': plan_name, 'expires_at': expires_at, 'grace_until': grace_until,
+        'max_devices': int(max_devices), 'remaining_slots': max(0, int(max_devices) - used),
+    })
+
+
+@app.route('/api/license/admin/register-serial', methods=['POST'])
+def license_admin_register_serial():
+    """Cloud node only, admin-token gated. The vendor pre-loads a signed serial into
+    the registry (so a brand-new clinic can activate by short serial alone). Body:
+    {serial_token}. Idempotent — re-uploading refreshes the cached token."""
+    if not CLOUD_MODE:
+        return jsonify({'error': 'Not available on a local server'}), 404
+    limited = _check_validate_rate_limit()
+    if limited is not None:
+        return limited
+    supplied = (request.headers.get('X-Admin-Token') or '').strip().encode('utf-8', 'replace')
+    expected = _ADMIN_API_TOKEN.encode('utf-8') if _ADMIN_API_TOKEN else b''
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return jsonify({'error': 'admin token required'}), 401
+    data = request.json or {}
+    token = str(data.get('serial_token') or '').strip()
+    payload, why = _decode_signed_serial_token(token)
+    if why == 'no_key':
+        return jsonify({'error': 'Server signing key not configured'}), 500
+    if payload is None:
+        return jsonify({'error': why or 'invalid serial token'}), 400
+    serial = str(payload.get('serial') or '').strip().upper()
+    if len(serial) < 8:
+        return jsonify({'error': 'serial too short'}), 400
+    conn = sqlite3.connect(MASTER_DB_PATH)
+    try:
+        existed = conn.execute('SELECT 1 FROM license_serials WHERE serial=?',
+                               (serial,)).fetchone() is not None
+        _upsert_cloud_serial(conn, payload, token)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'serial': serial, 'already_existed': bool(existed)})
 
 
 @app.route('/api/license/admin/revoke', methods=['POST'])
@@ -5094,10 +5304,61 @@ def bt_configure():
 def activate_license():
     data = request.json or {}
     serial_token = str(data.get('serial_token') or '').strip()
+    serial_number = str(data.get('serial_number') or '').strip()
+    device_id = str(data.get('device_id') or '').strip()
     device_name = str(data.get('device_name') or '').strip()
+    # 1) Full signed token pasted (air-gapped / advanced) — verify + store locally.
     if serial_token:
         return _activate_primary(serial_token, device_name)
+    # 2) Short serial only (the default): fetch the cached token from the cloud,
+    #    then activate. A device_id means this is a mobile/LAN attach instead.
+    if serial_number and not device_id:
+        return _activate_by_serial(serial_number, device_name)
+    # 3) LAN-attach a device to a serial already activated on the clinic server.
     return _activate_lan_attach(data)
+
+
+def _activate_by_serial(serial_number, device_name):
+    """Online activation by short serial (~22 chars): fetch the signed token from
+    the cloud (which is the license authority), then run the normal signed-token
+    activation. The air-gapped paste flow stays available when the cloud is
+    unreachable or doesn't yet know the serial."""
+    serial_number = str(serial_number or '').strip().upper()
+    if len(serial_number) < 8:
+        return jsonify({'error': 'Serial number must be at least 8 characters',
+                        'reason': 'bad_serial'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    fingerprint = _get_or_create_device_fingerprint(cursor)
+    conn.commit()
+    conn.close()
+
+    cloud = _claim_with_cloud(serial_number, fingerprint, device_name)
+    if cloud is None:
+        return jsonify({
+            'error': 'Could not reach the activation server. Connect to the internet, '
+                     'or use the air-gapped option to paste your full activation code.',
+            'reason': 'cloud_unreachable'}), 503
+    if not cloud.get('valid'):
+        reason = str(cloud.get('reason') or 'invalid')
+        msg = {
+            'not_found': 'Serial not recognized. Check the code, or paste your full activation code.',
+            'no_token': 'This serial needs the full activation code for first activation.',
+            'revoked': 'This license has been revoked.',
+            'suspended': 'This license is suspended.',
+            'expired': 'This license has expired.',
+            'device_cap_reached': 'This license has reached its device limit.',
+        }.get(reason, 'License could not be activated.')
+        return jsonify({'error': msg, 'reason': reason}), 403
+    serial_token = str(cloud.get('serial_token') or '').strip()
+    if not serial_token:
+        return jsonify({'error': 'Activation server did not return a license token.',
+                        'reason': 'no_token'}), 502
+    # Delegate to the signed-token path: it re-verifies the token locally, re-claims
+    # the SAME device slot idempotently (same fingerprint), and stores
+    # active_serial_number + active_serial_token for offline use afterwards.
+    return _activate_primary(serial_token, device_name)
 
 
 def _activate_primary(serial_token, device_name):

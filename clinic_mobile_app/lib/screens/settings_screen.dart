@@ -282,8 +282,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ? 'لإعادة التفعيل بمفتاح جديد، الصقه هنا.'
                           : 'To re-activate with a new key, paste it here.')
                       : (state.locale == 'ar'
-                          ? 'الصق مفتاح التفعيل نفسه الذي استخدمته على الكمبيوتر لتفعيل هذا الجهاز ومزامنته تلقائيًا.'
-                          : 'Paste the same activation key you used on the desktop to activate this device — it then syncs online automatically, nothing else to set up.'),
+                          ? 'أدخل رمز التفعيل نفسه الذي استخدمته على الكمبيوتر (السيريال القصير) لتفعيل هذا الجهاز ومزامنته تلقائيًا. يلزم اتصال بالإنترنت في المرة الأولى.'
+                          : 'Enter the same activation code you used on the desktop (the short serial) to activate this device — it then syncs online automatically. Needs internet the first time.'),
                   style: TextStyle(
                       color: scheme.onSurfaceVariant, fontSize: 13, height: 1.4),
                 ),
@@ -292,11 +292,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   controller: _activationKeyCtrl,
                   decoration: InputDecoration(
                     labelText:
-                        state.locale == 'ar' ? 'مفتاح التفعيل' : 'Activation key',
+                        state.locale == 'ar' ? 'رمز التفعيل' : 'Activation code',
                     prefixIcon: const Icon(Icons.vpn_key_outlined),
-                    hintText: state.locale == 'ar'
-                        ? 'الصق مفتاح التفعيل'
-                        : 'Paste your activation key',
+                    hintText: 'DENTAL-XXXXX-XXXXX-XXXXX',
                   ),
                   autocorrect: false,
                   minLines: 1,

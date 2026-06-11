@@ -147,3 +147,63 @@ def test_mint_csv_format(vendor):
 def test_mint_never_500s(vendor, body):
     r = vendor.post('/api/mint', json=body)
     assert r.status_code in (200, 400)
+
+
+# ── Publish to cloud (short-serial activation pre-load) ───────────────────────
+
+def test_upload_cloud_requires_records(vendor):
+    r = vendor.post('/api/upload-cloud', json={'cloud_url': 'https://x', 'admin_token': 't'})
+    assert r.status_code == 400
+
+
+def test_upload_cloud_requires_url_and_token(vendor):
+    recs = _mint(vendor, devices=['L1']).get_json()['records']
+    assert vendor.post('/api/upload-cloud', json={'records': recs, 'admin_token': 't'}).status_code == 400
+    assert vendor.post('/api/upload-cloud', json={'records': recs, 'cloud_url': 'https://x'}).status_code == 400
+
+
+def test_upload_cloud_reports_per_serial(vendor, monkeypatch):
+    recs = _mint(vendor, devices=['L1', 'L2']).get_json()['records']
+    captured = {}
+
+    def fake_upload(records, cloud_url, admin_token):
+        captured['url'] = cloud_url
+        captured['token'] = admin_token
+        return [{'serial': r['serial'], 'ok': True, 'already_existed': False} for r in records]
+
+    monkeypatch.setattr(serial_admin, '_upload_records_to_cloud', fake_upload)
+    r = vendor.post('/api/upload-cloud',
+                    json={'records': recs, 'cloud_url': 'https://cloud.test', 'admin_token': 'sek'})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['ok_count'] == 2 and body['total'] == 2
+    assert captured['url'] == 'https://cloud.test' and captured['token'] == 'sek'
+
+
+def test_upload_records_posts_to_admin_register_endpoint(vendor, monkeypatch):
+    recs = _mint(vendor, devices=['L1']).get_json()['records']
+    seen = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"success": true, "already_existed": false}'
+
+    def fake_urlopen(req, timeout=15):
+        seen['url'] = req.full_url
+        seen['admin'] = req.headers.get('X-admin-token')
+        seen['body'] = json.loads(req.data.decode('utf-8'))
+        return _Resp()
+
+    monkeypatch.setattr(serial_admin.urllib.request, 'urlopen', fake_urlopen)
+    out = serial_admin._upload_records_to_cloud(recs, 'https://cloud.test/', 'sek')
+    assert out[0]['ok'] is True
+    assert seen['url'] == 'https://cloud.test/api/license/admin/register-serial'
+    assert seen['admin'] == 'sek'
+    assert seen['body']['serial_token'] == recs[0]['offline_token']
+
+
+def test_upload_cloud_loopback_guarded(vendor):
+    r = vendor.post('/api/upload-cloud', json={'records': [{}], 'cloud_url': 'x', 'admin_token': 't'},
+                    environ_overrides={'REMOTE_ADDR': '203.0.113.9'})
+    assert r.status_code == 403

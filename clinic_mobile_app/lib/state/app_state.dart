@@ -384,10 +384,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     String activationKey, {
     String? clinicName,
   }) async {
-    final key = activationKey.trim();
-    final parsed = ActivationToken.tryParse(key);
+    final input = activationKey.trim();
+    var key = input;
+    var parsed = ActivationToken.tryParse(key);
     if (parsed == null) {
-      throw const ApiException('That activation key is not valid.');
+      // Not a full signed token — treat the input as a short serial and fetch the
+      // signed token from the cloud (online activation), then continue as usual.
+      final fetched = await _claimTokenForSerial(input);
+      if (fetched == null) {
+        throw const ApiException('That activation code is not valid.');
+      }
+      key = fetched;
+      parsed = ActivationToken.tryParse(key);
+      if (parsed == null) {
+        throw const ApiException('Activation server returned an invalid token.');
+      }
     }
     final name = (clinicName != null && clinicName.trim().isNotEmpty)
         ? clinicName.trim()
@@ -432,6 +443,27 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     // First sync right away against the freshly-linked cloud target.
     unawaited(sync.syncNow());
     return info;
+  }
+
+  /// Short-serial online activation: exchange a ~22-char serial for its full
+  /// signed token via the cloud (which is the license authority). Returns the
+  /// signed token, or null when the serial is unknown / the cloud is unreachable —
+  /// in which case the caller reports the code as invalid.
+  Future<String?> _claimTokenForSerial(String serial) async {
+    final s = serial.trim().toUpperCase();
+    if (s.length < 8) return null;
+    final fingerprint = await _storage.getOrCreateDeviceId();
+    final res = await cloud.claim(
+      cloudUrl: CloudSyncService.defaultCloudUrl,
+      serialNumber: s,
+      deviceFingerprint: fingerprint,
+      deviceName: 'mobile',
+    );
+    if (res != null && res['valid'] == true) {
+      final token = (res['serial_token'] ?? '').toString();
+      return token.isNotEmpty ? token : null;
+    }
+    return null;
   }
 
   Future<void> unpairCloud() async {
