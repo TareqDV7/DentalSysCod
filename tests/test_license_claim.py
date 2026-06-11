@@ -276,3 +276,30 @@ def test_activate_lan_attach_still_routes(local):
 
 def test_activate_short_serial_too_short(local):
     assert local.post('/api/license/activate', json={'serial_number': 'SHORT'}).status_code == 400
+
+
+# ── Offline-activation kill-switch (ALLOW_OFFLINE_ACTIVATION) ─────────────────
+
+def test_offline_token_rejected_when_disabled(local, monkeypatch):
+    monkeypatch.setattr(dental_clinic, 'ALLOW_OFFLINE_ACTIVATION', False)
+    r = local.post('/api/license/activate', json={'serial_token': _sign(local, 'DENTAL-OFF-DIS1')})
+    assert r.status_code == 403
+    assert r.get_json()['reason'] == 'offline_disabled'
+
+
+def test_offline_token_allowed_when_enabled(local, monkeypatch):
+    monkeypatch.setattr(dental_clinic, 'ALLOW_OFFLINE_ACTIVATION', True)
+    r = local.post('/api/license/activate', json={'serial_token': _sign(local, 'DENTAL-OFF-EN1')})
+    assert r.status_code == 200 and r.get_json()['success'] is True
+
+
+def test_short_serial_still_works_when_offline_disabled(local, monkeypatch):
+    # The online path is unaffected by the offline kill-switch.
+    monkeypatch.setattr(dental_clinic, 'ALLOW_OFFLINE_ACTIVATION', False)
+    tok = _sign(local, 'DENTAL-ON-OK1')
+    monkeypatch.setattr(
+        dental_clinic, '_claim_with_cloud',
+        lambda *a, **k: {'valid': True, 'serial_token': tok, 'status': 'active',
+                         'plan_name': 'standard', 'max_devices': 3})
+    r = local.post('/api/license/activate', json={'serial_number': 'DENTAL-ON-OK1'})
+    assert r.status_code == 200 and r.get_json()['success'] is True

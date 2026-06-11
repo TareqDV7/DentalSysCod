@@ -262,6 +262,16 @@ _REQUIRE_SIGNED_SERIAL = os.environ.get('CLINIC_REQUIRE_SIGNED_SERIAL', '1').str
 # device slot). When unset, the admin endpoint is closed (every call → 401).
 _ADMIN_API_TOKEN = os.environ.get('CLINIC_ADMIN_API_TOKEN', '').strip()
 
+# Customer-facing OFFLINE activation: paste the full signed token, verified locally
+# with no cloud round-trip (the "Activate offline" fold on the activation card).
+# Convenient for air-gapped installs, BUT offline it cannot enforce the cloud device
+# cap, so a leaked token can activate unlimited devices. Keep ON pre-launch; flip OFF
+# at launch (env CLINIC_ALLOW_OFFLINE_ACTIVATION=0) to make activation ONLINE-ONLY —
+# this BOTH hides the "Activate offline" fold AND rejects the serial_token path, so the
+# device cap is always enforced. The short-serial online path is unaffected.
+ALLOW_OFFLINE_ACTIVATION = os.environ.get(
+    'CLINIC_ALLOW_OFFLINE_ACTIVATION', '1').strip().lower() in ('1', 'true', 'yes', 'on')
+
 
 def _serial_public_key():
     """Return an Ed25519PublicKey, or None if not configured / unparseable."""
@@ -2008,7 +2018,8 @@ def auth_change_password():
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE, **CLINIC_CONFIG)
+    return render_template_string(HTML_TEMPLATE, **CLINIC_CONFIG,
+                                  ALLOW_OFFLINE_ACTIVATION=ALLOW_OFFLINE_ACTIVATION)
 
 
 @app.route('/logo')
@@ -5310,7 +5321,13 @@ def activate_license():
     device_id = str(data.get('device_id') or '').strip()
     device_name = str(data.get('device_name') or '').strip()
     # 1) Full signed token pasted (air-gapped / advanced) — verify + store locally.
+    #    Gated by ALLOW_OFFLINE_ACTIVATION: when off (launch), this path is rejected so
+    #    activation must go through the cloud (device cap always enforced).
     if serial_token:
+        if not ALLOW_OFFLINE_ACTIVATION:
+            return jsonify({'error': 'Offline activation is disabled. Activate online '
+                                     'with your serial number.',
+                            'reason': 'offline_disabled'}), 403
         return _activate_primary(serial_token, device_name)
     # 2) Short serial only (the default): fetch the cached token from the cloud,
     #    then activate. A device_id means this is a mobile/LAN attach instead.

@@ -1846,6 +1846,7 @@ HTML_TEMPLATE = '''
           <button type="button" class="btn btn-primary license-card__cta" onclick="submitLicenseActivation()">Activate · تفعيل</button>
           <div id="license-gate-status" class="license-overlay__status"></div>
 
+          {% if ALLOW_OFFLINE_ACTIVATION %}
           <details id="license-airgap" class="license-airgap">
             <summary>Activate offline (paste full code) · التفعيل دون إنترنت</summary>
             <p class="license-card__lead" style="margin-top:10px;">No internet? Paste the full activation code your vendor gave you.<br><span dir="rtl">لا يوجد إنترنت؟ الصق كود التفعيل الكامل الذي زودك به المورد.</span></p>
@@ -1854,6 +1855,7 @@ HTML_TEMPLATE = '''
             <div id="license-code-preview" class="license-preview hidden"></div>
             <button type="button" class="btn btn-primary license-card__cta" onclick="submitLicenseActivationToken()">Activate offline · تفعيل دون إنترنت</button>
           </details>
+          {% endif %}
         </div>
 
         <!-- State B: activated, offer cloud backup -->
