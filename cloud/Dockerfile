@@ -15,6 +15,10 @@ COPY dental_clinic.py ./
 # HTML lives there), so the cloud image needs it even though the staff portal
 # isn't served on the cloud node — without it the container crash-loops on start.
 COPY templates.py ./
+# dental_clinic.py also imports the Data-Tools helpers (db_import / db_merge) at
+# module load. The /api/data/* routes are 404 on the cloud node, but the top-level
+# import still runs, so the image needs these (pure-stdlib) files or it crash-loops.
+COPY db_import.py db_merge.py ./
 # It also does `from window.data_dir import resolve_data_dir` at module load.
 # Only data_dir.py (pure stdlib) + the package __init__ (docstring only, no
 # imports) are needed on the cloud path; the GUI submodules are not imported.
