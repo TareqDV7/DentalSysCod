@@ -7035,6 +7035,61 @@ def license_recheck_worker():
         time.sleep(interval)
 
 
+def _read_active_serial(db_path):
+    """Best-effort, read-only fetch of ``active_serial_number`` from a DB file.
+
+    Opens the file in SQLite read-only URI mode so it never locks or mutates a
+    live database; returns '' on any error (missing file, missing table, …)."""
+    try:
+        conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+        try:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = 'active_serial_number'"
+            ).fetchone()
+        finally:
+            conn.close()
+        return str(row[0]).strip() if row and row[0] else ''
+    except Exception:
+        return ''
+
+
+def _canonical_db_candidates():
+    """Well-known ``dental_clinic.db`` locations on this machine: the frozen
+    service's ``%PROGRAMDATA%\\DentaCare`` (with the ``%LOCALAPPDATA%`` fallback)
+    plus the source/dev location (the repo folder next to this file). These
+    mirror ``resolve_data_dir()``'s branches so the startup check can spot a
+    second, separately-activated install."""
+    paths = []
+    for base_env in ('PROGRAMDATA', 'LOCALAPPDATA'):
+        base = os.environ.get(base_env, '').strip()
+        if base:
+            paths.append(os.path.join(base, 'DentaCare', 'dental_clinic.db'))
+    paths.append(str(Path(__file__).resolve().parent / 'dental_clinic.db'))
+    return paths
+
+
+def _other_activated_dbs(current_db_path, candidates=None):
+    """Other canonical databases activated with a *different* serial than the one
+    this process uses. Surfaces the "two installs, two serials" case — the frozen
+    service and a source run resolve different data dirs, which otherwise looks
+    like the active serial drifting across restarts. Returns a list of
+    ``(path, serial)``; best-effort and never raises."""
+    if candidates is None:
+        candidates = _canonical_db_candidates()
+    here = os.path.normcase(os.path.abspath(current_db_path))
+    mine = _read_active_serial(current_db_path)
+    seen, conflicts = set(), []
+    for path in candidates:
+        norm = os.path.normcase(os.path.abspath(path))
+        if norm == here or norm in seen or not os.path.exists(path):
+            continue
+        seen.add(norm)
+        other = _read_active_serial(path)
+        if other and other != mine:
+            conflicts.append((path, other))
+    return conflicts
+
+
 if __name__ == '__main__':
     # Windows defaults stdout/stderr to the locale code page (cp1252 on
     # most English installs), which crashes the moment we print an emoji.
@@ -7075,6 +7130,22 @@ if __name__ == '__main__':
             print("    Change it in the app: Settings → Account → Change Password.")
     except Exception:
         pass
+
+    # Show exactly which data directory / database / serial THIS process uses.
+    # A source run and the installed service resolve *different* data dirs (the
+    # repo folder vs %PROGRAMDATA%\DentaCare), so one machine can hold two
+    # independently-activated databases. Printing it makes "which serial am I?"
+    # obvious instead of looking like the serial drifts across restarts.
+    if not CLOUD_MODE:
+        print(f'\n📂 Data directory: {_DATA_DIR}')
+        print(f'🗃️  Database:       {DB_NAME}')
+        print(f'🔑 Active serial:  {_read_active_serial(DB_NAME) or "(not activated)"}')
+        for _other_path, _other_serial in _other_activated_dbs(DB_NAME):
+            print('⚠️  A SEPARATE activated database exists at:')
+            print(f'      {_other_path}')
+            print(f'      activated as {_other_serial} — that is a different install.')
+            print('      Run the app one way (the installed service uses '
+                  '%PROGRAMDATA%\\DentaCare; set CLINIC_DATA_DIR for dev).')
 
     # Skip browser auto-open for the headless service. The pywebview window
     # launcher (DentaCare.exe) is the customer-facing UI in packaged mode;

@@ -81,6 +81,8 @@ The server picks a mode automatically: **debug** when run from source (`python d
 
 The SQLite database runs in **WAL mode** (set once in `init_database()`), so readers don't block on the single writer — this is what keeps concurrent web + mobile-sync access from hitting "database is locked".
 
+On startup the server prints which **data directory**, **database file**, and **active license serial** it is using. This matters because the two run-modes resolve *different* data directories — a source run uses the repo folder, while the installed service (frozen `.exe`) uses `%PROGRAMDATA%\DentaCare` — so each is a **separate** database with its own one-time activation. If a second activated database is found elsewhere on the machine, the banner warns and names it (path + serial), so a different serial showing up is recognised as a different install rather than mistaken for the active serial "changing" across restarts. Set `CLINIC_DATA_DIR` explicitly when you want a source run and the service to share one database.
+
 ### Backups
 
 - **Automatic** — in production runs, a background thread writes a timestamped copy of every active SQLite database (via SQLite's online backup API, so it's a consistent snapshot taken without stopping the server) to a `backups/` folder, shortly after startup and then every 6 hours. The most recent 20 copies are kept; older ones are pruned.
