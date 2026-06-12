@@ -7861,3 +7861,87 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
   </form>
 </body>
 </html>'''
+
+
+# Shown once on first login while the seeded admin still has the default password
+# (must_change_password=1). A plain same-origin form POST to /change-password —
+# deliberately no inline JS, to stay clear of the templates.py escaping trap.
+FORCE_CHANGE_TEMPLATE = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set a new password — DentaCare</title>
+<style>
+  :root {
+    --brand:#0f6d7b; --brand-2:#1d7fb7; --accent:#13b5a7;
+    --text:#e7eef8; --muted:#9bb0c8; --panel:#0f1728; --line:#263449; --bg-1:#0b1220;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+    font-family:'Manrope','Inter','Segoe UI',Tahoma,sans-serif; color:var(--text);
+    background:
+      radial-gradient(1100px 520px at 100% -20%, rgba(29,127,183,0.28) 0%, transparent 60%),
+      radial-gradient(900px 480px at -10% 0%, rgba(19,181,167,0.18) 0%, transparent 58%),
+      linear-gradient(160deg, #0b1220, #111a2d);
+  }
+  .card {
+    position:relative; width:100%; max-width:400px; overflow:hidden;
+    background:var(--panel); border:1px solid var(--line); border-radius:20px;
+    box-shadow:0 30px 80px rgba(0,0,0,0.45); padding:36px 32px 30px;
+  }
+  .card::before {
+    content:""; position:absolute; top:0; left:0; right:0; height:4px;
+    background:linear-gradient(90deg, var(--brand), var(--brand-2), var(--accent));
+  }
+  .brand { text-align:center; margin-bottom:18px; }
+  .brand img { height:54px; width:auto; border-radius:12px; }
+  .brand h1 { font-size:21px; font-weight:800; margin:12px 0 2px; color:var(--text); }
+  .brand p { margin:0; color:var(--muted); font-size:13px; font-weight:600; }
+  .note {
+    margin:6px 0 4px; padding:11px 13px; border-radius:12px; font-size:13px; font-weight:600; line-height:1.45;
+    color:#cfe3ff; background:rgba(29,127,183,0.14); border:1px solid rgba(29,127,183,0.40);
+  }
+  label {
+    display:block; font-size:12px; font-weight:800; letter-spacing:0.05em; text-transform:uppercase;
+    color:var(--muted); margin:16px 0 7px;
+  }
+  input {
+    width:100%; padding:12px 14px; font-size:15px; font-family:inherit;
+    background:var(--bg-1); color:var(--text); border:1.5px solid var(--line); border-radius:12px;
+  }
+  input:focus { outline:none; border-color:#7bb6e2; box-shadow:0 0 0 4px rgba(61,149,211,0.16); }
+  button {
+    width:100%; margin-top:24px; padding:13px; border:none; border-radius:12px; cursor:pointer;
+    background:linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+    color:#fff; font-size:15px; font-weight:800; transition:0.18s ease;
+  }
+  button:hover { transform:translateY(-1px); box-shadow:0 12px 28px rgba(29,127,183,0.35); }
+  .error {
+    margin-top:16px; padding:10px 13px; border-radius:12px; font-size:13px; font-weight:600;
+    color:#ffb3bd; background:rgba(218,76,88,0.14); border:1px solid rgba(218,76,88,0.45);
+  }
+  .logout { display:block; text-align:center; margin-top:16px; color:var(--muted); font-size:12px; text-decoration:none; }
+</style>
+</head>
+<body>
+  <form class="card" method="POST" action="/change-password">
+    <div class="brand">
+      <img src="/logo" alt="DentaCare">
+      <h1>Secure your account</h1>
+      <p>Choose a new password to continue</p>
+    </div>
+    <div class="note">This account still uses the default password. Set a new one before you start — it only takes a moment.</div>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <label for="current_password">Current password</label>
+    <input type="password" id="current_password" name="current_password" autocomplete="current-password" autofocus required>
+    <label for="new_password">New password</label>
+    <input type="password" id="new_password" name="new_password" autocomplete="new-password" minlength="4" required>
+    <label for="confirm_password">Confirm new password</label>
+    <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" minlength="4" required>
+    <button type="submit">Save & continue</button>
+    <a class="logout" href="/logout">Sign out instead</a>
+  </form>
+</body>
+</html>'''

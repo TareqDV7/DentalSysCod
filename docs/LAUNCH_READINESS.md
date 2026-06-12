@@ -91,8 +91,9 @@
 
 ### Security hardening
 - [ ] **Add CSRF protection** to the session-authenticated Flask portal (currently none; matters most for the exposed cloud node). 🔴 · M
-- [ ] **Force admin password change on first run** / block the `admin/admin` default on any network-exposed node. 🟠 · S
-- [ ] **Security headers / CSP review** (two `after_request` hooks exist — audit for CSP, HSTS, X-Frame-Options, etc.). 🟡 · S
+- [x] **Force admin password change on first run** — the seeded `admin/admin` default is flagged (`must_change_password`) and the local/LAN portal redirects to a one-time `/change-password` screen before the SPA loads; `CLINIC_ADMIN_PASSWORD` seeds a real password and skips it. Cloud node relies on `CLINIC_ADMIN_PASSWORD` at deploy. + regression tests. 🟠 · S
+- [x] **Security headers** added (`_add_security_headers` after_request: nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy; HSTS over HTTPS only). **CSP still deferred** until `templates.py` is split (everything is inline `<script>`/`<style>`). 🟡 · S
+- [x] **Closed an unauthenticated destructive endpoint:** `/api/data/clear-billing` was missing from the login gate — any LAN client could wipe all billing rows. Now in `_AUTH_REQUIRED_EXACT` + regression test. 🔴 · S
 - [ ] **Encryption at rest** for patient data (DB and/or disk-level). 🟠 · M
 
 ### Health-data compliance (scope to chosen market)

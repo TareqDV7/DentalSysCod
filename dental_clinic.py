@@ -144,6 +144,28 @@ def _load_or_create_secret_key():
 
 
 @app.after_request
+def _add_security_headers(response):
+    # Baseline browser hardening on every response. Harmless on JSON API replies,
+    # meaningful on the HTML portal: nosniff stops MIME-confusion, DENY blocks
+    # click-jacking via <iframe>, and the referrer/permissions policies trim what
+    # leaks to third parties. setdefault() so a handler that sets its own wins.
+    #
+    # NOTE: a strict Content-Security-Policy is intentionally NOT set yet — the
+    # portal is built from fully inline <script>/<style> in templates.py, so a
+    # real CSP needs the template/static split first (docs/LAUNCH_READINESS.md).
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    # HSTS only over HTTPS (cloud node behind Caddy). Never on plain-HTTP LAN
+    # access — a cached max-age would lock the clinic out of its own http:// server.
+    if request.is_secure:
+        response.headers.setdefault('Strict-Transport-Security',
+                                    'max-age=31536000; includeSubDomains')
+    return response
+
+
+@app.after_request
 def _add_no_cache_headers(response):
     # When running in debug/development mode we prevent aggressive caching of
     # HTML/CSS/JS so frontend changes appear immediately in the browser.
@@ -967,6 +989,7 @@ def init_database():
             password_hash TEXT NOT NULL,
             display_name TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
+            must_change_password INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login_at TIMESTAMP
         )
@@ -1133,6 +1156,7 @@ def init_database():
     # Cloud authority: cache the signed token + clinic name so a clinic can later
     # activate by short serial alone — the cloud hands the stored token back via
     # /api/license/claim (existing master DBs predate these columns).
+    ensure_table_column(cursor, 'users', 'must_change_password', 'INTEGER DEFAULT 0')
     ensure_table_column(cursor, 'license_serials', 'serial_token', 'TEXT')
     ensure_table_column(cursor, 'license_serials', 'clinic_name', 'TEXT')
 
@@ -1265,10 +1289,17 @@ def init_database():
     if not CLOUD_MODE:
         cursor.execute('SELECT COUNT(*) FROM users')
         if cursor.fetchone()[0] == 0:
-            default_pw = os.environ.get('CLINIC_ADMIN_PASSWORD') or 'admin'
+            env_pw = os.environ.get('CLINIC_ADMIN_PASSWORD')
+            default_pw = env_pw or 'admin'
+            # Force a one-time password change on first login ONLY when the
+            # well-known 'admin'/'admin' default is in use (no CLINIC_ADMIN_PASSWORD
+            # set). If the vendor/admin supplied a real password up front, trust it
+            # and skip the prompt.
+            must_change = 0 if env_pw else 1
             cursor.execute(
-                'INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)',
-                ('admin', generate_password_hash(default_pw), 'Administrator')
+                'INSERT INTO users (username, password_hash, display_name, must_change_password) '
+                'VALUES (?, ?, ?, ?)',
+                ('admin', generate_password_hash(default_pw), 'Administrator', must_change)
             )
 
     conn.commit()
@@ -1899,7 +1930,7 @@ CLINIC_CONFIG = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # HTML templates extracted to templates.py (see that module).
-from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE
+from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE, FORCE_CHANGE_TEMPLATE
 # Data-tools helpers (pure, no Flask).
 import db_import
 import db_merge
@@ -1920,7 +1951,7 @@ def _safe_next_url(target):
 _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure',
                         '/api/cloud/pairing-qr',
                         '/api/data/export-bundle', '/api/data/merge', '/api/data/replace',
-                        '/api/data/clear-catalogs'}
+                        '/api/data/clear-catalogs', '/api/data/clear-billing'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
@@ -1982,6 +2013,82 @@ def _enforce_view_only():
     return None
 
 
+def _user_must_change_password(uid):
+    """True if the logged-in staff user still has the forced-change flag set
+    (seeded admin on the default password). Cheap PK lookup; fails OPEN so a
+    transient DB error never locks a doctor out of their own portal."""
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        row = conn.execute(
+            'SELECT must_change_password FROM users WHERE id = ?', (uid,)
+        ).fetchone()
+        conn.close()
+        return bool(row and row[0])
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@app.before_request
+def _require_password_change():
+    # While the seeded admin is still on the default password, force the change
+    # before the SPA can load. Gated ONLY at the HTML portal entry point ('/'):
+    # the whole SPA loads from there, so blocking it stops the doctor reaching
+    # any clinical screen (invoices etc. are only linked from inside the SPA).
+    # The open data/sync API is deliberately left untouched — it's reachable
+    # without a login by design for the offline-first mobile app, and mobile/sync
+    # callers carry no session 'uid' anyway, so they are never affected.
+    if CLOUD_MODE or request.method == 'OPTIONS':
+        return None
+    if (request.path or '/') != '/':
+        return None
+    if session.get('uid') and _user_must_change_password(session['uid']):
+        return redirect(url_for('change_password_page'))
+    return None
+
+
+@app.route('/change-password', methods=['GET', 'POST'])
+def change_password_page():
+    """First-run forced password change (browser form, same-origin POST). Reached
+    automatically by the portal gate while must_change_password is set; harmless
+    to visit otherwise (redirects home once the password is no longer default)."""
+    if not session.get('uid'):
+        return redirect(url_for('login_page', next='/change-password'))
+    if request.method == 'GET':
+        if not _user_must_change_password(session['uid']):
+            return redirect(url_for('index'))
+        return render_template_string(FORCE_CHANGE_TEMPLATE, error=None)
+
+    current = request.form.get('current_password') or ''
+    new = request.form.get('new_password') or ''
+    confirm = request.form.get('confirm_password') or ''
+
+    def _fail(msg):
+        return render_template_string(FORCE_CHANGE_TEMPLATE, error=msg), 400
+
+    if len(new) < 4:
+        return _fail('New password must be at least 4 characters.')
+    if new != confirm:
+        return _fail('The two new passwords do not match.')
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users WHERE id = ?', (session['uid'],))
+    user = cursor.fetchone()
+    if not user or not check_password_hash(user['password_hash'], current):
+        conn.close()
+        return _fail('Current password is incorrect.')
+    if check_password_hash(user['password_hash'], new):
+        conn.close()
+        return _fail('Choose a password different from the current one.')
+    cursor.execute(
+        'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+        (generate_password_hash(new), user['id'])
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for('index'))
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     next_url = _safe_next_url(request.values.get('next', ''))
@@ -2036,7 +2143,8 @@ def auth_change_password():
     if not user or not check_password_hash(user['password_hash'], current):
         conn.close()
         return jsonify({'error': 'Current password is incorrect.'}), 400
-    cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?', (generate_password_hash(new), user['id']))
+    cursor.execute('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+                   (generate_password_hash(new), user['id']))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
