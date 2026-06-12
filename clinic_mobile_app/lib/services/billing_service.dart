@@ -1,3 +1,4 @@
+import '../models/billing_account.dart';
 import '../models/billing_record.dart';
 import '../models/expense.dart';
 import 'database_service.dart';
@@ -32,10 +33,6 @@ class BillingService {
       isSynced: false,
     );
     final localId = await _db.upsertBillingRecord(local);
-    // Applying credit draws down the patient's balance via a debit transaction.
-    if (b.creditUsed > 0) {
-      await _db.recordCreditUsed(b.patientId, localId, b.creditUsed);
-    }
 
     try {
       final res = await _api.post('/api/billing', body: local.toJson());
@@ -60,6 +57,13 @@ class BillingService {
 
   Future<List<Map<String, dynamic>>> getReceivables() =>
       _db.getReceivables();
+
+  /// Per-patient billing rolled up from the follow-up sheets (charged / paid /
+  /// balance), so the Billing tab mirrors each patient's sheet.
+  Future<List<BillingAccount>> getBillingAccounts() async =>
+      (await _db.getBillingAccounts())
+          .map(BillingAccount.fromRow)
+          .toList();
 
   // ── Expenses ──────────────────────────────────────────────────────────────
 

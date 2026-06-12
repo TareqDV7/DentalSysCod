@@ -39,6 +39,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   List<TreatmentPlan> _plans = [];
   List<MedicalImage> _images = [];
   double _credit = 0;
+  double _outstanding = 0;
   bool _loading = true;
   bool _editing = false;
   bool _syncingImages = false;
@@ -78,14 +79,15 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     final followups = await state.patients.getPatientFollowups(_patient.id!);
     final appts = await state.appointments.getPatientAppointments(_patient.id!);
     final plans = await state.db.getPatientTreatmentPlans(_patient.id!);
-    final credit = await state.db.getPatientCreditBalance(_patient.id!);
+    final balance = await state.db.getPatientBalance(_patient.id!);
     final images = await state.medicalImages.getForPatient(_patient.id!);
     if (mounted) {
       setState(() {
         _followups = followups;
         _appointments = appts;
         _plans = plans;
-        _credit = credit;
+        _credit = balance['credit'] ?? 0.0;
+        _outstanding = balance['outstanding'] ?? 0.0;
         _images = images;
         _loading = false;
       });
@@ -411,10 +413,10 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
     if (mounted) _load();
   }
 
-  /// Patient's outstanding ledger balance = the last follow-up's running total
-  /// (already cumulative). Negative values represent patient credit.
-  double get _runningBalance =>
-      _followups.isEmpty ? 0.0 : _followups.last.remainingAmount;
+  /// Patient's outstanding balance across the UNIFIED ledger (follow-up sheet +
+  /// billing), loaded via [DatabaseService.getPatientBalance]. Negative values
+  /// represent patient credit. Matches the billing tab, receivables, and desktop.
+  double get _runningBalance => _outstanding;
 
   @override
   Widget build(BuildContext context) {

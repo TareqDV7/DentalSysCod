@@ -211,8 +211,62 @@ def test_clear_catalogs_empties_active_lists_and_tombstones(client):
     assert tp >= 1 and tc >= 1
 
 
+def test_clear_catalogs_is_idempotent_and_reemits_tombstones(client):
+    """A second clear (rows already inactive) must NOT be a silent no-op.
+
+    It re-counts the rows and re-stamps their tombstones so a lingering cloud /
+    phone copy still gets wiped. Guards the "clicked Clear, nothing happened,
+    the cloud copy stayed" trap from legacy demo catalogs.
+    """
+    _login(client)
+    client.post('/api/treatment-procedures', json={'name': 'Cleaning', 'default_price': 200})
+    client.post('/api/tooth-conditions', json={'name': 'Decay', 'color': '#ef4444'})
+
+    first = client.post('/api/data/clear-catalogs').get_json()
+    assert first['procedures_cleared'] >= 1
+    assert first['conditions_cleared'] >= 1
+
+    # Everything is inactive now — the second clear must still act on it.
+    second = client.post('/api/data/clear-catalogs').get_json()
+    assert second['procedures_cleared'] >= 1
+    assert second['conditions_cleared'] >= 1
+
+    assert client.get('/api/treatment-procedures').get_json() == []
+    assert client.get('/api/tooth-conditions').get_json() == []
+
+
 def test_clear_catalogs_blocked_on_cloud_node(client, monkeypatch):
     _login(client)
     import dental_clinic
     monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
     assert client.post('/api/data/clear-catalogs').status_code == 404
+
+
+def test_clear_billing_deletes_and_tombstones(client):
+    _login(client)
+    import sqlite3, dental_clinic
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO patients (first_name, last_name, phone) VALUES ('B','C','0')")
+    pid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    client.post('/api/billing', json={'patient_id': pid, 'subtotal': 100, 'paid_amount': 50})
+    assert len(client.get('/api/billing').get_json()) >= 1
+
+    r = client.post('/api/data/clear-billing')
+    assert r.status_code == 200
+    assert r.get_json()['billing_cleared'] >= 1
+    assert client.get('/api/billing').get_json() == []
+
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    n = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='billing'").fetchone()[0]
+    conn.close()
+    assert n >= 1
+
+
+def test_clear_billing_blocked_on_cloud_node(client, monkeypatch):
+    _login(client)
+    import dental_clinic
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
+    assert client.post('/api/data/clear-billing').status_code == 404

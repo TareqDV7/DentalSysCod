@@ -2459,18 +2459,14 @@ HTML_TEMPLATE = '''
                             <div class="date-input-wrap"><input type="text" name="payment_date" id="billing-date" placeholder="DD/MM/YYYY" data-date-field="1" title="Enter date in DD/MM/YYYY format"><button type="button" class="date-picker-btn" title="Pick date" aria-label="Pick date">📅</button></div>
                         </div>
                     </div>
-                    <div class="form-row-3">
+                    <div class="form-row">
                         <div class="form-group">
-                            <label data-i18n="subtotal_required">Subtotal *<small style="font-weight:400;color:var(--muted);"> (or expression)</small></label>
-                            <input type="text" inputmode="decimal" name="subtotal" id="billing-subtotal" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off" required>
+                            <label data-i18n="subtotal_required">Charge<small style="font-weight:400;color:var(--muted);"> (0 = payment only)</small></label>
+                            <input type="text" inputmode="decimal" name="subtotal" id="billing-subtotal" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
                         </div>
                         <div class="form-group">
                             <label data-i18n="discount">Discount <small style="font-weight:400;color:var(--muted);">(or %, e.g. 20%)</small></label>
                             <input type="text" inputmode="decimal" name="discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="billing-subtotal" placeholder="0" autocomplete="off">
-                        </div>
-                        <div class="form-group">
-                            <label>Credit Used <small id="billing-credit-available" style="font-weight:400;color:var(--muted);"></small></label>
-                            <input type="text" inputmode="decimal" name="credit_used" value="0" id="billing-credit-used" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
                         </div>
                     </div>
                     <div class="form-row">
@@ -2646,6 +2642,7 @@ HTML_TEMPLATE = '''
                     <label class="btn btn-danger" for="replace-file" style="cursor:pointer;" data-i18n="replace_db">&#9851;&#65039; Replace database</label>
                     <input type="file" id="replace-file" accept=".zip,.db" style="display:none" onchange="startDataImport('replace', this)">
                     <button class="btn btn-danger" type="button" onclick="clearCatalogs()" data-en="🧹 Clear catalogs" data-ar="🧹 إفراغ القوائم">🧹 Clear catalogs</button>
+                    <button class="btn btn-danger" type="button" onclick="clearBilling()" data-en="🧹 Clear billing entries" data-ar="🧹 إفراغ الفواتير">🧹 Clear billing entries</button>
                   </div>
                   <div id="data-tools-result" class="muted" style="font-size:0.88em;min-height:1.2em;"></div>
                 </div>
@@ -3126,7 +3123,7 @@ HTML_TEMPLATE = '''
                 last_date: 'Last Date',
                 overdue_days: 'Overdue Days',
                 billing_management: 'Billing Management',
-                subtotal_required: 'Subtotal *',
+                subtotal_required: 'Charge',
                 discount: 'Discount',
                 paid_amount: 'Paid Amount',
                 payment_method: 'Payment Method',
@@ -3503,7 +3500,7 @@ HTML_TEMPLATE = '''
                 last_date: 'آخر تاريخ',
                 overdue_days: 'أيام التأخير',
                 billing_management: 'إدارة الفواتير',
-                subtotal_required: 'الإجمالي قبل الخصم *',
+                subtotal_required: 'المبلغ',
                 discount: 'الخصم',
                 paid_amount: 'المبلغ المدفوع',
                 payment_method: 'طريقة الدفع',
@@ -5795,6 +5792,27 @@ HTML_TEMPLATE = '''
           }
         }
 
+        async function clearBilling() {
+          const msg = (currentLanguage === 'ar')
+            ? 'سيتم حذف كل سجلّات الفوترة (تبقى سجلّات المرضى وأوراق المتابعة كما هي). متابعة؟'
+            : 'This deletes every billing entry (patient records and follow-up sheets are kept). Continue?';
+          if (!confirm(msg)) return;
+          const out = document.getElementById('data-tools-result');
+          if (out) out.textContent = (currentLanguage === 'ar') ? 'جارٍ الحذف…' : 'Clearing…';
+          try {
+            const r = await fetch('/api/data/clear-billing', { method: 'POST' });
+            const b = await r.json();
+            if (!r.ok) throw new Error(b.error || 'failed');
+            if (out) out.textContent = (currentLanguage === 'ar')
+              ? `تم حذف ${b.billing_cleared} سجل فوترة.`
+              : `Cleared ${b.billing_cleared} billing entries.`;
+            if (typeof loadBilling === 'function') loadBilling();
+            if (typeof loadReceivables === 'function') loadReceivables();
+          } catch (e) {
+            if (out) out.textContent = ((currentLanguage === 'ar') ? 'فشل الحذف: ' : 'Clear failed: ') + e.message;
+          }
+        }
+
         async function changeAccountPassword() {
             const current = document.getElementById('acct-current-password')?.value || '';
             const next = document.getElementById('acct-new-password')?.value || '';
@@ -6066,7 +6084,9 @@ HTML_TEMPLATE = '''
             const totalDiscount = Math.max(0, followupTotals.totalDiscount);
             const totalPaid = Math.max(0, followupTotals.totalPaid);
             const totalLeft = Math.max(0, totalToPay - totalDiscount - totalPaid);
-            currentFollowupBalance = totalLeft;
+            // Header balance uses the UNIFIED ledger (sheet + billing) so it
+            // matches receivables, the patient list, and the mobile app.
+            currentFollowupBalance = Math.max(0, parseCurrency(profile.outstanding || 0));
             content.innerHTML = `
                 <div class="profile-stats">
                     <div class="stat-card stat-card-teal">
@@ -6085,7 +6105,7 @@ HTML_TEMPLATE = '''
                     <div class="stat-card stat-card-amber">
                         <h3>₪${currentFollowupBalance.toFixed(2)}</h3>
                         <p>${t('current_balance', 'Balance Due')}</p>
-                        <p style="font-size:0.8rem;opacity:0.88;"><span style="white-space:nowrap;">↑ ₪${totalToPay.toFixed(2)}</span> &nbsp;<span style="white-space:nowrap;">✓ ₪${totalPaid.toFixed(2)}</span></p>
+                        <p style="font-size:0.8rem;opacity:0.88;"><span style="white-space:nowrap;">↑ ₪${parseCurrency(profile.total_charged||0).toFixed(2)}</span> &nbsp;<span style="white-space:nowrap;">✓ ₪${parseCurrency(profile.total_paid||0).toFixed(2)}</span></p>
                     </div>
                     <div class="stat-card">
                         <h3>₪${(profile.credit_balance||0).toFixed(2)}</h3>
@@ -6878,7 +6898,7 @@ HTML_TEMPLATE = '''
                 data.discount_expr = calcExprOf(e.target.querySelector('[name="discount"]'));
                 data.paid_amount_expr = calcExprOf(e.target.querySelector('[name="paid_amount"]'));
                 // Resolve any arithmetic expressions in numeric fields
-                ['subtotal', 'discount', 'credit_used', 'paid_amount'].forEach(field => {
+                ['subtotal', 'discount', 'paid_amount'].forEach(field => {
                     if (data[field] !== undefined) data[field] = parseCurrency(data[field]);
                 });
                 const response = await fetch('/api/billing', {

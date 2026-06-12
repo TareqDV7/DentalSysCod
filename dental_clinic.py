@@ -1478,23 +1478,49 @@ def calculate_age(birth_date_str):
         return None
 
 
-def get_patient_credit_balance(cursor, patient_id):
-    """Return the patient's credit balance — money the clinic is currently holding
-    *for* the patient (positive means the clinic owes the patient).
+def get_patient_balance(cursor, patient_id):
+    """Single source of truth for a patient's money position.
 
-    It's overpayment on the follow-up ledger — ``Σ payment − Σ (price − discount)``
-    when that is positive — plus any manual credit adjustments recorded in
-    ``patient_credit_transactions`` (signed: positive = added credit, negative = used)."""
+    Unified across BOTH ledgers — the follow-up sheet and billing — each of which
+    can carry charges and payments:
+
+        charged     = Σ sheet(price − discount)  +  Σ billing(subtotal − discount)
+        paid        = Σ sheet(payment)           +  Σ billing(paid_amount)
+        outstanding = charged − paid             (> 0 owes, < 0 = credit held)
+
+    Returns a dict rounded to 2dp; ``credit`` is ``max(0, −outstanding)``. This is
+    the one place the patient balance is defined — receivables, the patient list,
+    the profile, payment history, and the mobile app all derive from this identity
+    so every surface reconciles to the same number."""
     cursor.execute('''
-        SELECT COALESCE(SUM(price), 0), COALESCE(SUM(COALESCE(discount, 0)), 0), COALESCE(SUM(payment), 0)
+        SELECT COALESCE(SUM(price), 0), COALESCE(SUM(COALESCE(discount, 0)), 0),
+               COALESCE(SUM(payment), 0)
         FROM patient_followups
         WHERE patient_id = ? AND COALESCE(is_deleted, 0) = 0
     ''', (patient_id,))
-    total_price, total_discount, total_paid = cursor.fetchone() or (0, 0, 0)
-    overpaid = float(total_paid) - (float(total_price) - float(total_discount))
-    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM patient_credit_transactions WHERE patient_id = ?', (patient_id,))
-    manual = float(cursor.fetchone()[0] or 0)
-    return round(max(0.0, overpaid + manual), 2)
+    s_price, s_disc, s_pay = cursor.fetchone() or (0, 0, 0)
+    cursor.execute('''
+        SELECT COALESCE(SUM(COALESCE(subtotal, 0)), 0),
+               COALESCE(SUM(COALESCE(discount, 0)), 0),
+               COALESCE(SUM(COALESCE(paid_amount, 0)), 0)
+        FROM billing
+        WHERE patient_id = ?
+    ''', (patient_id,))
+    b_sub, b_disc, b_paid = cursor.fetchone() or (0, 0, 0)
+    charged = round((float(s_price) - float(s_disc)) + (float(b_sub) - float(b_disc)), 2)
+    paid = round(float(s_pay) + float(b_paid), 2)
+    outstanding = round(charged - paid, 2)
+    return {
+        'charged': charged,
+        'paid': paid,
+        'outstanding': outstanding,
+        'credit': round(max(0.0, -outstanding), 2),
+    }
+
+
+def get_patient_credit_balance(cursor, patient_id):
+    """Patient credit = overpayment = ``max(0, −outstanding)`` on the unified ledger."""
+    return get_patient_balance(cursor, patient_id)['credit']
 
 
 _AMOUNT_EXPR_RE = re.compile(r'^[0-9.+\-*/() ]+$')
@@ -2082,11 +2108,18 @@ def get_stats():
         (today,))
     total_visits = cursor.fetchone()[0]
 
-    # Today's revenue = follow-up payments collected today.
+    # Today's revenue = payments collected today across BOTH ledgers — the
+    # follow-up sheet and billing — so a payment recorded in either place counts
+    # once. Mirrors the mobile dashboard's unified revenue.
     cursor.execute(
         'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE date(followup_date) = ? AND COALESCE(is_deleted, 0) = 0',
         (today,))
-    total_revenue = cursor.fetchone()[0]
+    followup_revenue = float(cursor.fetchone()[0] or 0)
+    cursor.execute(
+        "SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE date(COALESCE(payment_date, created_at)) = ?",
+        (today,))
+    billing_revenue = float(cursor.fetchone()[0] or 0)
+    total_revenue = followup_revenue + billing_revenue
     
     conn.close()
     
@@ -2105,18 +2138,28 @@ def patients():
     cursor = conn.cursor()
 
     if request.method == 'GET':
-        # Per-patient finance (total net billed) + balance (amount still to pay) +
-        # appointment count, computed from the follow-up ledger so the patients
-        # table can show the Finance / Balance / Appointments columns.
+        # Per-patient finance (total net charged) + balance (amount still to pay) +
+        # appointment count, computed from the UNIFIED ledger — follow-up sheet
+        # AND billing both contribute charges and payments — so the Finance /
+        # Balance columns match the profile, receivables, and the mobile app.
         cursor.execute('''
             SELECT p.*,
                 (SELECT COUNT(*) FROM appointments a WHERE a.patient_id = p.id) AS appointment_count,
                 COALESCE((SELECT SUM(COALESCE(pf.price, 0) - COALESCE(pf.discount, 0))
                           FROM patient_followups pf
-                          WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0) AS total_billed,
-                COALESCE((SELECT SUM(COALESCE(pf.price, 0) - COALESCE(pf.discount, 0) - COALESCE(pf.payment, 0))
+                          WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0)
+                + COALESCE((SELECT SUM(COALESCE(b.subtotal, 0) - COALESCE(b.discount, 0))
+                          FROM billing b WHERE b.patient_id = p.id), 0) AS total_billed,
+                (COALESCE((SELECT SUM(COALESCE(pf.price, 0) - COALESCE(pf.discount, 0))
                           FROM patient_followups pf
-                          WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0) AS balance_raw
+                          WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0)
+                 + COALESCE((SELECT SUM(COALESCE(b.subtotal, 0) - COALESCE(b.discount, 0))
+                          FROM billing b WHERE b.patient_id = p.id), 0))
+                - (COALESCE((SELECT SUM(COALESCE(pf.payment, 0))
+                          FROM patient_followups pf
+                          WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0)
+                 + COALESCE((SELECT SUM(COALESCE(b.paid_amount, 0))
+                          FROM billing b WHERE b.patient_id = p.id), 0)) AS balance_raw
             FROM patients p
             ORDER BY p.id DESC
         ''')
@@ -2244,7 +2287,13 @@ def patient_full_profile(patient_id):
     }
     profile['age'] = calculate_age(dict(patient).get('date_of_birth'))
     profile['birth_date_display'] = format_date_display(dict(patient).get('date_of_birth'))
-    profile['credit_balance'] = get_patient_credit_balance(cursor, patient_id)
+    # Unified money position (follow-up sheet + billing) — the one authoritative
+    # balance every surface should display.
+    _bal = get_patient_balance(cursor, patient_id)
+    profile['total_charged'] = _bal['charged']
+    profile['total_paid'] = _bal['paid']
+    profile['outstanding'] = max(_bal['outstanding'], 0.0)
+    profile['credit_balance'] = _bal['credit']
 
     # Attach teeth array to each treatment plan row
     plans_list = profile['treatment_plans']
@@ -3275,10 +3324,14 @@ def reports_summary():
     cursor.execute(f'SELECT COUNT(*) FROM visits WHERE 1=1{clause}', params)
     visits_count = cursor.fetchone()[0]
 
-    # Reports revenue source matches dashboard: patient follow-up payments only.
+    # Revenue = payments collected across BOTH ledgers (follow-up sheet + billing)
+    # so reports, the dashboard, and the mobile app all agree.
     clause, params = build_date_clause('followup_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
-    revenue = cursor.fetchone()[0]
+    revenue = float(cursor.fetchone()[0] or 0)
+    bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
+    cursor.execute(f'SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE 1 = 1{bclause}', bparams)
+    revenue += float(cursor.fetchone()[0] or 0)
 
     clause, params = build_date_clause('followup_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
@@ -3351,7 +3404,9 @@ def reports_weekly():
     distinct_teeth = cursor.fetchone()[0] or 0
 
     cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
-    revenue = cursor.fetchone()[0]
+    revenue = float(cursor.fetchone()[0] or 0)
+    cursor.execute('SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?', (start_str, end_str))
+    revenue += float(cursor.fetchone()[0] or 0)
 
     cursor.execute('SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     lab_expenses = cursor.fetchone()[0]
@@ -3415,19 +3470,28 @@ def reports_receivables():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
+    # Charges and payments summed across BOTH ledgers (sheet + billing) so a
+    # patient's receivable matches their profile/balance everywhere.
     cursor.execute('''
         SELECT
             p.id AS patient_id,
             p.first_name || ' ' || p.last_name AS patient_name,
-            COALESCE(SUM(pf.price), 0) AS total_to_pay,
-            COALESCE(SUM(COALESCE(pf.discount, 0)), 0) AS total_discount,
-            COALESCE(SUM(pf.payment), 0) AS total_paid,
-            MAX(pf.followup_date) AS last_followup_date
+            COALESCE((SELECT SUM(COALESCE(pf.price, 0)) FROM patient_followups pf
+                      WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0)
+              + COALESCE((SELECT SUM(COALESCE(b.subtotal, 0)) FROM billing b
+                      WHERE b.patient_id = p.id), 0) AS total_to_pay,
+            COALESCE((SELECT SUM(COALESCE(pf.discount, 0)) FROM patient_followups pf
+                      WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0)
+              + COALESCE((SELECT SUM(COALESCE(b.discount, 0)) FROM billing b
+                      WHERE b.patient_id = p.id), 0) AS total_discount,
+            COALESCE((SELECT SUM(COALESCE(pf.payment, 0)) FROM patient_followups pf
+                      WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0), 0)
+              + COALESCE((SELECT SUM(COALESCE(b.paid_amount, 0)) FROM billing b
+                      WHERE b.patient_id = p.id), 0) AS total_paid,
+            (SELECT MAX(pf.followup_date) FROM patient_followups pf
+             WHERE pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0) AS last_followup_date
         FROM patients p
-        LEFT JOIN patient_followups pf ON pf.patient_id = p.id AND COALESCE(pf.is_deleted, 0) = 0
-        GROUP BY p.id, p.first_name, p.last_name
-        HAVING (COALESCE(SUM(pf.price), 0) - COALESCE(SUM(COALESCE(pf.discount, 0)), 0) - COALESCE(SUM(pf.payment), 0)) > 0
-        ORDER BY (COALESCE(SUM(pf.price), 0) - COALESCE(SUM(COALESCE(pf.discount, 0)), 0) - COALESCE(SUM(pf.payment), 0)) DESC, patient_name ASC
+        ORDER BY patient_name ASC
     ''')
 
     rows = []
@@ -3438,7 +3502,9 @@ def reports_receivables():
         total_to_pay = float(row['total_to_pay'] or 0)
         total_discount = float(row['total_discount'] or 0)
         total_paid = float(row['total_paid'] or 0)
-        outstanding = max(total_to_pay - total_discount - total_paid, 0.0)
+        outstanding = round(total_to_pay - total_discount - total_paid, 2)
+        if outstanding <= 0.005:        # settled or in credit → not a receivable
+            continue
         total_receivables += outstanding
 
         overdue_days = 0
@@ -3460,6 +3526,7 @@ def reports_receivables():
             'overdue_days': overdue_days
         })
 
+    rows.sort(key=lambda r: r['outstanding'], reverse=True)
     conn.close()
     return jsonify({
         'total_receivables': total_receivables,
@@ -3852,10 +3919,19 @@ def data_replace():
 
 @app.route('/api/data/clear-catalogs', methods=['POST'])
 def data_clear_catalogs():
-    """Soft-delete + tombstone every procedure and tooth-condition row.
+    """Soft-delete + (re)tombstone every procedure and tooth-condition row.
 
-    Patient data is untouched. Tombstones propagate the wipe to the cloud
-    node and paired phones on the next sync. Disabled on the cloud node.
+    Idempotent on purpose: it clears rows that are *already* inactive too, and
+    refreshes each tombstone's `deleted_at`. That matters because legacy demo
+    catalogs (from app versions that shipped a seed) can still live on the
+    cloud node and paired phones after a first local clear. A plain
+    "only active rows" clear becomes a silent no-op on the second click and can
+    never re-emit the deletion, so the cloud copy lingers. Re-stamping the
+    tombstones forces them back into the next incremental `/api/sync/export`
+    delta, so the wipe re-propagates everywhere.
+
+    The reserved id=0 procedure sentinel is left untouched. Patient data is
+    never touched. Disabled on the cloud node.
     """
     if CLOUD_MODE:
         return jsonify({'error': 'Not available on the cloud node'}), 404
@@ -3864,12 +3940,13 @@ def data_clear_catalogs():
     cursor = conn.cursor()
     procedures = 0
     conditions = 0
-    cursor.execute('SELECT id FROM treatment_procedures WHERE active = 1')
+    # Every non-sentinel procedure, active or not, so a repeat click still wipes.
+    cursor.execute('SELECT id FROM treatment_procedures WHERE id != 0')
     for row in cursor.fetchall():
         cursor.execute('UPDATE treatment_procedures SET active = 0 WHERE id = ?', (row['id'],))
         record_tombstone(cursor, 'treatment_procedures', row['id'])
         procedures += 1
-    cursor.execute('SELECT id FROM tooth_conditions WHERE active = 1')
+    cursor.execute('SELECT id FROM tooth_conditions')
     for row in cursor.fetchall():
         cursor.execute('UPDATE tooth_conditions SET active = 0 WHERE id = ?', (row['id'],))
         record_tombstone(cursor, 'tooth_conditions', row['id'])
@@ -3877,6 +3954,27 @@ def data_clear_catalogs():
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'procedures_cleared': procedures, 'conditions_cleared': conditions})
+
+
+@app.route('/api/data/clear-billing', methods=['POST'])
+def data_clear_billing():
+    """Delete every billing row and tombstone it, so the wipe propagates to the
+    cloud node and paired phones on the next sync. Used to discard legacy/test
+    billing entries after the move to the unified patient ledger. Follow-up
+    sheets and patient records are untouched. Disabled on the cloud node."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    conn = sqlite3.connect(str(DB_NAME))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT id FROM billing')
+    ids = [row['id'] for row in cursor.fetchall()]
+    for bid in ids:
+        cursor.execute('DELETE FROM billing WHERE id = ?', (bid,))
+        record_tombstone(cursor, 'billing', bid)
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'billing_cleared': len(ids)})
 
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])
@@ -4167,39 +4265,34 @@ def billing():
             conn.close()
             return jsonify({'error': 'patient_id is required'}), 400
         try:
-            subtotal = float(data.get('subtotal', data.get('amount', 0)))
-            discount = float(data.get('discount', 0))
-            paid_amount = float(data.get('paid_amount', 0))
-            credit_used = float(data.get('credit_used', 0) or 0)
+            subtotal = float(data.get('subtotal', data.get('amount', 0)) or 0)
+            discount = float(data.get('discount', 0) or 0)
+            paid_amount = float(data.get('paid_amount', 0) or 0)
         except (TypeError, ValueError):
             conn.close()
             return jsonify({'error': 'Invalid billing equation values'}), 400
 
-        if subtotal <= 0:
+        if subtotal < 0:
             conn.close()
-            return jsonify({'error': 'Subtotal must be greater than zero'}), 400
+            return jsonify({'error': 'Charge cannot be negative'}), 400
         if discount < 0:
             conn.close()
             return jsonify({'error': 'Discount cannot be negative'}), 400
         if paid_amount < 0:
             conn.close()
             return jsonify({'error': 'Paid amount cannot be negative'}), 400
-        if credit_used < 0:
+        # A billing entry must do something: a charge, a payment, or both. A
+        # payment-only receipt (subtotal 0, paid > 0) draws down the patient's
+        # balance; an all-zero entry is meaningless.
+        if subtotal <= 0 and paid_amount <= 0:
             conn.close()
-            return jsonify({'error': 'Credit used cannot be negative'}), 400
-
-        # Don't let a payment draw more credit than the patient actually has.
-        if credit_used > 0:
-            available_credit = get_patient_credit_balance(cursor, int(data['patient_id']))
-            if credit_used > available_credit + 0.005:
-                conn.close()
-                return jsonify({'error': f'Patient only has ₪{available_credit:.2f} of credit available'}), 400
+            return jsonify({'error': 'Enter a charge, a payment, or both'}), 400
 
         total_amount = round(max(0.0, subtotal - discount), 2)
-        settled = paid_amount + credit_used   # cash + credit applied to this invoice
+        settled = paid_amount
         balance_due = round(max(0.0, total_amount - settled), 2)
 
-        if total_amount > 0 and settled >= total_amount:
+        if settled >= total_amount:           # fully covered (incl. payment-only)
             payment_status = 'paid'
         elif settled > 0:
             payment_status = 'partial'
@@ -4227,7 +4320,7 @@ def billing():
                 payment_method, payment_status, payment_date,
                 subtotal_expr, discount_expr, paid_amount_expr
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['patient_id'],
             data.get('treatment_id'),
@@ -4236,7 +4329,6 @@ def billing():
             subtotal,
             discount,
             paid_amount,
-            round(credit_used, 2),
             balance_due,
             data.get('payment_method'),
             payment_status,
@@ -4246,18 +4338,12 @@ def billing():
             paid_amount_expr
         ))
         billing_id = cursor.lastrowid
-        if credit_used > 0:
-            cursor.execute(
-                'INSERT INTO patient_credit_transactions (patient_id, amount, type, note, invoice_id) VALUES (?, ?, ?, ?, ?)',
-                (int(data['patient_id']), -round(credit_used, 2), 'debit', f'Applied to invoice {invoice_number}', billing_id)
-            )
         append_audit_log(cursor, 'create', 'billing', billing_id, {
             'patient_id': data.get('patient_id'),
             'invoice_number': invoice_number,
             'subtotal': subtotal,
             'discount': discount,
             'paid_amount': paid_amount,
-            'credit_used': round(credit_used, 2),
             'amount': total_amount,
             'balance_due': balance_due,
             'payment_status': payment_status
@@ -4270,8 +4356,6 @@ def billing():
 def delete_billing(billing_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Reverse any credit that this invoice consumed before removing it.
-    cursor.execute('DELETE FROM patient_credit_transactions WHERE invoice_id = ?', (billing_id,))
     cursor.execute('DELETE FROM billing WHERE id = ?', (billing_id,))
     record_tombstone(cursor, 'billing', billing_id)
     append_audit_log(cursor, 'delete', 'billing', billing_id, {'id': billing_id})
@@ -5952,28 +6036,14 @@ def update_patient(patient_id):
 
 @app.route('/api/patients/<int:patient_id>/credit', methods=['GET'])
 def patient_credit(patient_id):
+    """Patient credit = overpayment on the unified ledger (sheet + billing).
+    There is no separate manual-credit ledger any more — overpaying simply
+    leaves a negative balance that auto-offsets the next charge."""
     conn = get_db_connection()
     cursor = conn.cursor()
     balance = get_patient_credit_balance(cursor, patient_id)
-    cursor.execute('SELECT * FROM patient_credit_transactions WHERE patient_id = ? ORDER BY id DESC', (patient_id,))
-    rows = [list(r) for r in cursor.fetchall()]
     conn.close()
-    return jsonify({'balance': balance, 'transactions': rows})
-
-
-@app.route('/api/patients/<int:patient_id>/credit-adjustment', methods=['POST'])
-def patient_credit_adjustment(patient_id):
-    data = request.json or {}
-    amount = float(data.get('amount', 0))
-    note = str(data.get('note') or 'Manual adjustment')
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Store the signed amount so SUM(amount) is the running balance directly.
-    cursor.execute('INSERT INTO patient_credit_transactions (patient_id, amount, type, note) VALUES (?, ?, ?, ?)',
-                 (patient_id, amount, 'credit' if amount >= 0 else 'debit', note))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
+    return jsonify({'balance': balance, 'transactions': []})
 
 
 def open_browser(port=5000):

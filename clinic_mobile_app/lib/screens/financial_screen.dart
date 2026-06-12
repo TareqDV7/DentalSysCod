@@ -12,6 +12,7 @@ import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/clinic_card.dart';
+import 'billing_accounts_view.dart';
 
 class FinancialScreen extends StatefulWidget {
   const FinancialScreen({super.key});
@@ -83,6 +84,58 @@ class _BillingTab extends StatefulWidget {
 }
 
 class _BillingTabState extends State<_BillingTab> {
+  // false = Accounts (rolled up from the patient sheets — the default view),
+  // true = Invoices (standalone billing records added here).
+  bool _showInvoices = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final ar = context.watch<AppState>().isArabic;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<bool>(
+              segments: [
+                ButtonSegment(
+                  value: false,
+                  label: Text(AppStrings.t('accounts', isArabic: ar)),
+                  icon: const Icon(
+                      Icons.account_balance_wallet_outlined, size: 18),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text(AppStrings.t('invoices', isArabic: ar)),
+                  icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                ),
+              ],
+              selected: {_showInvoices},
+              onSelectionChanged: (s) =>
+                  setState(() => _showInvoices = s.first),
+              showSelectedIcon: false,
+            ),
+          ),
+        ),
+        Expanded(
+          child: _showInvoices
+              ? const _InvoicesView()
+              : const BillingAccountsView(),
+        ),
+      ],
+    );
+  }
+}
+
+class _InvoicesView extends StatefulWidget {
+  const _InvoicesView();
+
+  @override
+  State<_InvoicesView> createState() => _InvoicesViewState();
+}
+
+class _InvoicesViewState extends State<_InvoicesView> {
   List<BillingRecord> _records = [];
   bool _loading = true;
   String _filter = 'all';
@@ -236,7 +289,7 @@ class _BillingTabState extends State<_BillingTab> {
             children: [
               Expanded(
                 child: Text(
-                  AppStrings.t('billing', isArabic: ar),
+                  AppStrings.t('invoices', isArabic: ar),
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
@@ -248,6 +301,10 @@ class _BillingTabState extends State<_BillingTab> {
                 label: Text(AppStrings.t('add_billing', isArabic: ar)),
               ),
             ],
+          ),
+          Text(
+            AppStrings.t('invoices_hint', isArabic: ar),
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 10),
           ClinicCard(
@@ -803,8 +860,6 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
   final _subtotal = TextEditingController();
   final _discount = TextEditingController(text: '0');
   final _paid = TextEditingController();
-  final _credit = TextEditingController(text: '0');
-  double _availableCredit = 0;
   String _method = 'Cash';
   bool _saving = false;
 
@@ -855,23 +910,24 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
 
   Future<void> _save() async {
     if (_patient == null) return;
+    final ar = context.read<AppState>().isArabic;
+    final subtotal = AmountExpr.parse(_subtotal.text);
+    final discount = AmountExpr.parse(_discount.text);
+    final paid = AmountExpr.parse(_paid.text);
+    // A billing entry must carry money: a charge, a payment, or both. A
+    // payment-only receipt (charge 0, paid > 0) draws down the patient's balance.
+    if (subtotal.value <= 0 && paid.value <= 0) {
+      _showError(AppStrings.t('billing_needs_amount', isArabic: ar));
+      return;
+    }
     setState(() => _saving = true);
     try {
-      final subtotal = AmountExpr.parse(_subtotal.text);
-      final discount = AmountExpr.parse(_discount.text);
-      final paid = AmountExpr.parse(_paid.text);
-      // Credit applied can't exceed what's available.
-      final creditUsed = _availableCredit <= 0
-          ? 0.0
-          : (AmountExpr.evaluate(_credit.text) ?? 0)
-              .clamp(0.0, _availableCredit);
       await widget.onSaved(BillingRecord(
         patientId: _patient!.id!,
         patientName: _patient!.fullName,
         subtotal: subtotal.value,
         discount: discount.value,
         paidAmount: paid.value,
-        creditUsed: creditUsed.toDouble(),
         subtotalExpr: subtotal.expr,
         discountExpr: discount.expr,
         paidAmountExpr: paid.expr,
@@ -886,14 +942,9 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
     }
   }
 
-  Future<void> _loadCredit(Patient p) async {
-    final c = await context.read<AppState>().db.getPatientCreditBalance(p.id!);
-    if (mounted) setState(() => _availableCredit = c);
-  }
-
   @override
   void dispose() {
-    for (final c in [_subtotal, _discount, _paid, _credit]) {
+    for (final c in [_subtotal, _discount, _paid]) {
       c.dispose();
     }
     super.dispose();
@@ -947,20 +998,16 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
                         .map((p) => DropdownMenuItem(
                             value: p, child: Text(p.fullName)))
                         .toList(),
-                    onChanged: (p) {
-                      setState(() {
-                        _patient = p;
-                        _availableCredit = 0;
-                      });
-                      if (p != null) _loadCredit(p);
-                    },
+                    onChanged: (p) => setState(() => _patient = p),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                       controller: _subtotal,
                       decoration: InputDecoration(
                           labelText:
-                              '${AppStrings.t('amount', isArabic: ar)} (₪)',
+                              '${AppStrings.t('charge', isArabic: ar)} (₪)',
+                          helperText:
+                              AppStrings.t('charge_payment_hint', isArabic: ar),
                           prefixText: '₪ '),
                       keyboardType: TextInputType.text),
                   const SizedBox(height: 12),
@@ -979,18 +1026,6 @@ class _AddBillingSheetState extends State<_AddBillingSheet> {
                               '${AppStrings.t('amount_paid', isArabic: ar)} (₪)',
                           prefixText: '₪ '),
                       keyboardType: TextInputType.text),
-                  if (_availableCredit > 0) ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                        controller: _credit,
-                        decoration: InputDecoration(
-                            labelText:
-                                '${AppStrings.t('use_credit', isArabic: ar)} (₪)',
-                            prefixText: '₪ ',
-                            helperText:
-                                '${AppStrings.t('available', isArabic: ar)}: ₪${_availableCredit.toStringAsFixed(2)}'),
-                        keyboardType: TextInputType.text),
-                  ],
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     initialValue: _method,

@@ -40,7 +40,8 @@ class BillingRecord {
       (total - settled).clamp(0, double.infinity).toDouble();
 
   String get statusLabel {
-    if (total > 0 && settled >= total) return 'Paid';
+    // settled >= total covers a payment-only receipt (total 0, settled > 0).
+    if (settled >= total) return 'Paid';
     if (settled > 0) return 'Partial';
     return 'Unpaid';
   }

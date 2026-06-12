@@ -4,6 +4,21 @@ Flutter application for device-locked license activation and offline token verif
 
 ## Recent fixes (2026-06)
 
+- **One unified patient ledger (sheet + billing).** A patient now has a single
+  balance: `Outstanding = Σ charges − Σ payments`, where **both** the follow-up
+  sheet and billing contribute charges *and* payments. A billing entry can be a
+  charge, a payment, or both — a **payment-only** receipt has charge 0 and just
+  draws the balance down. Overpayment is simply a negative balance (credit); the
+  old separate "Use credit" step is gone. The profile balance, Billing tab
+  (Accounts), Receivables, payment history, and dashboard revenue all derive
+  from `DatabaseService.getPatientBalance()`, so every surface shows the same
+  number and the desktop and mobile agree. Mirrors the desktop's
+  `get_patient_balance`. See `docs/superpowers/specs/2026-06-12-unified-patient-ledger-design.md`.
+- **Billing tab has an Accounts / Invoices toggle.** *Accounts* (default) is the
+  per-patient unified rollup (charged / paid / balance / status) — tap a patient
+  to open their full payment history. *Invoices* keeps individual billing entries
+  with **Add** (charge and/or payment). Query: `getBillingAccounts()`; model:
+  `BillingAccount`; view: `lib/screens/billing_accounts_view.dart`.
 - **Dashboard Revenue now includes Billing.** The Revenue stat (and its
   sparkline) sums both visit/follow-up payments **and** Financial → Billing
   paid amounts, so any recorded transaction is reflected. The kept-alive

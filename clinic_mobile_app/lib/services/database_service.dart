@@ -797,26 +797,10 @@ class DatabaseService {
   // ── Patient credit ────────────────────────────────────────────────────────
 
   /// The patient's credit balance — money the clinic holds *for* the patient.
-  /// Mirrors the desktop's get_patient_credit_balance: follow-up overpayment
-  /// (`Σ payment − Σ(price − discount)`) plus signed manual transactions,
-  /// clamped at zero.
+  /// Credit = overpayment = `max(0, −outstanding)` on the unified ledger
+  /// (sheet + billing). Mirrors the desktop's `get_patient_credit_balance`.
   Future<double> getPatientCreditBalance(int patientId) async {
-    final db = await database;
-    final f = (await db.rawQuery(
-      'SELECT COALESCE(SUM(price),0) p, COALESCE(SUM(discount),0) d, '
-      'COALESCE(SUM(payment),0) pay FROM followups WHERE patient_id = ?',
-      [patientId],
-    )).first;
-    final overpaid = (f['pay'] as num).toDouble() -
-        ((f['p'] as num).toDouble() - (f['d'] as num).toDouble());
-    final t = (await db.rawQuery(
-      'SELECT COALESCE(SUM(amount),0) s FROM patient_credit_transactions '
-      'WHERE patient_id = ?',
-      [patientId],
-    )).first;
-    final manual = (t['s'] as num).toDouble();
-    final bal = overpaid + manual;
-    return bal <= 0 ? 0 : (bal * 100).round() / 100;
+    return (await getPatientBalance(patientId))['credit'] ?? 0.0;
   }
 
   Future<List<Map<String, dynamic>>> getCreditTransactions(
@@ -1199,22 +1183,86 @@ class DatabaseService {
   /// rows, not as separate billing records. Outstanding per patient is
   /// `max(Σ price − Σ discount − Σ payment, 0)` so a patient with credit
   /// (overpayment) shows nothing here, not a negative entry.
+  /// The single source of truth for one patient's money position — unified
+  /// across BOTH ledgers (follow-up sheet + billing), each of which can carry
+  /// charges and payments. Mirrors the desktop's `get_patient_balance`:
+  ///   charged     = Σ sheet(price−discount) + Σ billing(subtotal−discount)
+  ///   paid        = Σ sheet(payment)        + Σ billing(paid_amount)
+  ///   outstanding = charged − paid          (> 0 owes, < 0 = credit)
+  Future<Map<String, double>> getPatientBalance(int patientId) async {
+    final db = await database;
+    double n(Object? v) => (v as num?)?.toDouble() ?? 0.0;
+    double r2(double v) => (v * 100).round() / 100;
+    final f = (await db.rawQuery(
+      'SELECT COALESCE(SUM(price),0) p, COALESCE(SUM(discount),0) d, '
+      'COALESCE(SUM(payment),0) pay FROM followups WHERE patient_id = ?',
+      [patientId],
+    )).first;
+    final b = (await db.rawQuery(
+      'SELECT COALESCE(SUM(subtotal),0) s, COALESCE(SUM(discount),0) d, '
+      'COALESCE(SUM(paid_amount),0) paid FROM billing_records WHERE patient_id = ?',
+      [patientId],
+    )).first;
+    final charged = (n(f['p']) - n(f['d'])) + (n(b['s']) - n(b['d']));
+    final paid = n(f['pay']) + n(b['paid']);
+    final outstanding = r2(charged - paid);
+    return {
+      'charged': r2(charged),
+      'paid': r2(paid),
+      'outstanding': outstanding,
+      'credit': outstanding < 0 ? r2(-outstanding) : 0.0,
+    };
+  }
+
   Future<List<Map<String, dynamic>>> getReceivables() async {
     final db = await database;
     final rows = await db.rawQuery('''
-      SELECT
-        p.id,
-        p.first_name || ' ' || p.last_name AS patient_name,
-        COALESCE(SUM(COALESCE(f.price, 0) - COALESCE(f.discount, 0)), 0) AS total,
-        COALESCE(SUM(COALESCE(f.payment, 0)), 0) AS paid,
-        COALESCE(SUM(
-          COALESCE(f.price, 0) - COALESCE(f.discount, 0) - COALESCE(f.payment, 0)
-        ), 0) AS balance,
-        MAX(f.followup_date) AS last_date
-      FROM patients p
-      LEFT JOIN followups f ON f.patient_id = p.id
-      GROUP BY p.id, p.first_name, p.last_name
-      HAVING balance > 0
+      SELECT *, (total - paid) AS balance FROM (
+        SELECT
+          p.id,
+          p.first_name || ' ' || p.last_name AS patient_name,
+          COALESCE((SELECT SUM(COALESCE(f.price,0) - COALESCE(f.discount,0))
+                    FROM followups f WHERE f.patient_id = p.id), 0)
+            + COALESCE((SELECT SUM(COALESCE(b.subtotal,0) - COALESCE(b.discount,0))
+                    FROM billing_records b WHERE b.patient_id = p.id), 0) AS total,
+          COALESCE((SELECT SUM(COALESCE(f.payment,0))
+                    FROM followups f WHERE f.patient_id = p.id), 0)
+            + COALESCE((SELECT SUM(COALESCE(b.paid_amount,0))
+                    FROM billing_records b WHERE b.patient_id = p.id), 0) AS paid,
+          (SELECT MAX(f.followup_date) FROM followups f WHERE f.patient_id = p.id) AS last_date
+        FROM patients p
+      )
+      WHERE balance > 0.005
+      ORDER BY balance DESC, patient_name ASC
+    ''');
+    return rows.toList();
+  }
+
+  /// Per-patient billing rolled up from the UNIFIED ledger (sheet + billing), so
+  /// the Billing tab, the patient sheet, receivables, and the profile all agree.
+  /// Keeps fully-paid patients too (`line_count > 0`, not `balance > 0`) so the
+  /// tab is a complete picture rather than just a debtor list.
+  Future<List<Map<String, dynamic>>> getBillingAccounts() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT *, (total - paid) AS balance FROM (
+        SELECT
+          p.id,
+          p.first_name || ' ' || p.last_name AS patient_name,
+          COALESCE((SELECT SUM(COALESCE(f.price,0) - COALESCE(f.discount,0))
+                    FROM followups f WHERE f.patient_id = p.id), 0)
+            + COALESCE((SELECT SUM(COALESCE(b.subtotal,0) - COALESCE(b.discount,0))
+                    FROM billing_records b WHERE b.patient_id = p.id), 0) AS total,
+          COALESCE((SELECT SUM(COALESCE(f.payment,0))
+                    FROM followups f WHERE f.patient_id = p.id), 0)
+            + COALESCE((SELECT SUM(COALESCE(b.paid_amount,0))
+                    FROM billing_records b WHERE b.patient_id = p.id), 0) AS paid,
+          (SELECT MAX(f.followup_date) FROM followups f WHERE f.patient_id = p.id) AS last_date,
+          ((SELECT COUNT(*) FROM followups f WHERE f.patient_id = p.id)
+           + (SELECT COUNT(*) FROM billing_records b WHERE b.patient_id = p.id)) AS line_count
+        FROM patients p
+      )
+      WHERE line_count > 0
       ORDER BY balance DESC, patient_name ASC
     ''');
     return rows.toList();
