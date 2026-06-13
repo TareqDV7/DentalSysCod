@@ -498,6 +498,45 @@ def cloud_ping():
         return jsonify({'reachable': False, 'authorized': False, 'error': str(exc)})
 
 
+@app.route('/api/cloud/revoke', methods=['POST'])
+def cloud_revoke():
+    """Proxy the cloud's admin status-change endpoint so the vendor can revoke,
+    suspend, or re-activate a serial. Maps cloud 401 to a clear message; never
+    raises. Returns 400 only for missing/invalid local input."""
+    data = request.json or {}
+    cloud_url = str(data.get('cloud_url') or '').strip().rstrip('/')
+    admin_token = str(data.get('admin_token') or '').strip()
+    serial = str(data.get('serial') or '').strip().upper()
+    status = str(data.get('status') or '').strip()
+    if not cloud_url:
+        return jsonify({'success': False, 'error': 'cloud_url is required'}), 400
+    if not admin_token:
+        return jsonify({'success': False, 'error': 'admin_token is required'}), 400
+    if not serial:
+        return jsonify({'success': False, 'error': 'serial is required'}), 400
+    if status not in ('active', 'revoked', 'suspended'):
+        return jsonify({'success': False, 'error': 'invalid status'}), 400
+    try:
+        payload = json.dumps({'serial': serial, 'status': status}).encode('utf-8')
+        req = urllib.request.Request(
+            f'{cloud_url}/api/license/admin/revoke', data=payload, method='POST',
+            headers={'Content-Type': 'application/json', 'X-Admin-Token': admin_token})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode('utf-8') or '{}')
+        return jsonify({'success': bool(body.get('success'))})
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return jsonify({'success': False, 'error': 'admin token rejected'})
+        try:
+            msg = json.loads(exc.read().decode('utf-8') or '{}').get('error') or f'HTTP {exc.code}'
+        except (ValueError, OSError, AttributeError):
+            # AttributeError guards an HTTPError with no body (fp=None): .read() is absent.
+            msg = f'HTTP {exc.code}'
+        return jsonify({'success': False, 'error': msg})
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return jsonify({'success': False, 'error': f'Could not reach the cloud node: {exc}'})
+
+
 @app.route('/')
 def index():
     return render_template_string(INDEX_TEMPLATE)

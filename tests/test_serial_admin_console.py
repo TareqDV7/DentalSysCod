@@ -173,3 +173,69 @@ def test_cloud_ping_loopback_guarded(vendor):
     r = vendor.post('/api/cloud/ping', json={'cloud_url': 'x', 'admin_token': 't'},
                     environ_overrides={'REMOTE_ADDR': '203.0.113.9'})
     assert r.status_code == 403
+
+
+# ── /api/cloud/revoke ─────────────────────────────────────────────────────────
+
+def test_cloud_revoke_success(vendor, monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout=15):
+        seen['url'] = req.full_url
+        seen['admin'] = req.headers.get('X-admin-token')
+        seen['body'] = json.loads(req.data.decode('utf-8'))
+        return _Resp(b'{"success": true}')
+
+    monkeypatch.setattr(serial_admin.urllib.request, 'urlopen', fake_urlopen)
+    body = vendor.post('/api/cloud/revoke', json={
+        'cloud_url': 'https://cloud.test/', 'admin_token': 'sek',
+        'serial': 'dental-khk-clini-00001', 'status': 'revoked'}).get_json()
+    assert body['success'] is True
+    assert seen['url'] == 'https://cloud.test/api/license/admin/revoke'
+    assert seen['admin'] == 'sek'
+    assert seen['body'] == {'serial': 'DENTAL-KHK-CLINI-00001', 'status': 'revoked'}
+
+
+def test_cloud_revoke_maps_401(vendor, monkeypatch):
+    def boom(req, timeout=15):
+        raise urllib.error.HTTPError('u', 401, 'Unauthorized', {}, None)
+    monkeypatch.setattr(serial_admin.urllib.request, 'urlopen', boom)
+    body = vendor.post('/api/cloud/revoke', json={
+        'cloud_url': 'https://cloud.test', 'admin_token': 'bad',
+        'serial': 'DENTAL-X-0001', 'status': 'revoked'}).get_json()
+    assert body['success'] is False
+    assert body['error'] == 'admin token rejected'
+
+
+def test_cloud_revoke_validates_fields(vendor):
+    assert vendor.post('/api/cloud/revoke', json={
+        'admin_token': 't', 'serial': 'DENTAL-X-0001', 'status': 'revoked'}).status_code == 400
+    assert vendor.post('/api/cloud/revoke', json={
+        'cloud_url': 'x', 'serial': 'DENTAL-X-0001', 'status': 'revoked'}).status_code == 400
+    assert vendor.post('/api/cloud/revoke', json={
+        'cloud_url': 'x', 'admin_token': 't', 'status': 'revoked'}).status_code == 400
+    assert vendor.post('/api/cloud/revoke', json={
+        'cloud_url': 'x', 'admin_token': 't', 'serial': 'DENTAL-X-0001',
+        'status': 'nonsense'}).status_code == 400
+
+
+def test_cloud_revoke_loopback_guarded(vendor):
+    r = vendor.post('/api/cloud/revoke', json={
+        'cloud_url': 'x', 'admin_token': 't', 'serial': 'DENTAL-X-0001', 'status': 'revoked'},
+        environ_overrides={'REMOTE_ADDR': '203.0.113.9'})
+    assert r.status_code == 403
+
+
+def test_cloud_revoke_non_401_http_error_without_body(vendor, monkeypatch):
+    """A non-401 HTTPError with no response body (fp=None) must yield a clean
+    verdict, never an AttributeError/500 from calling .read() on a None body."""
+    def boom(req, timeout=15):
+        raise urllib.error.HTTPError('u', 500, 'Server Error', {}, None)
+    monkeypatch.setattr(serial_admin.urllib.request, 'urlopen', boom)
+    r = vendor.post('/api/cloud/revoke', json={
+        'cloud_url': 'https://cloud.test', 'admin_token': 'sek',
+        'serial': 'DENTAL-X-0001', 'status': 'revoked'})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['success'] is False
+    assert body['error'] == 'HTTP 500'
