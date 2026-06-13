@@ -1727,19 +1727,30 @@ HTML_TEMPLATE = '''
 
         .license-overlay {
             position:fixed; inset:0; z-index:9999; padding:20px;
-            display:flex; align-items:center; justify-content:center;
+            /* align-items:flex-start + margin:auto on the card centers it when it
+               fits but anchors it to the top (and lets the overlay scroll) when the
+               card is taller than the screen — otherwise a short viewport clips the
+               activate button / logo off-screen with no way to reach them. */
+            display:flex; align-items:flex-start; justify-content:center;
+            overflow-y:auto;
             background:
                 radial-gradient(1200px 600px at 50% -10%, rgba(29,127,183,0.28), transparent 60%),
                 rgba(8,14,26,0.72);
             backdrop-filter:blur(10px);
         }
         .license-overlay__card {
-            position:relative; width:min(460px,94vw);
+            position:relative; width:min(460px,94vw); margin:auto;
             background:var(--panel); color:var(--text);
             border:1px solid var(--line); border-radius:20px;
             padding:30px 30px 26px;
             box-shadow:0 30px 80px rgba(0,0,0,0.45);
             overflow:hidden;
+        }
+        /* Tighten the activation card on short screens so it needs less scrolling. */
+        @media (max-height: 720px) {
+            .license-overlay__card { padding:20px 24px 20px; }
+            .license-card__brand { margin-bottom:14px; }
+            .license-card__lead { margin-bottom:12px; }
         }
         .license-overlay__card::before {
             content:""; position:absolute; top:0; left:0; right:0; height:4px;
