@@ -1049,7 +1049,7 @@ function renderResults(){
     + '<button class="btn sm" onclick="publishAll(this)">Publish all to cloud</button></div>'
     + '<table><thead><tr><th>Serial number</th><th>Expires</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
-function jsArg(s){ return JSON.stringify(String(s==null?'':s)); }
+function jsArg(s){ return JSON.stringify(String(s==null?'':s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }  /* JSON-encode for the JS layer, then HTML-encode &/" so the result is safe spliced inside a double-quoted onclick="..." attribute — the browser decodes &quot; back to " before the handler runs. Used by mint-results AND licenses row buttons. */
 async function publishAll(btn){
   if(!lastRecords.length){ toast('Mint serials first.', 'err'); return; }
   if(!requireConn()) return;
