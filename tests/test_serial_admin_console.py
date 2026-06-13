@@ -45,7 +45,8 @@ def test_index_renders_with_four_views(vendor):
 
 def test_inline_script_is_valid_js():
     """Guards the templates.py escaping trap: a stray real newline inside a JS
-    string literal is a syntax error that node --check catches."""
+    string literal is a syntax error that node --check catches. Skips when node
+    is absent or can't be spawned in this environment."""
     node = shutil.which('node')
     if not node:
         pytest.skip('node not installed')
@@ -55,7 +56,74 @@ def test_inline_script_is_valid_js():
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as fh:
             fh.write(m.group(1))
-        res = subprocess.run([node, '--check', path], capture_output=True, text=True)
+        try:
+            res = subprocess.run([node, '--check', path], capture_output=True, text=True)
+        except OSError as exc:
+            pytest.skip(f'node could not be spawned: {exc}')
         assert res.returncode == 0, res.stderr
     finally:
         os.unlink(path)
+
+
+def test_get_settings_default_when_no_file(vendor):
+    body = vendor.get('/api/settings').get_json()
+    assert body['cloud_url'] == serial_admin._BAKED_CLOUD_URL
+    assert body['remember'] is False
+    assert 'admin_token' not in body
+
+
+def test_post_settings_remember_persists_token(vendor):
+    r = vendor.post('/api/settings', json={
+        'cloud_url': 'https://cloud.test', 'admin_token': 'sek', 'remember': True})
+    assert r.get_json()['success'] is True
+    saved = json.loads(vendor.settings_path.read_text(encoding='utf-8'))
+    assert saved == {'cloud_url': 'https://cloud.test', 'remember': True, 'admin_token': 'sek'}
+    got = vendor.get('/api/settings').get_json()
+    assert got['admin_token'] == 'sek' and got['remember'] is True
+
+
+def test_post_settings_no_remember_strips_token(vendor):
+    vendor.post('/api/settings', json={
+        'cloud_url': 'https://cloud.test', 'admin_token': 'sek', 'remember': True})
+    vendor.post('/api/settings', json={
+        'cloud_url': 'https://cloud.test', 'admin_token': 'sek', 'remember': False})
+    saved = json.loads(vendor.settings_path.read_text(encoding='utf-8'))
+    assert saved == {'cloud_url': 'https://cloud.test', 'remember': False}
+    got = vendor.get('/api/settings').get_json()
+    assert 'admin_token' not in got
+
+
+def test_post_settings_chmod_0600(vendor, monkeypatch):
+    """The settings file holds the admin token when remembered, so it must be
+    written 0600. (chmod is a no-op on Windows, so assert the call, not the bits.)"""
+    seen = {}
+    real_chmod = os.chmod
+    monkeypatch.setattr(serial_admin.os, 'chmod',
+                        lambda p, m: seen.update(mode=m) or real_chmod(p, m))
+    vendor.post('/api/settings', json={
+        'cloud_url': 'https://cloud.test', 'admin_token': 'sek', 'remember': True})
+    assert seen.get('mode') == 0o600
+
+
+def test_get_settings_unreadable_file_returns_default(vendor):
+    vendor.settings_path.write_text('not valid json {{{', encoding='utf-8')
+    body = vendor.get('/api/settings').get_json()
+    assert body['cloud_url'] == serial_admin._BAKED_CLOUD_URL
+    assert body['remember'] is False
+
+
+def test_settings_loopback_guarded(vendor):
+    assert vendor.get('/api/settings',
+                      environ_overrides={'REMOTE_ADDR': '203.0.113.9'}).status_code == 403
+    assert vendor.post('/api/settings', json={'cloud_url': 'x', 'remember': False},
+                       environ_overrides={'REMOTE_ADDR': '203.0.113.9'}).status_code == 403
+
+
+def test_post_settings_write_failure_surfaces_error(vendor, monkeypatch):
+    """A failed persist returns 200 + {success:false, error} (best-effort, never 500)."""
+    monkeypatch.setattr(serial_admin, '_write_settings', lambda *a: (False, 'disk full'))
+    r = vendor.post('/api/settings', json={'cloud_url': 'x', 'remember': False})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['success'] is False
+    assert 'disk full' in body['error']
