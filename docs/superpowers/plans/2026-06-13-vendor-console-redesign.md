@@ -102,7 +102,10 @@ def vendor(tmp_path, monkeypatch):
     key_file.write_text(json.dumps({'alg': 'ed25519', 'private': priv}), encoding='utf-8')
     monkeypatch.setattr(serial_admin, 'KEY_FILE', str(key_file))
     monkeypatch.delenv(serial_admin.LEDGER_FILE_ENV, raising=False)
-    monkeypatch.setenv(serial_admin.SETTINGS_FILE_ENV, str(tmp_path / 'console_settings.json'))
+    # Literal env-var name (not serial_admin.SETTINGS_FILE_ENV) so the shared
+    # fixture is stable in Task 1, before that constant exists. Task 2 adds the
+    # constant equal to this same string.
+    monkeypatch.setenv('CLINIC_CONSOLE_SETTINGS_FILE', str(tmp_path / 'console_settings.json'))
     with serial_admin.app.test_client() as c:
         c.pub_b64 = pub
         c.priv_b64 = priv
