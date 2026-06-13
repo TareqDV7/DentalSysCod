@@ -47,6 +47,23 @@ def _dst_columns(dst_cur, table: str) -> list:
     return [r[1] for r in dst_cur.fetchall()]
 
 
+def _src_has_table(src_cur, table: str) -> bool:
+    """True when the source DB actually contains `table`. An older source — e.g.
+    a .db from a clinic PC that predates the odontogram (tooth_conditions,
+    patient_tooth_chart, treatment_plan_teeth) — legitimately lacks newer tables.
+    Skipping those keeps the additive merge going instead of aborting it whole."""
+    src_cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    return src_cur.fetchone() is not None
+
+
+def _skip_missing_source(table: str, report: MergeReport) -> dict:
+    """Record that `table` is absent from the source and contributes nothing."""
+    report.warnings.append(f'{table}: not present in the source database — skipped')
+    report.add(table, 0, 0)
+    return {}
+
+
 def _remap_value(old_value, id_map: dict):
     """Translate one foreign-key value through an id map.
 
@@ -64,6 +81,8 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
     rewrite it through. Returns this table's own old_id -> new_id map. Rows that
     raise a per-row SQLite error are counted as skipped without aborting.
     """
+    if not _src_has_table(src_cur, table):
+        return _skip_missing_source(table, report)
     cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
     sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     src_cur.execute(f'SELECT * FROM {table} ORDER BY id ASC')
@@ -94,6 +113,9 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
 def _copy_medical_images(dst_cur, src_cur, remaps: dict, src_uploads, dst_uploads,
                          report: MergeReport) -> None:
     patient_map = remaps.get('patients', {})
+    if not _src_has_table(src_cur, 'medical_images'):
+        report.warnings.append('medical_images: not present in the source database — skipped')
+        return
     cols = [c for c in _dst_columns(dst_cur, 'medical_images') if c != 'id']
     src_cur.execute('SELECT * FROM medical_images ORDER BY id ASC')
     rows = [dict(r) for r in src_cur.fetchall()]
@@ -166,6 +188,8 @@ def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
     """Copy expenses, rewriting patient_id and treatment_id via their maps, and
     reference_id via the follow-up map ONLY when source_type == 'followup'
     (otherwise reference_id is unrelated bookkeeping and is preserved)."""
+    if not _src_has_table(src_cur, 'expenses'):
+        return _skip_missing_source('expenses', report)
     cols = [c for c in _dst_columns(dst_cur, 'expenses') if c != 'id']
     sql = f"INSERT INTO expenses ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     src_cur.execute('SELECT * FROM expenses ORDER BY id ASC')
@@ -201,6 +225,8 @@ def _dedupe_catalog(dst_cur, src_cur, table: str, report: MergeReport, name_col:
     """Merge a name-unique catalog. Reuse the destination row when the name
     already exists (keeping the destination's values); otherwise insert as new.
     Returns old_id -> resolved_id."""
+    if not _src_has_table(src_cur, table):
+        return _skip_missing_source(table, report)
     dst_cur.execute(f'SELECT id, {name_col} FROM {table}')
     existing = {str(r[1]).strip().lower(): r[0] for r in dst_cur.fetchall()}
     cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
