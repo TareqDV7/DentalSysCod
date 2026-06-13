@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 from window.window_state import (
+    clamp_to_screen,
     is_hidden_geometry,
     load_window_state,
     save_window_state,
@@ -91,3 +92,49 @@ def test_is_hidden_geometry_accepts_negative_but_on_screen_coords():
     # A window pulled slightly off the left edge is still legitimately placed;
     # only the -32000 sentinel range counts as hidden.
     assert is_hidden_geometry(-200, 100, 1280, 800) is False
+
+
+# ── clamp_to_screen ─────────────────────────────────────────────────────────
+
+def test_clamp_shrinks_window_larger_than_screen():
+    # A 1600x900 window saved on a big monitor, now opened on a 1366x768 screen
+    # (work area ~1366x728 after the taskbar) must shrink to fit.
+    state = WindowState(x=0, y=0, width=1600, height=900)
+    clamped = clamp_to_screen(state, 1366, 728)
+    assert clamped.width == 1366
+    assert clamped.height == 728
+
+
+def test_clamp_leaves_window_that_already_fits():
+    # 50+1200=1250 <= 1366 and 40+600=640 <= 728, so nothing needs to move.
+    state = WindowState(x=50, y=40, width=1200, height=600)
+    clamped = clamp_to_screen(state, 1366, 728)
+    assert clamped == state
+
+
+def test_clamp_repositions_window_pushed_off_screen():
+    # Saved far to the right of a wider monitor; on the small screen the window
+    # would start beyond the right edge — pull it back fully on-screen.
+    state = WindowState(x=1500, y=600, width=1000, height=700)
+    clamped = clamp_to_screen(state, 1366, 728)
+    assert clamped.width == 1000
+    assert clamped.height == 700
+    assert clamped.x + clamped.width <= 1366
+    assert clamped.y + clamped.height <= 728
+    assert clamped.x >= 0 and clamped.y >= 0
+
+
+def test_clamp_unknown_screen_size_is_noop():
+    # SystemParametersInfo can fail (returns 0,0) — never distort geometry then.
+    state = WindowState(x=10, y=10, width=1600, height=900)
+    assert clamp_to_screen(state, 0, 0) == state
+
+
+def test_clamp_preserves_none_position():
+    # WM-chosen position (None) stays None — only size is capped.
+    state = WindowState(x=None, y=None, width=1600, height=900)
+    clamped = clamp_to_screen(state, 1280, 720)
+    assert clamped.width == 1280
+    assert clamped.height == 720
+    assert clamped.x is None
+    assert clamped.y is None
