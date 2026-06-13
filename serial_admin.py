@@ -471,6 +471,33 @@ def post_settings():
     return jsonify({'success': True})
 
 
+@app.route('/api/cloud/ping', methods=['POST'])
+def cloud_ping():
+    """Probe the cloud admin API: reachable? authorized? serial count? Drives the
+    Settings 'Test connection' button and the sidebar cloud status dot. Never
+    raises - every failure maps to a clean reachable/authorized verdict."""
+    data = request.json or {}
+    cloud_url = str(data.get('cloud_url') or '').strip().rstrip('/')
+    admin_token = str(data.get('admin_token') or '').strip()
+    if not cloud_url:
+        return jsonify({'reachable': False, 'authorized': False,
+                        'error': 'cloud_url is required'}), 400
+    try:
+        req = urllib.request.Request(
+            f'{cloud_url}/api/license/admin/serials', method='GET',
+            headers={'X-Admin-Token': admin_token})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode('utf-8') or '{}')
+        return jsonify({'reachable': True, 'authorized': True,
+                        'count': int(body.get('count') or 0)})
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return jsonify({'reachable': True, 'authorized': False})
+        return jsonify({'reachable': True, 'authorized': False, 'error': f'HTTP {exc.code}'})
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return jsonify({'reachable': False, 'authorized': False, 'error': str(exc)})
+
+
 @app.route('/')
 def index():
     return render_template_string(INDEX_TEMPLATE)

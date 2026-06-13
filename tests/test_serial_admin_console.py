@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.error
 
 import pytest
 
@@ -127,3 +128,48 @@ def test_post_settings_write_failure_surfaces_error(vendor, monkeypatch):
     body = r.get_json()
     assert body['success'] is False
     assert 'disk full' in body['error']
+
+
+# ── /api/cloud/ping ───────────────────────────────────────────────────────────
+
+class _Resp:
+    def __init__(self, body): self._b = body
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): return self._b
+
+
+def test_cloud_ping_authorized(vendor, monkeypatch):
+    monkeypatch.setattr(serial_admin.urllib.request, 'urlopen',
+                        lambda req, timeout=15: _Resp(b'{"serials": [], "count": 4}'))
+    body = vendor.post('/api/cloud/ping',
+                       json={'cloud_url': 'https://cloud.test', 'admin_token': 'sek'}).get_json()
+    assert body == {'reachable': True, 'authorized': True, 'count': 4}
+
+
+def test_cloud_ping_unauthorized(vendor, monkeypatch):
+    def boom(req, timeout=15):
+        raise urllib.error.HTTPError('u', 401, 'Unauthorized', {}, None)
+    monkeypatch.setattr(serial_admin.urllib.request, 'urlopen', boom)
+    body = vendor.post('/api/cloud/ping',
+                       json={'cloud_url': 'https://cloud.test', 'admin_token': 'bad'}).get_json()
+    assert body['reachable'] is True and body['authorized'] is False
+
+
+def test_cloud_ping_unreachable(vendor, monkeypatch):
+    def boom(req, timeout=15):
+        raise urllib.error.URLError('no route to host')
+    monkeypatch.setattr(serial_admin.urllib.request, 'urlopen', boom)
+    body = vendor.post('/api/cloud/ping',
+                       json={'cloud_url': 'https://cloud.test', 'admin_token': 'sek'}).get_json()
+    assert body['reachable'] is False and body['authorized'] is False
+
+
+def test_cloud_ping_requires_url(vendor):
+    assert vendor.post('/api/cloud/ping', json={'admin_token': 'sek'}).status_code == 400
+
+
+def test_cloud_ping_loopback_guarded(vendor):
+    r = vendor.post('/api/cloud/ping', json={'cloud_url': 'x', 'admin_token': 't'},
+                    environ_overrides={'REMOTE_ADDR': '203.0.113.9'})
+    assert r.status_code == 403
