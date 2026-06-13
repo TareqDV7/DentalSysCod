@@ -30,6 +30,7 @@ KEY_FILE = os.environ.get(
 _LOOPBACK = {'127.0.0.1', '::1', 'localhost'}
 
 LEDGER_FILE_ENV = 'CLINIC_MINT_LEDGER_FILE'
+SETTINGS_FILE_ENV = 'CLINIC_CONSOLE_SETTINGS_FILE'
 
 
 # ── Local mint ledger ────────────────────────────────────────────────────────
@@ -400,6 +401,74 @@ def cloud_serials():
     except (urllib.error.URLError, OSError, ValueError) as exc:
         return jsonify({'error': f'Could not reach the cloud node: {exc}'}), 502
 
+
+
+# ── Console settings (single shared cloud connection) ─────────────────────────
+# The cloud URL + admin token are entered once in Settings and reused by every
+# cloud action. Session-only by default; persisted to a 0600 file next to the
+# signing key ONLY when the vendor opts into "Remember on this machine". The
+# token is never logged and only echoed back into the password field on rehydrate.
+
+def _settings_path():
+    override = os.environ.get(SETTINGS_FILE_ENV, '').strip()
+    if override:
+        return override
+    return os.path.join(os.path.dirname(os.path.abspath(KEY_FILE)), 'console_settings.json')
+
+
+def _read_settings():
+    """Return {cloud_url, remember, admin_token?}. Missing/unreadable/malformed
+    file -> baked default, not remembered. admin_token is present only when the
+    file recorded remember=true."""
+    try:
+        with open(_settings_path(), 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {'cloud_url': _BAKED_CLOUD_URL, 'remember': False}
+    if not isinstance(data, dict):
+        return {'cloud_url': _BAKED_CLOUD_URL, 'remember': False}
+    out = {
+        'cloud_url': str(data.get('cloud_url') or _BAKED_CLOUD_URL).strip(),
+        'remember': bool(data.get('remember')),
+    }
+    if out['remember'] and data.get('admin_token'):
+        out['admin_token'] = str(data.get('admin_token'))
+    return out
+
+
+def _write_settings(cloud_url, admin_token, remember):
+    """Persist settings. remember=True -> {cloud_url, remember, admin_token} at 0600;
+    remember=False -> {cloud_url, remember:false} (token dropped). Best-effort:
+    returns (True, None) or (False, error_message) on a read-only profile."""
+    payload = {'cloud_url': str(cloud_url or '').strip(), 'remember': bool(remember)}
+    if remember and admin_token:
+        payload['admin_token'] = str(admin_token)
+    try:
+        path = _settings_path()
+        with open(path, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return True, None
+    except OSError as exc:
+        return False, str(exc)
+
+
+@app.route('/api/settings')
+def get_settings():
+    return jsonify(_read_settings())
+
+
+@app.route('/api/settings', methods=['POST'])
+def post_settings():
+    data = request.json or {}
+    ok, err = _write_settings(data.get('cloud_url'), data.get('admin_token'),
+                              bool(data.get('remember')))
+    if not ok:
+        return jsonify({'success': False, 'error': err})
+    return jsonify({'success': True})
 
 
 @app.route('/')
