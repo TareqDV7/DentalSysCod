@@ -35,10 +35,10 @@ def vendor(tmp_path, monkeypatch):
         yield c
 
 
-@pytest.mark.xfail(reason='views land in the frontend rewrite (Task 5)', strict=False)
 def test_index_renders_with_four_views(vendor):
-    html = vendor.get('/').get_data(as_text=True)
-    assert vendor.get('/').status_code == 200
+    resp = vendor.get('/')
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
     for marker in ('id="view-dashboard"', 'id="view-issue"',
                    'id="view-licenses"', 'id="view-settings"'):
         assert marker in html
