@@ -276,9 +276,138 @@ function copyText(btn, text){
 }
 function closeDrawer(){ el('drawer').hidden = true; }
 
-/* placeholder loaders — replaced in Tasks 6 & 7 */
-function loadDashboard(){ el('view-dashboard').innerHTML = '<div class="page-h"><h1>Dashboard</h1></div><div class="card empty">Coming up next.</div>'; }
-function loadIssue(){ el('view-issue').innerHTML = '<div class="page-h"><h1>Issue serials</h1></div><div class="card empty">Coming up next.</div>'; }
+/* ---- Dashboard view ---- */
+async function loadDashboard(){
+  const { body } = await api('/api/history');
+  state.history = (body && body.records) || [];
+  const total = state.history.length;
+  const published = state.history.filter(r=>r.published).length;
+  const local = total - published;
+  const keyTxt = state.key && state.key.has_key ? 'Loaded' : 'None';
+  const cloudTxt = state.cloud.authorized ? ('Connected · ' + state.cloud.count)
+                 : state.cloud.reachable ? 'Unauthorized' : 'Offline';
+  const recent = state.history.slice(0,5);
+  const recentRows = recent.map(r=>
+    '<tr><td class="mono">' + esc(r.serial) + '</td><td>' + esc(r.clinic_name||'') + '</td>'
+    + '<td>' + statusBadge(r.published?'published':'local') + '</td>'
+    + '<td>' + fmtDate(r.expires_at) + '</td></tr>').join('');
+  const recentBlock = total
+    ? '<div class="card table-wrap"><h3 style="margin-top:0">Recent serials</h3><table>'
+      + '<thead><tr><th>Serial</th><th>Clinic</th><th>Status</th><th>Expires</th></tr></thead>'
+      + '<tbody>' + recentRows + '</tbody></table></div>'
+    : '<div class="card empty"><h3>No serials yet</h3><p>Mint your first serial to get started.</p>'
+      + '<button class="btn" onclick="showView(\'issue\')">Issue serials</button></div>';
+  el('view-dashboard').innerHTML =
+    '<div class="page-h"><div><h1>Dashboard</h1><p>Issued and published serials on this machine.</p></div>'
+    + '<div class="row-actions" style="margin:0"><button class="btn" onclick="showView(\'issue\')">Issue serials</button>'
+    + '<button class="btn secondary" onclick="showView(\'licenses\')">View licenses</button></div></div>'
+    + '<div class="grid grid-3" style="margin-bottom:16px">'
+    + statCard(total, 'Issued') + statCard(published, 'Published') + statCard(local, 'Local-only')
+    + '</div>'
+    + '<div class="grid grid-2" style="margin-bottom:16px">'
+    + '<div class="card stat"><span class="l">Signing key</span><span class="n" style="font-size:1.2rem">' + keyTxt + '</span></div>'
+    + '<div class="card stat"><span class="l">Cloud</span><span class="n" style="font-size:1.2rem">' + cloudTxt + '</span></div>'
+    + '</div>'
+    + recentBlock;
+}
+function statCard(n, label){
+  return '<div class="card stat"><span class="n">' + n + '</span><span class="l">' + label + '</span></div>';
+}
+function statusBadge(kind){
+  const map = { active:'active', revoked:'revoked', suspended:'suspended', expired:'expired',
+                local:'local', published:'published' };
+  const cls = map[kind] || 'local';
+  const txt = kind==='local' ? 'local only' : kind;
+  return '<span class="badge ' + cls + '">' + txt + '</span>';
+}
+
+/* ---- Issue view ---- */
+let lastRecords = [];
+function loadIssue(){
+  el('view-issue').innerHTML =
+    '<div class="page-h"><div><h1>Issue serials</h1><p>Mint signed serials for a clinic and publish them for short-serial activation.</p></div></div>'
+    + '<div class="card">'
+    + '  <div class="grid grid-2">'
+    + '    <div><label>Clinic name</label><input id="m-name" placeholder="Smile Dental"><div class="field-err" id="e-name" hidden></div></div>'
+    + '    <div><label>Clinic code (≤4)</label><input id="m-code" maxlength="4" placeholder="SMD"><div class="field-err" id="e-code" hidden></div></div>'
+    + '    <div><label>Plan</label><select id="m-plan"><option>Standard</option><option>Premium</option><option>Enterprise</option></select></div>'
+    + '    <div><label>Expiry (days)</label><input id="m-expiry" type="number" value="365"></div>'
+    + '    <div><label>Max devices</label><input id="m-max" type="number" value="3"></div>'
+    + '  </div>'
+    + '  <label>Device IDs (one per line — blank = one clinic-level serial)</label>'
+    + '  <textarea id="m-devices" placeholder="LAPTOP-01&#10;PHONE-02"></textarea>'
+    + '  <div class="row-actions"><button class="btn" onclick="mint()">Mint serials</button></div>'
+    + '  <div class="muted" style="font-size:.8rem;margin-top:8px">Give the clinic owner the <b>Serial Number</b> — they type it in the app to activate online. The full Activation Code is the offline fallback.</div>'
+    + '</div>'
+    + '<div id="results" style="margin-top:16px"></div>';
+}
+function validateIssue(b){
+  let ok = true;
+  const setErr = (id, msg)=>{ const e=el(id); e.hidden=!msg; e.textContent=msg||''; if(msg) ok=false; };
+  setErr('e-name', b.clinic_name ? '' : 'Clinic name is required.');
+  setErr('e-code', (b.clinic_code && b.clinic_code.length<=4) ? '' : 'Clinic code is required (1–4 characters).');
+  return ok;
+}
+function collectIssue(){
+  return {
+    clinic_name: el('m-name').value.trim(),
+    clinic_code: el('m-code').value.trim(),
+    plan_name: el('m-plan').value,
+    expiry_days: parseInt(el('m-expiry').value || '365', 10),
+    max_devices: parseInt(el('m-max').value || '1', 10),
+    devices: el('m-devices').value
+  };
+}
+async function mint(){
+  const b = collectIssue();
+  if(!validateIssue(b)) return;
+  const { ok, body } = await api('/api/mint', jsonPost(b));
+  if(!ok){ toast(body.error || 'Mint failed.', 'err'); return; }
+  lastRecords = body.records || [];
+  renderResults();
+  toast('Minted ' + lastRecords.length + ' serial(s).', 'ok');
+}
+function renderResults(){
+  if(!lastRecords.length){ el('results').innerHTML = ''; return; }
+  const rows = lastRecords.map((r,i)=>
+    '<tr><td class="mono">' + esc(r.serial) + '</td><td>' + fmtDate(r.expires_at) + '</td>'
+    + '<td><button class="btn secondary sm" onclick="copyText(this,' + jsArg(r.serial) + ')">Copy serial</button> '
+    + '<button class="btn secondary sm" onclick="copyText(this,' + jsArg(r.offline_token) + ')">Copy activation code</button></td></tr>').join('');
+  el('results').innerHTML =
+    '<div class="card table-wrap"><div class="toolbar"><h3 style="margin:0;flex:1">Results</h3>'
+    + '<button class="btn secondary sm" onclick="downloadJson()">Download JSON</button>'
+    + '<button class="btn secondary sm" onclick="downloadCsv()">Download CSV</button>'
+    + '<button class="btn sm" onclick="publishAll(this)">Publish all to cloud</button></div>'
+    + '<table><thead><tr><th>Serial number</th><th>Expires</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+function jsArg(s){ return JSON.stringify(String(s==null?'':s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }  /* JSON-encode for the JS layer, then HTML-encode &/" so the result is safe inside a double-quoted onclick="..." attribute (the browser decodes &quot; back to " before the handler runs) */
+async function publishAll(btn){
+  if(!lastRecords.length){ toast('Mint serials first.', 'err'); return; }
+  if(!requireConn()) return;
+  btn.disabled = true; btn.textContent = 'Publishing…';
+  const { ok, body } = await api('/api/upload-cloud', jsonPost(Object.assign(
+    { records: lastRecords }, state.conn)));
+  btn.disabled = false; btn.textContent = 'Publish all to cloud';
+  if(!ok){ toast(body.error || 'Upload failed.', 'err'); return; }
+  const fails = (body.results || []).filter(r=>!r.ok);
+  toast('Published ' + body.ok_count + '/' + body.total + ' serial(s).' + (fails.length?' Some failed.':''),
+        fails.length ? 'err' : 'ok');
+  pingCloud();
+}
+function _download(name, type, text){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function downloadJson(){ _download('serials.json', 'application/json', JSON.stringify(lastRecords, null, 2)); }
+function downloadCsv(){
+  const head = ['Serial','Device ID','Plan','Max Devices','Issued At','Expires At','Offline Token'];
+  const rows = lastRecords.map(r=>[r.serial,r.device_id,r.plan_name,r.max_devices,r.issued_at,r.expires_at,r.offline_token]);
+  const csv = [head].concat(rows).map(c=>c.map(x=>'"'+String(x==null?'':x).replace(/"/g,'""')+'"').join(',')).join('\r\n');
+  _download('serials.csv', 'text/csv', csv);
+}
+
+/* placeholder loader — replaced in Task 7 */
 function loadLicenses(){ el('view-licenses').innerHTML = '<div class="page-h"><h1>Licenses</h1></div><div class="card empty">Coming up next.</div>'; }
 
 document.addEventListener('DOMContentLoaded', async ()=>{
