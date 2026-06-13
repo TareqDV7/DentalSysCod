@@ -260,3 +260,13 @@ def test_jsarg_html_escapes_for_attribute_context():
     m = re.search(r'function jsArg\(s\)\{(.*?)\}', serial_admin_ui.INDEX_TEMPLATE)
     assert m, 'jsArg not found in INDEX_TEMPLATE'
     assert '&quot;' in m.group(1), 'jsArg must HTML-escape its JSON output for onclick attributes'
+
+
+# ── Task 7: Licenses view marker ──────────────────────────────────────────────
+
+def test_licenses_view_functions_present(vendor):
+    html = vendor.get('/').get_data(as_text=True)
+    for fn in ('function loadLicenses', 'function renderLicenses(', 'function joinLicenses(',
+               'function licenseRowActions(', 'function revokeRow(', 'function publishRow(',
+               'function openDetails(', 'function applyLicenseFilter('):
+        assert fn in html
