@@ -10,10 +10,14 @@ import serial_admin
 def test_index_has_key_and_mint_surfaces():
     with serial_admin.app.test_client() as c:
         html = c.get('/').get_data(as_text=True)
-    assert 'id="key-panel"' in html
-    assert 'id="mint-form"' in html
-    assert "fetch('/api/mint'" in html or 'fetch("/api/mint"' in html
-    assert "fetch('/api/key/status'" in html or 'fetch("/api/key/status"' in html
+    # The redesigned SPA renders the signing key inside the Settings view and the
+    # mint form inside the Issue view; both endpoints are wired through the api()
+    # fetch helper rather than a bare fetch() call.
+    assert 'id="view-settings"' in html
+    assert 'id="view-issue"' in html
+    assert 'id="m-name"' in html  # the mint form's clinic-name field
+    assert "'/api/mint'" in html or '"/api/mint"' in html
+    assert "'/api/key/status'" in html or '"/api/key/status"' in html
 
 
 @pytest.mark.skipif(shutil.which('node') is None, reason='node not installed')
