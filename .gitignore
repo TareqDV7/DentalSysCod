@@ -76,6 +76,8 @@ backups/
 batch_serials.csv
 serials_*.csv
 serials_*.json
+minted_serials.db
+minted_serials_history.csv
 backend_key.json
 backend_ed25519_key.json
 *.key

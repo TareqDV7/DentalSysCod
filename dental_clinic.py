@@ -235,7 +235,7 @@ DEFAULT_LICENSE_DAYS = 30
 DEFAULT_LICENSE_GRACE_DAYS = 7
 
 # Endpoints reachable on the cloud node without a clinic token.
-_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/api/license/claim', '/api/license/admin/revoke', '/api/license/admin/register-serial', '/healthz', '/logo', '/favicon.ico'}
+_CLOUD_OPEN_EXACT = {'/api/clinics/register', '/api/system/readiness', '/api/license/offline-verify', '/api/license/validate', '/api/license/claim', '/api/license/admin/revoke', '/api/license/admin/register-serial', '/api/license/admin/serials', '/healthz', '/logo', '/favicon.ico'}
 # /api/data/ is forwarded through on the cloud node so each handler can enforce its OWN
 # CLOUD_MODE 404 gate. INVARIANT: every /api/data/* route MUST start with `if CLOUD_MODE: return 404`.
 _CLOUD_OPEN_PREFIXES = ('/static/', '/api/data/')
@@ -5180,6 +5180,46 @@ def license_admin():
     finally:
         conn.close()
     return jsonify({'success': True})
+
+
+@app.route('/api/license/admin/serials', methods=['GET'])
+def license_admin_list_serials():
+    """Cloud node only, admin-token gated. Read-only registry view: list every
+    serial the cloud knows, with its live device usage, so the vendor can see what
+    has actually been issued/registered. Never returns the signed token (a secret) —
+    a `has_token` flag indicates whether short-serial activation is possible."""
+    if not CLOUD_MODE:
+        return jsonify({'error': 'Not available on a local server'}), 404
+    limited = _check_validate_rate_limit()
+    if limited is not None:
+        return limited
+    supplied = (request.headers.get('X-Admin-Token') or '').strip().encode('utf-8', 'replace')
+    expected = _ADMIN_API_TOKEN.encode('utf-8') if _ADMIN_API_TOKEN else b''
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return jsonify({'error': 'admin token required'}), 401
+    conn = sqlite3.connect(MASTER_DB_PATH)
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            'SELECT s.serial, s.status, s.plan_name, s.max_devices, s.clinic_name, '
+            '       s.issued_at, s.expires_at, s.grace_until, s.created_at, s.updated_at, '
+            '       CASE WHEN s.serial_token IS NOT NULL THEN 1 ELSE 0 END AS has_token, '
+            '       (SELECT COUNT(*) FROM license_device_slots d '
+            '          WHERE d.serial = s.serial AND d.is_active = 1) AS used_devices '
+            '  FROM license_serials s '
+            ' ORDER BY s.created_at DESC, s.serial'
+        ).fetchall()
+    finally:
+        conn.close()
+    serials = [{
+        'serial': r['serial'], 'status': r['status'], 'plan_name': r['plan_name'],
+        'clinic_name': r['clinic_name'], 'max_devices': int(r['max_devices'] or 0),
+        'used_devices': int(r['used_devices'] or 0), 'has_token': bool(r['has_token']),
+        'issued_at': r['issued_at'], 'expires_at': r['expires_at'],
+        'grace_until': r['grace_until'], 'created_at': r['created_at'],
+        'updated_at': r['updated_at'],
+    } for r in rows]
+    return jsonify({'serials': serials, 'count': len(serials)})
 
 
 def _link_clinic_to_cloud(cloud_url, serial, offline_token):
