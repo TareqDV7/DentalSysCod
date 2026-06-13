@@ -221,7 +221,7 @@ function loadSettingsView(){
     ? '<div class="muted">Key loaded.</div>'
       + '<label>Public key</label><div class="mono" style="word-break:break-all;font-size:.8rem">'
         + esc(state.key.public_key||'') + '</div>'
-      + '<div class="row-actions"><button class="btn secondary" onclick="copyText(this,\'' + esc(state.key.public_key||'') + '\')">Copy public key</button>'
+      + '<div class="row-actions"><button class="btn secondary" onclick="copyText(this,' + jsArg(state.key.public_key||'') + ')">Copy public key</button>'
       + '<button class="btn secondary" onclick="generateKey()">Rotate keypair</button></div>'
       + '<div class="field-err">Rotating invalidates every serial already issued.</div>'
     : '<div class="muted">No signing key yet — generate one to start minting.</div>'
