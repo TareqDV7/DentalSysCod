@@ -407,9 +407,181 @@ function downloadCsv(){
   _download('serials.csv', 'text/csv', csv);
 }
 
-/* placeholder loader — replaced in Task 7 */
-function loadLicenses(){ el('view-licenses').innerHTML = '<div class="page-h"><h1>Licenses</h1></div><div class="card empty">Coming up next.</div>'; }
+let licenseState = { rows: [], filter: 'all', q: '' };
 
+async function loadLicenses(){
+  const hist = await api('/api/history');
+  if(!hist.ok || !(hist.body && hist.body.records)) toast((hist.body && hist.body.error) || 'Could not load the local ledger.', 'err');
+  state.history = (hist.body && hist.body.records) || [];
+  state.registry = [];
+  if(connReady()){
+    const reg = await api('/api/cloud/serials', jsonPost(state.conn));
+    if(reg.ok) state.registry = (reg.body && reg.body.serials) || [];
+    else toast(reg.body.error || 'Could not read the cloud registry.', 'err');
+  }
+  licenseState.rows = joinLicenses(state.history, state.registry);
+  renderLicensesShell();
+  applyLicenseFilter();
+}
+function joinLicenses(local, cloud){
+  const bySerial = {};
+  for(const r of local){
+    bySerial[r.serial] = {
+      serial:r.serial, clinic_name:r.clinic_name||'', plan_name:r.plan_name||'',
+      max_devices:r.max_devices, used_devices:0, has_token:!!r.offline_token,
+      offline_token:r.offline_token||'', expires_at:r.expires_at, issued_at:r.issued_at,
+      status:null, source:'local'
+    };
+  }
+  for(const c of cloud){
+    const cur = bySerial[c.serial] || { serial:c.serial, offline_token:'', source:'cloud' };
+    cur.clinic_name = cur.clinic_name || c.clinic_name || '';
+    cur.plan_name = cur.plan_name || c.plan_name || '';
+    cur.max_devices = (c.max_devices!=null) ? c.max_devices : cur.max_devices;
+    cur.used_devices = c.used_devices || 0;
+    cur.has_token = !!c.has_token || cur.has_token;
+    cur.status = c.status || 'active';
+    cur.expires_at = cur.expires_at || c.expires_at;
+    cur.issued_at = cur.issued_at || c.issued_at;
+    cur.grace_until = c.grace_until;
+    cur.source = bySerial[c.serial] ? 'both' : 'cloud';
+    bySerial[c.serial] = cur;
+  }
+  return Object.values(bySerial);
+}
+function effectiveStatus(r){
+  if(r.status === 'revoked' || r.status === 'suspended') return r.status;
+  if(r.expires_at && new Date(r.expires_at) < new Date()) return 'expired';
+  if(r.status === 'active') return 'active';
+  return 'local';   // local-only, never published
+}
+function renderLicensesShell(){
+  const chips = ['all','published','local','active','revoked','suspended','expired'];
+  const labels = { all:'All', published:'Published', local:'Local-only', active:'Active',
+                   revoked:'Revoked', suspended:'Suspended', expired:'Expired' };
+  el('view-licenses').innerHTML =
+    '<div class="page-h"><div><h1>Licenses</h1><p>Local ledger joined with the live cloud registry.</p></div>'
+    + '<div class="row-actions" style="margin:0"><button class="btn secondary" onclick="loadLicenses()">Refresh</button></div></div>'
+    + (connReady() ? '' : '<div class="card" style="margin-bottom:14px;border-color:#f3d4a8;background:#fffaf2">'
+        + '<b>Not connected to the cloud.</b> <span class="muted">Showing local serials only. Connect in '
+        + '<a onclick="showView(\'settings\')" style="cursor:pointer;color:var(--brand)">Settings</a> to manage status and see device usage.</span></div>')
+    + '<div class="toolbar"><input type="search" id="lic-q" placeholder="Search serial or clinic…" oninput="onLicenseSearch(this.value)"></div>'
+    + '<div class="chips" id="lic-chips">' + chips.map(c=>
+        '<span class="chip' + (licenseState.filter===c?' on':'') + '" onclick="setLicenseFilter(\'' + c + '\')">' + labels[c] + '</span>').join('') + '</div>'
+    + '<div class="card table-wrap"><table><thead><tr>'
+    + '<th>Serial</th><th>Clinic</th><th>Plan</th><th>Status</th><th>Devices</th><th>Short-serial</th><th>Expiry</th><th>Source</th><th></th>'
+    + '</tr></thead><tbody id="lic-body"></tbody></table><div id="lic-empty"></div></div>';
+}
+function onLicenseSearch(v){ licenseState.q = (v||'').trim().toLowerCase(); applyLicenseFilter(); }
+function setLicenseFilter(f){ licenseState.filter = f; renderLicensesShell(); el('lic-q').value = licenseState.q; applyLicenseFilter(); }
+function applyLicenseFilter(){
+  const f = licenseState.filter, q = licenseState.q;
+  const rows = licenseState.rows.filter(r=>{
+    const eff = effectiveStatus(r);
+    const matchF = f==='all'
+      || (f==='published' && (r.source==='both'||r.source==='cloud'))
+      || (f==='local' && r.source==='local')
+      || (f===eff);
+    const matchQ = !q || (r.serial+' '+(r.clinic_name||'')).toLowerCase().includes(q);
+    return matchF && matchQ;
+  });
+  renderLicenses(rows);
+}
+function renderLicenses(rows){
+  const body = el('lic-body'), empty = el('lic-empty');
+  if(!rows.length){
+    body.innerHTML = '';
+    empty.innerHTML = '<div class="empty">No serials match.</div>';
+    return;
+  }
+  empty.innerHTML = '';
+  body.innerHTML = rows.map(r=>{
+    const eff = effectiveStatus(r);
+    const max = parseInt(r.max_devices, 10) || 0, used = parseInt(r.used_devices, 10) || 0;
+    const pct = max ? Math.min(100, Math.round(used/max*100)) : 0;
+    const devCell = max
+      ? '<div style="display:flex;align-items:center;gap:8px">' + used + '/' + max
+        + '<span class="bar" style="flex:1"><i style="width:' + pct + '%"></i></span></div>'
+      : '<span class="muted">—</span>';
+    const src = r.source==='both' ? 'local + cloud' : r.source;
+    return '<tr>'
+      + '<td class="mono">' + esc(r.serial) + '</td>'
+      + '<td>' + esc(r.clinic_name||'') + '</td>'
+      + '<td>' + esc(r.plan_name||'') + '</td>'
+      + '<td>' + statusBadge(eff) + '</td>'
+      + '<td>' + devCell + '</td>'
+      + '<td>' + (r.has_token ? '✓' : '<span class="muted">—</span>') + '</td>'
+      + '<td>' + esc(fmtDate(r.expires_at)) + '</td>'
+      + '<td class="muted">' + src + '</td>'
+      + '<td style="text-align:right">' + licenseRowActions(r, eff) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+function licenseRowActions(r, eff){
+  const conn = connReady();
+  const dis = conn ? '' : ' disabled title="Connect in Settings"';
+  let btns = '';
+  if(r.offline_token)
+    btns += '<button class="btn secondary sm" onclick="copyText(this,' + jsArg(r.offline_token) + ')">Copy code</button> ';
+  if(r.source==='local' && r.offline_token)
+    btns += '<button class="btn sm" onclick="publishRow(' + jsArg(r.serial) + ', this)"' + dis + '>Publish</button> ';
+  if(r.source!=='local'){
+    if(eff==='active' || eff==='expired'){
+      btns += '<button class="btn secondary sm" onclick="revokeRow(' + jsArg(r.serial) + ',\'suspended\',this)"' + dis + '>Suspend</button> ';
+      btns += '<button class="btn danger sm" onclick="revokeRow(' + jsArg(r.serial) + ',\'revoked\',this)"' + dis + '>Revoke</button> ';
+    } else {
+      btns += '<button class="btn sm" onclick="revokeRow(' + jsArg(r.serial) + ',\'active\',this)"' + dis + '>Re-activate</button> ';
+    }
+  }
+  btns += '<button class="btn secondary sm" onclick="openDetails(' + jsArg(r.serial) + ')">Details</button>';
+  return btns;
+}
+async function publishRow(serial, btn){
+  if(!requireConn()) return;
+  const row = licenseState.rows.find(r=>r.serial===serial);
+  if(!row || !row.offline_token){ toast('No activation code on file for this serial.', 'err'); return; }
+  btn.disabled = true; btn.textContent = 'Publishing…';
+  const { ok, body } = await api('/api/publish-token', jsonPost(Object.assign(
+    { offline_token: row.offline_token }, state.conn)));
+  if(!ok || !(body.result && body.result.ok)){
+    toast(body.error || (body.result && body.result.error) || 'Publish failed.', 'err');
+    btn.disabled = false; btn.textContent = 'Publish'; return;
+  }
+  toast('Published ' + serial + '.', 'ok');
+  loadLicenses();
+}
+async function revokeRow(serial, status, btn){
+  if(!requireConn()) return;
+  const verb = status==='revoked' ? 'revoke' : status==='suspended' ? 'suspend' : 're-activate';
+  if((status==='revoked' || status==='suspended') && !confirm('Really ' + verb + ' ' + serial + '?')) return;
+  btn.disabled = true;
+  const { body } = await api('/api/cloud/revoke', jsonPost(Object.assign(
+    { serial, status }, state.conn)));
+  if(!body.success){ toast(body.error || (verb + ' failed.'), 'err'); btn.disabled = false; return; }
+  toast(serial + ' → ' + status + '.', 'ok');
+  loadLicenses();
+}
+function openDetails(serial){
+  const r = licenseState.rows.find(x=>x.serial===serial);
+  if(!r) return;
+  const row = (k,v)=> '<dt>' + k + '</dt><dd>' + esc(v==null||v===''?'—':v) + '</dd>';
+  el('drawer-panel').innerHTML =
+    '<div class="toolbar"><h3 style="margin:0;flex:1">Serial details</h3>'
+    + '<button class="btn secondary sm" onclick="closeDrawer()">Close</button></div>'
+    + '<div class="mono" style="word-break:break-all;font-weight:600">' + esc(r.serial) + '</div>'
+    + '<dl>'
+    + row('Clinic', r.clinic_name) + row('Plan', r.plan_name)
+    + row('Status', effectiveStatus(r)) + row('Source', r.source)
+    + row('Devices', (r.max_devices? (r.used_devices||0)+' / '+r.max_devices : '—'))
+    + row('Short-serial ready', r.has_token ? 'yes' : 'no')
+    + row('Issued', fmtDate(r.issued_at)) + row('Expires', fmtDate(r.expires_at))
+    + row('Grace until', fmtDate(r.grace_until))
+    + '</dl>'
+    + (r.offline_token ? '<button class="btn secondary sm" onclick="copyText(this,' + jsArg(r.offline_token) + ')">Copy activation code</button>' : '');
+  el('drawer').hidden = false;
+}
+
+document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && !el('drawer').hidden) closeDrawer(); });
 document.addEventListener('DOMContentLoaded', async ()=>{
   await refreshKey();
   await loadSettings();
