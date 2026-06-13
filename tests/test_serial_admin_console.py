@@ -239,3 +239,24 @@ def test_cloud_revoke_non_401_http_error_without_body(vendor, monkeypatch):
     body = r.get_json()
     assert body['success'] is False
     assert body['error'] == 'HTTP 500'
+
+
+# ── Task 6: Dashboard + Issue markup marker ───────────────────────────────────
+
+def test_issue_and_dashboard_markup_present(vendor):
+    html = vendor.get('/').get_data(as_text=True)
+    # Issue form field ids the JS builds against must exist in the served template
+    # OR be created by JS we can't run here — so assert the loader functions exist.
+    for fn in ('function loadDashboard', 'function loadIssue', 'function mint(',
+               'function publishAll(', 'function downloadCsv(', 'function validateIssue('):
+        assert fn in html
+
+
+def test_jsarg_html_escapes_for_attribute_context():
+    """jsArg() output is spliced into double-quoted onclick="..." attributes (mint
+    results + licenses Copy/Publish/Revoke buttons). Its JSON quotes must be HTML-
+    escaped to &quot; or the attribute closes early and the handler loses its arg.
+    Regression guard for that quoting bug."""
+    m = re.search(r'function jsArg\(s\)\{(.*?)\}', serial_admin_ui.INDEX_TEMPLATE)
+    assert m, 'jsArg not found in INDEX_TEMPLATE'
+    assert '&quot;' in m.group(1), 'jsArg must HTML-escape its JSON output for onclick attributes'
