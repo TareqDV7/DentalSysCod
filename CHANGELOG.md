@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-14 — v1.1.1
+
+- **Desktop UX fixes + data-tools / merge robustness (`DentaCare-Setup.exe` v1.1.1).** A maintenance release on top of v1.1.0 that fixes four issues clinic operators hit in the desktop window, tidies the Reports tab, and removes a dangerous bulk action. Cloud and mobile are unaffected. Shipped via PR #5; 556 tests / 59 suites passing.
+  - **Merge now surfaces the real error.** `/api/data/merge` (and `/api/data/replace`) previously failed with a useless "see server log" — invisible in the desktop WebView2 window. The 500 response now carries the actual `type(exc): message`, and `db_merge.merge_database` wraps each dependent table in a `_safe_table` guard (records a warning and skips) so one bad table can't abort the whole additive merge. Catalogs + patients stay foundational/fatal.
+  - **Export DB now works on the desktop.** WebView2 can't surface a browser download from `window.location.href`, so the Export button appeared to do nothing. New `POST /api/data/export-bundle-file` writes the bundle to an `exports/` folder beside the DB and the new `WindowApi.open_path()` reveals it; plain browsers still get the streaming download.
+  - **Clear catalogs now empties the admin views.** Clearing soft-deletes (tombstoned for sync), but the Administration → Catalog views fetched with `include_inactive=1` / `all=1`, so cleared rows lingered. The admin views now fetch active-only and refresh after a clear.
+  - **Reports tab tidied.** Removed the misplaced "Owed / Outstanding Balances" block (receivables belong only in Financial → Receivables) and replaced it with grouped detail cards — Activity (visits / appointments / treatment plans) and Finance (revenue / gross profit / lab + other expenses / profit). Bilingual EN/AR.
+  - **Removed the bulk "Clear billing entries" action** (UI + JS + `POST /api/data/clear-billing` endpoint) — too dangerous; a regression test now asserts the route is 404.
+
 ## 2026-05-28
 
 - **Standalone installer hardening — five bugs found and fixed during a full dev-machine smoke test (§3.2–§3.7 + §4).** Ran the complete install / upgrade / uninstall / migration / edge-case checklist on a real Windows 11 machine (no VM). Data preservation was verified by SHA-256 fingerprinting the DB across every uninstall/reinstall. All five fixes are in `installer\DentaCare.iss` (+ a regenerated `DentaCare.ico`); the Python suite is unaffected (193 still passing).
