@@ -2314,29 +2314,21 @@ HTML_TEMPLATE = '''
                     <!-- Treatment Catalog moved to Administration tab -->
                 </div>
 
-                <div class="stats-grid" style="margin-top:20px;">
+                <h3 style="margin-top:20px;" data-i18n="activity_overview">Activity</h3>
+                <div class="stats-grid" style="margin-top:10px;">
                     <div class="stat-card"><h3 id="report-visits">0</h3><p data-i18n="visits">Visits</p></div>
-                    <div class="stat-card"><h3 id="report-revenue">₪ 0</h3><p data-i18n="revenue">Revenue</p></div>
-                    <div class="stat-card"><h3 id="report-expenses">₪ 0</h3><p data-i18n="expenses">Expenses</p></div>
-                    <div class="stat-card"><h3 id="report-clinic-gross-profit">₪ 0</h3><p data-i18n="clinic_gross_profit">Clinic Gross Profit</p></div>
-                    <div class="stat-card"><h3 id="report-profit">₪ 0</h3><p data-i18n="profit">Profit</p></div>
-                    <div class="stat-card"><h3 id="report-receivables-total">₪ 0</h3><p data-i18n="unpaid_by_patients">Unpaid by Patients</p></div>
+                    <div class="stat-card"><h3 id="report-appointments">0</h3><p data-i18n="appointments">Appointments</p></div>
+                    <div class="stat-card"><h3 id="report-treatment-plans">0</h3><p data-i18n="treatment_plans">Treatment Plans</p></div>
                 </div>
-                <h3 style="margin-top:20px;" data-i18n="outstanding_balances">Outstanding Balances (current)</h3>
-                <div class="table-container" style="margin-top:12px;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th data-i18n="patient_name">Patient Name</th>
-                                <th data-i18n="total_to_pay">Total to Pay</th>
-                                <th data-i18n="paid">Paid</th>
-                                <th data-i18n="left">Left</th>
-                                <th data-i18n="last_date">Last Date</th>
-                                <th data-i18n="overdue_days">Overdue Days</th>
-                            </tr>
-                        </thead>
-                        <tbody id="report-receivables-body"><tr><td colspan="6" data-i18n="no_data">No data</td></tr></tbody>
-                    </table>
+                <h3 style="margin-top:20px;" data-i18n="finance_overview">Finance</h3>
+                <div class="stats-grid" style="margin-top:10px;">
+                    <div class="stat-card"><h3 id="report-revenue">₪ 0</h3><p data-i18n="revenue">Revenue</p></div>
+                    <div class="stat-card"><h3 id="report-clinic-gross-profit">₪ 0</h3><p data-i18n="clinic_gross_profit">Clinic Gross Profit</p></div>
+                    <div class="stat-card"><h3 id="report-lab-expenses">₪ 0</h3><p data-i18n="lab_expenses">Lab Expenses</p></div>
+                    <div class="stat-card"><h3 id="report-expenses-paid">₪ 0</h3><p data-i18n="expenses_paid">Expenses Paid</p></div>
+                    <div class="stat-card"><h3 id="report-expenses-postponed">₪ 0</h3><p data-i18n="expenses_postponed">Expenses Postponed</p></div>
+                    <div class="stat-card"><h3 id="report-expenses">₪ 0</h3><p data-i18n="expenses">Expenses</p></div>
+                    <div class="stat-card"><h3 id="report-profit">₪ 0</h3><p data-i18n="profit">Profit</p></div>
                 </div>
             </div>
 
@@ -2653,7 +2645,6 @@ HTML_TEMPLATE = '''
                     <label class="btn btn-danger" for="replace-file" style="cursor:pointer;" data-i18n="replace_db">&#9851;&#65039; Replace database</label>
                     <input type="file" id="replace-file" accept=".zip,.db" style="display:none" onchange="startDataImport('replace', this)">
                     <button class="btn btn-danger" type="button" onclick="clearCatalogs()" data-en="🧹 Clear catalogs" data-ar="🧹 إفراغ القوائم">🧹 Clear catalogs</button>
-                    <button class="btn btn-danger" type="button" onclick="clearBilling()" data-en="🧹 Clear billing entries" data-ar="🧹 إفراغ الفواتير">🧹 Clear billing entries</button>
                   </div>
                   <div id="data-tools-result" class="muted" style="font-size:0.88em;min-height:1.2em;"></div>
                 </div>
@@ -3143,8 +3134,11 @@ HTML_TEMPLATE = '''
                 transfer: 'Transfer',
                 todays_revenue: "Today's Revenue",
                 todays_visits: "Today's Visits",
-                unpaid_by_patients: 'Unpaid by Patients',
-                outstanding_balances: 'Amounts Still Owed (current)',
+                activity_overview: 'Activity',
+                finance_overview: 'Finance',
+                treatment_plans: 'Treatment Plans',
+                expenses_paid: 'Expenses Paid',
+                expenses_postponed: 'Expenses Postponed',
                 create_invoice: 'Create Invoice',
                 invoice_no: 'Invoice #',
                 balance_due: 'Amount to Pay',
@@ -3520,8 +3514,11 @@ HTML_TEMPLATE = '''
                 transfer: 'تحويل',
                 todays_revenue: 'إيرادات اليوم',
                 todays_visits: 'زيارات اليوم',
-                unpaid_by_patients: 'مستحق على المرضى',
-                outstanding_balances: 'مبالغ ما زالت مستحقة (حالياً)',
+                activity_overview: 'النشاط',
+                finance_overview: 'المالية',
+                treatment_plans: 'الخطط العلاجية',
+                expenses_paid: 'مصاريف مدفوعة',
+                expenses_postponed: 'مصاريف مؤجلة',
                 create_invoice: 'إنشاء فاتورة',
                 invoice_no: 'رقم الفاتورة',
                 balance_due: 'المبلغ المطلوب',
@@ -4057,7 +4054,9 @@ HTML_TEMPLATE = '''
         }
 
         async function loadProcedureCatalog() {
-            const response = await fetch('/api/treatment-procedures?include_inactive=1').catch(() => null);
+            // Active-only: a cleared (soft-deleted) procedure must disappear from
+            // the catalog view, matching every other consumer and "Clear catalogs".
+            const response = await fetch('/api/treatment-procedures').catch(() => null);
             if (!response || !response.ok) { treatmentProceduresCache = []; }
             else {
                 treatmentProceduresCache = await response.json().catch(() => []);
@@ -4088,7 +4087,8 @@ HTML_TEMPLATE = '''
         async function renderToothConditionsTable() {
           const wrap = document.getElementById('tooth-conditions-table');
           if (!wrap) return;
-          const rows = await (await fetch('/api/tooth-conditions?all=1')).json();
+          // Active-only so a cleared (soft-deleted) condition disappears from view.
+          const rows = await (await fetch('/api/tooth-conditions')).json();
           wrap.innerHTML = `<table><thead><tr>
               <th>${t('color','Color')}</th><th>${t('name','Name')}</th><th>${t('name_ar','Arabic')}</th>
               <th>#</th><th></th></tr></thead><tbody>` +
@@ -5081,21 +5081,31 @@ HTML_TEMPLATE = '''
             if (startDate) params.set('start_date', startDate);
             if (endDate) params.set('end_date', endDate);
             const report = await fetch(`/api/reports/summary?${params.toString()}`).then(r => r.json());
-            document.getElementById('report-visits').textContent = report.visits;
-            const reportRevenue = parseCurrency(report.revenue);
-            const reportExpenses = parseCurrency(report.expenses);
-            const reportClinicGrossProfit = parseCurrency(report.clinic_gross_profit);
-            const reportProfit = parseCurrency(report.profit);
-            document.getElementById('report-revenue').textContent = '₪ ' + reportRevenue.toFixed(2);
-            document.getElementById('report-expenses').textContent = '₪ ' + reportExpenses.toFixed(2);
-            document.getElementById('report-clinic-gross-profit').textContent = '₪ ' + reportClinicGrossProfit.toFixed(2);
-            document.getElementById('report-profit').textContent = '₪ ' + reportProfit.toFixed(2);
+            renderReportStats(report);
 
             const rangeText = startDate && endDate
                 ? `${t('range', 'Range')}: ${formatDateDisplay(startDate)} - ${formatDateDisplay(endDate)}`
                 : `${t('range', 'Range')}: ${t('full_period', 'full period')}`;
             document.getElementById('weekly-report-range').textContent = rangeText;
-            await loadReportReceivables();
+        }
+
+        // Paint the shared Reports stat grid from a /reports/summary or
+        // /reports/weekly payload. Money fields tolerate missing values (→ 0);
+        // the visit card prefers the weekly session count when present.
+        function renderReportStats(data) {
+            data = data || {};
+            const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+            const money = (v) => '₪ ' + parseCurrency(v).toFixed(2);
+            setText('report-visits', data.session_count || data.visits || 0);
+            setText('report-appointments', data.appointments || 0);
+            setText('report-treatment-plans', data.treatment_plans || 0);
+            setText('report-revenue', money(data.revenue));
+            setText('report-clinic-gross-profit', money(data.clinic_gross_profit));
+            setText('report-lab-expenses', money(data.lab_expenses));
+            setText('report-expenses-paid', money(data.expenses_paid));
+            setText('report-expenses-postponed', money(data.expenses_postponed));
+            setText('report-expenses', money(data.expenses));
+            setText('report-profit', money(data.profit));
         }
 
         async function loadWeeklyReportFromPicker() {
@@ -5112,19 +5122,10 @@ HTML_TEMPLATE = '''
 
         async function _doLoadWeeklyReport(startDate, endDate) {
             const weekly = await fetch(`/api/reports/weekly?week_start=${encodeURIComponent(startDate)}`).then(r => r.json());
-            document.getElementById('report-visits').textContent = weekly.session_count || weekly.visits || 0;
-            const weeklyRevenue = parseCurrency(weekly.revenue);
-            const weeklyExpenses = parseCurrency(weekly.expenses);
-            const weeklyClinicGrossProfit = parseCurrency(weekly.clinic_gross_profit);
-            const weeklyProfit = parseCurrency(weekly.profit);
-            document.getElementById('report-revenue').textContent = '₪ ' + weeklyRevenue.toFixed(2);
-            document.getElementById('report-expenses').textContent = '₪ ' + weeklyExpenses.toFixed(2);
-            document.getElementById('report-clinic-gross-profit').textContent = '₪ ' + weeklyClinicGrossProfit.toFixed(2);
-            document.getElementById('report-profit').textContent = '₪ ' + weeklyProfit.toFixed(2);
+            renderReportStats(weekly);
             document.getElementById('weekly-report-range').textContent = t('weekly_range_text', 'Weekly range: {start} to {end}')
                 .replace('{start}', weekly.week_start_display || weekly.week_start)
                 .replace('{end}', weekly.week_end_display || weekly.week_end);
-            await loadReportReceivables();
         }
 
         async function loadMonthlyReport() {
@@ -5212,36 +5213,6 @@ HTML_TEMPLATE = '''
                 return;
             }
 
-            tbody.innerHTML = rows.map(item => `
-                <tr>
-                    <td>${item.patient_name || ''}</td>
-                    <td>₪ ${(parseCurrency(item.total_to_pay) - parseCurrency(item.total_discount)).toFixed(2)}</td>
-                    <td>₪ ${parseCurrency(item.total_paid).toFixed(2)}</td>
-                    <td>₪ ${parseCurrency(item.outstanding).toFixed(2)}</td>
-                    <td>${formatDateDisplay(item.last_followup_date) || ''}</td>
-                    <td>${parseInt(item.overdue_days || 0, 10)}</td>
-                </tr>
-            `).join('');
-        }
-
-        // The Reports tab's "Outstanding Balances" block — what each patient still owes.
-        // This is a current snapshot (not scoped to the report's date range), shown
-        // whenever a weekly/monthly/lab report is run.
-        async function loadReportReceivables() {
-            const totalEl = document.getElementById('report-receivables-total');
-            const tbody = document.getElementById('report-receivables-body');
-            if (!totalEl && !tbody) return;
-            let payload;
-            try { payload = await fetch('/api/reports/receivables').then(r => r.json()); }
-            catch (_) { return; }
-            const total = parseCurrency(payload?.total_receivables || 0);
-            const rows = Array.isArray(payload?.rows) ? payload.rows : [];
-            if (totalEl) totalEl.textContent = `₪ ${total.toFixed(2)}`;
-            if (!tbody) return;
-            if (!rows.length) {
-                tbody.innerHTML = `<tr><td colspan="6">${t('no_receivables', 'No outstanding balances — everyone is paid up.')}</td></tr>`;
-                return;
-            }
             tbody.innerHTML = rows.map(item => `
                 <tr>
                     <td>${item.patient_name || ''}</td>
@@ -5750,7 +5721,24 @@ HTML_TEMPLATE = '''
             window.location.href = '/api/backup';
         }
 
-        function exportBundle() {
+        async function exportBundle() {
+            const out = document.getElementById('data-tools-result');
+            // Desktop shell: the embedded WebView can't surface a browser download,
+            // so the server writes the bundle to disk and the shell reveals it.
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.open_path) {
+                if (out) out.textContent = (currentLanguage === 'ar') ? 'جارٍ التصدير…' : 'Exporting…';
+                try {
+                    const r = await fetch('/api/data/export-bundle-file', { method: 'POST' });
+                    const b = await r.json();
+                    if (!r.ok || !b.success) throw new Error(b.error || 'failed');
+                    if (out) out.textContent = ((currentLanguage === 'ar') ? 'تم التصدير إلى: ' : 'Exported to: ') + b.path;
+                    try { window.pywebview.api.open_path(b.path); } catch (_) {}
+                } catch (e) {
+                    if (out) out.textContent = ((currentLanguage === 'ar') ? 'فشل التصدير: ' : 'Export failed: ') + (e.message || e);
+                }
+                return;
+            }
+            // Plain browser: stream the download straight to the client machine.
             window.location.href = '/api/data/export-bundle';
         }
 
@@ -5798,29 +5786,11 @@ HTML_TEMPLATE = '''
             if (out) out.textContent = (currentLanguage === 'ar')
               ? `تم إفراغ ${b.procedures_cleared} إجراء و ${b.conditions_cleared} حالة.`
               : `Cleared ${b.procedures_cleared} procedures and ${b.conditions_cleared} conditions.`;
+            // Refresh the catalog views so the cleared state shows immediately.
+            if (typeof loadProcedureCatalog === 'function') loadProcedureCatalog();
+            if (typeof renderToothConditionsTable === 'function') renderToothConditionsTable();
           } catch (e) {
             if (out) out.textContent = ((currentLanguage === 'ar') ? 'فشل الإفراغ: ' : 'Clear failed: ') + e.message;
-          }
-        }
-
-        async function clearBilling() {
-          const msg = (currentLanguage === 'ar')
-            ? 'سيتم حذف كل سجلّات الفوترة (تبقى سجلّات المرضى وأوراق المتابعة كما هي). متابعة؟'
-            : 'This deletes every billing entry (patient records and follow-up sheets are kept). Continue?';
-          if (!confirm(msg)) return;
-          const out = document.getElementById('data-tools-result');
-          if (out) out.textContent = (currentLanguage === 'ar') ? 'جارٍ الحذف…' : 'Clearing…';
-          try {
-            const r = await fetch('/api/data/clear-billing', { method: 'POST' });
-            const b = await r.json();
-            if (!r.ok) throw new Error(b.error || 'failed');
-            if (out) out.textContent = (currentLanguage === 'ar')
-              ? `تم حذف ${b.billing_cleared} سجل فوترة.`
-              : `Cleared ${b.billing_cleared} billing entries.`;
-            if (typeof loadBilling === 'function') loadBilling();
-            if (typeof loadReceivables === 'function') loadReceivables();
-          } catch (e) {
-            if (out) out.textContent = ((currentLanguage === 'ar') ? 'فشل الحذف: ' : 'Clear failed: ') + e.message;
           }
         }
 

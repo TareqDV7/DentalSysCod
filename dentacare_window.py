@@ -76,7 +76,7 @@ def _screen_work_area():
 
 
 class WindowApi:
-    """Exposed to the offline.html page via pywebview's JS bridge."""
+    """Exposed to the web UI via pywebview's JS bridge."""
 
     def restart_service(self):
         try:
@@ -84,6 +84,27 @@ class WindowApi:
                            capture_output=True, check=False, timeout=10)
         except Exception:
             pass
+
+    def open_path(self, path):
+        """Reveal an exported file (or its folder) in the OS file manager.
+
+        The portal calls this after a desktop export, because the embedded
+        WebView can't surface a browser download — the server writes the bundle
+        to disk and the shell opens it here. Returns True on a best-effort launch."""
+        try:
+            target = os.path.normpath(str(path or ''))
+            if not target:
+                return False
+            if sys.platform == 'win32':
+                # '/select,' opens Explorer with the file highlighted.
+                subprocess.run(['explorer', '/select,', target], check=False)
+            elif sys.platform == 'darwin':
+                subprocess.run(['open', '-R', target], check=False)
+            else:
+                subprocess.run(['xdg-open', os.path.dirname(target) or '.'], check=False)
+            return True
+        except Exception:
+            return False
 
 
 def _resolve_initial_url() -> tuple[str, bool]:

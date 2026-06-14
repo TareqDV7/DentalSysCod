@@ -271,9 +271,29 @@ _GENERIC_ORDER = [
 ]
 
 
+def _safe_table(report: MergeReport, table: str, fn) -> dict:
+    """Run one dependent table's copy in isolation. On any failure record a
+    warning and return an empty id map, so a single problematic table can never
+    abort the whole additive merge (per-row errors are already isolated inside
+    the copiers; this catches a copier that fails wholesale — e.g. an unexpected
+    schema quirk in the source table)."""
+    try:
+        result = fn()
+        return result if isinstance(result, dict) else {}
+    except Exception as exc:  # noqa: BLE001 — isolate the table, keep the merge going
+        report.warnings.append(
+            f'{table}: skipped — table copy failed ({type(exc).__name__}: {exc})')
+        return {}
+
+
 def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
                    include_images=True, include_credit=True) -> MergeReport:
-    """Additively merge the SQLite DB at src_db_path into dst_conn. Caller commits."""
+    """Additively merge the SQLite DB at src_db_path into dst_conn. Caller commits.
+
+    Catalogs and patients are foundational: if either fails wholesale the error
+    propagates so the caller rolls back and surfaces it. Every dependent table is
+    isolated via ``_safe_table`` — its failure is recorded as a warning and the
+    rest of the merge continues."""
     report = MergeReport()
     src_conn = sqlite3.connect(f'file:{src_db_path}?mode=ro', uri=True)
     src_conn.row_factory = sqlite3.Row
@@ -287,21 +307,30 @@ def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
         # Patients next, then everything that hangs off them.
         remaps['patients'] = _copy_table(dst_cur, src_cur, 'patients', {}, remaps, report)
         for table, fk_cols in _GENERIC_ORDER:
-            remaps[table] = _copy_table(dst_cur, src_cur, table, fk_cols, remaps, report)
-        _copy_expenses(dst_cur, src_cur, remaps, report)
-        remaps['patient_tooth_chart'] = _copy_table(
-            dst_cur, src_cur, 'patient_tooth_chart',
-            {'patient_id': 'patients', 'condition_id': 'tooth_conditions'}, remaps, report)
+            remaps[table] = _safe_table(
+                report, table,
+                lambda t=table, f=fk_cols: _copy_table(dst_cur, src_cur, t, f, remaps, report))
+        _safe_table(report, 'expenses',
+                    lambda: _copy_expenses(dst_cur, src_cur, remaps, report))
+        remaps['patient_tooth_chart'] = _safe_table(
+            report, 'patient_tooth_chart',
+            lambda: _copy_table(dst_cur, src_cur, 'patient_tooth_chart',
+                                {'patient_id': 'patients', 'condition_id': 'tooth_conditions'},
+                                remaps, report))
         if include_images:
-            _copy_medical_images(dst_cur, src_cur, remaps, src_uploads, dst_uploads, report)
+            _safe_table(report, 'medical_images',
+                        lambda: _copy_medical_images(dst_cur, src_cur, remaps,
+                                                     src_uploads, dst_uploads, report))
         if include_credit:
-            _copy_table(dst_cur, src_cur, 'patient_credit_transactions',
-                        {'patient_id': 'patients', 'invoice_id': 'billing'}, remaps, report)
+            _safe_table(report, 'patient_credit_transactions',
+                        lambda: _copy_table(dst_cur, src_cur, 'patient_credit_transactions',
+                                            {'patient_id': 'patients', 'invoice_id': 'billing'},
+                                            remaps, report))
         # Recompute running balances for every imported patient.
         for new_pid in remaps['patients'].values():
             try:
                 _recompute_balances(dst_cur, new_pid)
-            except sqlite3.Error as exc:
+            except Exception as exc:  # noqa: BLE001 — a recompute hiccup must not abort the merge
                 report.warnings.append(f'balance recompute failed for patient {new_pid}: {exc}')
     finally:
         src_conn.close()

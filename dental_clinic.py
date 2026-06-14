@@ -1950,8 +1950,9 @@ def _safe_next_url(target):
 # offline-first mobile app keeps working unchanged.
 _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure',
                         '/api/cloud/pairing-qr',
-                        '/api/data/export-bundle', '/api/data/merge', '/api/data/replace',
-                        '/api/data/clear-catalogs', '/api/data/clear-billing'}
+                        '/api/data/export-bundle', '/api/data/export-bundle-file',
+                        '/api/data/merge', '/api/data/replace',
+                        '/api/data/clear-catalogs'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
@@ -3923,6 +3924,40 @@ def data_export_bundle():
     return send_file(bundle, as_attachment=True, download_name=name)
 
 
+@app.route('/api/data/export-bundle-file', methods=['POST'])
+def data_export_bundle_file():
+    """Write a bundle (.zip of a consistent DB snapshot + the uploads folder) to an
+    ``exports/`` folder beside the live database and return its absolute path.
+
+    The desktop shell runs the portal inside an embedded WebView that can't
+    reliably surface a browser 'save as' download, so instead of streaming the
+    file (see ``/api/data/export-bundle``) the shell writes it to disk here and
+    reveals it in the file manager. Login-gated, local server only."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    export_dir = os.path.join(os.path.dirname(os.path.abspath(str(DB_NAME))), 'exports')
+    os.makedirs(export_dir, exist_ok=True)
+    tmpdir = tempfile.mkdtemp(prefix='dc_export_')
+    try:
+        snap = os.path.join(tmpdir, 'dental_clinic.db')
+        src = sqlite3.connect(str(DB_NAME))
+        try:
+            dst = sqlite3.connect(snap)
+            try:
+                with dst:
+                    src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        name = f"dentacare_bundle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        out_path = os.path.join(export_dir, name)
+        db_import.build_bundle(out_path, snap, str(UPLOAD_FOLDER))
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return jsonify({'success': True, 'path': out_path, 'name': name})
+
+
 def _save_and_resolve_upload(tmpdir):
     """Persist the uploaded file and resolve it to (db_path, uploads_dir|None).
     Returns (None, None, error_message) on validation failure."""
@@ -3963,10 +3998,10 @@ def data_merge():
             conn.commit()
             # Note: image files copied before any rollback remain on disk as harmless
             # orphans (prefixed 'merged_') and are recoverable via the safety backup.
-        except Exception:  # noqa: BLE001 — any failure must roll back the whole merge
+        except Exception as exc:  # noqa: BLE001 — any failure must roll back the whole merge
             conn.rollback()
             app.logger.exception('Data merge failed')
-            return jsonify({'error': 'Merge failed and was rolled back. See server log for details.',
+            return jsonify({'error': f'Merge failed and was rolled back: {type(exc).__name__}: {exc}',
                             'backup_path': backup_path}), 500
         finally:
             conn.close()
@@ -4014,9 +4049,9 @@ def data_replace():
                 shutil.copytree(uploads_dir, str(UPLOAD_FOLDER))
             # Migrate the incoming DB forward to the current schema.
             init_database()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             app.logger.exception('Data replace failed')
-            return jsonify({'error': 'Replace failed. See server log for details.',
+            return jsonify({'error': f'Replace failed: {type(exc).__name__}: {exc}',
                             'backup_path': backup_path}), 500
         finally:
             _MAINTENANCE = False
@@ -4062,27 +4097,6 @@ def data_clear_catalogs():
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'procedures_cleared': procedures, 'conditions_cleared': conditions})
-
-
-@app.route('/api/data/clear-billing', methods=['POST'])
-def data_clear_billing():
-    """Delete every billing row and tombstone it, so the wipe propagates to the
-    cloud node and paired phones on the next sync. Used to discard legacy/test
-    billing entries after the move to the unified patient ledger. Follow-up
-    sheets and patient records are untouched. Disabled on the cloud node."""
-    if CLOUD_MODE:
-        return jsonify({'error': 'Not available on the cloud node'}), 404
-    conn = sqlite3.connect(str(DB_NAME))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT id FROM billing')
-    ids = [row['id'] for row in cursor.fetchall()]
-    for bid in ids:
-        cursor.execute('DELETE FROM billing WHERE id = ?', (bid,))
-        record_tombstone(cursor, 'billing', bid)
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'billing_cleared': len(ids)})
 
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])
