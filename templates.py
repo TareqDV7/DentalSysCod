@@ -1817,6 +1817,74 @@ HTML_TEMPLATE = '''
         }
 
         body.view-only [data-write] { pointer-events:none; opacity:.5; }
+
+        /* ── Toast notifications (transient, non-blocking) ─────────────────── */
+        #toast-container {
+            position: fixed;
+            top: 18px;
+            inset-inline-end: 18px;
+            z-index: 10001;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: min(360px, calc(100vw - 36px));
+            pointer-events: none;
+        }
+        .toast {
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-inline-start: 4px solid var(--accent);
+            border-radius: 12px;
+            background: var(--panel);
+            color: var(--text);
+            box-shadow: var(--shadow);
+            font-size: 0.9rem;
+            font-weight: 600;
+            line-height: 1.35;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .toast--in { opacity: 1; transform: translateY(0); }
+        .toast--leaving { opacity: 0; transform: translateY(-8px); }
+        .toast--success { border-inline-start-color: var(--ok); }
+        .toast--error   { border-inline-start-color: var(--danger); }
+        .toast--warning { border-inline-start-color: var(--warning); }
+        .toast--info    { border-inline-start-color: var(--accent); }
+        .toast__msg { flex: 1; word-break: break-word; }
+        .toast__action {
+            flex-shrink: 0;
+            background: transparent;
+            border: 1px solid var(--line);
+            color: var(--accent);
+            font: inherit;
+            font-weight: 800;
+            padding: 3px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .toast__action:hover { background: var(--bg-1); border-color: var(--accent); }
+        .toast__close {
+            flex-shrink: 0;
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            font-size: 1.15rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 2px;
+            transition: color 0.15s;
+        }
+        .toast__close:hover { color: var(--text); }
+        @media (prefers-reduced-motion: reduce) {
+            .toast { transition: opacity 0.01s linear; transform: none; }
+            .toast--in, .toast--leaving { transform: none; }
+        }
     </style>
 </head>
 <body>
@@ -2951,6 +3019,8 @@ HTML_TEMPLATE = '''
         // Language translations map
         const translations = {
             en: {
+                undo: 'Undo',
+                close: 'Close',
                 title: '{{ SYSTEM_NAME }}',
                 subtitle: '{{ CLINIC_TAGLINE }}',
                 doctor_name: '{{ DOCTOR_NAME }}',
@@ -3331,6 +3401,8 @@ HTML_TEMPLATE = '''
                 plan: 'Plan'
             },
             ar: {
+                undo: 'تراجع',
+                close: 'إغلاق',
                 title: '{{ SYSTEM_NAME }}',
                 subtitle: 'إدارة شاملة للمرضى والمواعيد',
                 doctor_name: '{{ DOCTOR_NAME_AR }}',
@@ -3720,6 +3792,85 @@ HTML_TEMPLATE = '''
             const selectedLang = lang === 'ar' ? 'ar' : 'en';
             const value = translations[selectedLang]?.[key];
             return typeof value === 'string' ? value : fallback;
+        }
+
+        // ── Toast notifications ──────────────────────────────────────────────
+        // Transient, non-blocking messages. New code should call showToast()
+        // instead of native alert(); blocking confirm()/prompt() stay until the
+        // modal sweep. type is one of success|error|warning|info.
+        // opts: { duration (ms), sticky (bool), action: { label, onClick } }.
+        // Returns { dismiss } so callers can close it programmatically.
+        const TOAST_MAX = 4;
+        function _toastContainer() {
+            let c = document.getElementById('toast-container');
+            if (!c) {
+                c = document.createElement('div');
+                c.id = 'toast-container';
+                document.body.appendChild(c);
+            }
+            c.dir = currentLanguage === 'ar' ? 'rtl' : 'ltr';
+            return c;
+        }
+        function showToast(message, type = 'info', opts = {}) {
+            const c = _toastContainer();
+            while (c.children.length >= TOAST_MAX && c.firstElementChild) {
+                c.removeChild(c.firstElementChild);
+            }
+            const kind = ['success', 'error', 'warning', 'info'].includes(type) ? type : 'info';
+            const toast = document.createElement('div');
+            toast.className = 'toast toast--' + kind;
+            toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+            toast.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+
+            const msg = document.createElement('div');
+            msg.className = 'toast__msg';
+            msg.textContent = String(message == null ? '' : message);   // textContent → no HTML injection
+            toast.appendChild(msg);
+
+            let actionBtn = null;
+            if (opts.action && typeof opts.action.onClick === 'function') {
+                actionBtn = document.createElement('button');
+                actionBtn.type = 'button';
+                actionBtn.className = 'toast__action';
+                actionBtn.textContent = opts.action.label || t('undo', 'Undo');
+                toast.appendChild(actionBtn);
+            }
+
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'toast__close';
+            closeBtn.setAttribute('aria-label', t('close', 'Close'));
+            closeBtn.textContent = '×';
+            toast.appendChild(closeBtn);
+
+            c.appendChild(toast);
+            requestAnimationFrame(() => toast.classList.add('toast--in'));
+
+            const sticky = !!opts.sticky;
+            const duration = opts.duration != null ? opts.duration : (kind === 'error' ? 7000 : 4000);
+            let timer = null;
+            let dismissed = false;
+            const dismiss = () => {
+                if (dismissed) return;
+                dismissed = true;
+                if (timer) { clearTimeout(timer); timer = null; }
+                toast.classList.add('toast--leaving');
+                toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+                setTimeout(() => toast.remove(), 400);   // fallback if transitionend never fires
+            };
+            const arm = () => { if (!sticky && !dismissed && timer === null) timer = setTimeout(dismiss, duration); };
+            const disarm = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+            closeBtn.addEventListener('click', dismiss);
+            if (actionBtn) {
+                actionBtn.addEventListener('click', () => {
+                    try { opts.action.onClick(); } finally { dismiss(); }
+                });
+            }
+            toast.addEventListener('mouseenter', disarm);   // pause countdown while hovered
+            toast.addEventListener('mouseleave', arm);
+            arm();
+            return { dismiss };
         }
 
         function getInvoicePrintLanguage() {
