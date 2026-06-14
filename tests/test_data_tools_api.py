@@ -1,6 +1,7 @@
 # tests/test_data_tools_api.py
 """Route tests for the Settings -> Data Tools surface."""
 import io
+import os
 import sqlite3
 import zipfile
 
@@ -43,6 +44,31 @@ def test_export_bundle_returns_zip_with_db(client):
     assert resp.status_code == 200
     z = zipfile.ZipFile(io.BytesIO(resp.data))
     assert 'dental_clinic.db' in z.namelist()
+
+
+def test_export_bundle_file_requires_login(client):
+    assert client.post('/api/data/export-bundle-file').status_code == 401
+
+
+def test_export_bundle_file_writes_zip_to_disk(client):
+    # The desktop shell can't trigger a browser download, so the bundle is written
+    # to an exports/ folder beside the DB and its path is returned.
+    _login(client)
+    resp = client.post('/api/data/export-bundle-file')
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['success'] is True
+    path = body['path']
+    assert os.path.isfile(path)
+    assert os.path.basename(os.path.dirname(path)) == 'exports'
+    with zipfile.ZipFile(path) as z:
+        assert 'dental_clinic.db' in z.namelist()
+
+
+def test_export_bundle_file_disabled_on_cloud(client, monkeypatch):
+    _login(client)
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
+    assert client.post('/api/data/export-bundle-file').status_code == 404
 
 
 def _make_source_db(path):
@@ -98,6 +124,48 @@ def test_merge_disabled_on_cloud(client, monkeypatch):
     monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
     resp = client.post('/api/data/merge', data={}, content_type='multipart/form-data')
     assert resp.status_code == 404
+
+
+def test_merge_surfaces_real_error(client, tmp_path, monkeypatch):
+    # A merge failure must report the actual exception — the desktop app has no
+    # visible server log, so "see server log" was a dead end for the user.
+    _login(client)
+    src = tmp_path / 'other_clinic.db'
+    _make_source_db(src)
+
+    def boom(*a, **k):
+        raise ValueError('kaboom-detail')
+
+    monkeypatch.setattr(dental_clinic.db_merge, 'merge_database', boom)
+    with open(src, 'rb') as fh:
+        data = {'file': (io.BytesIO(fh.read()), 'other_clinic.db')}
+        resp = client.post('/api/data/merge', data=data, content_type='multipart/form-data')
+    assert resp.status_code == 500
+    assert 'kaboom-detail' in resp.get_json().get('error', '')
+
+
+def test_merge_isolates_a_failing_dependent_table(client, tmp_path, monkeypatch):
+    # One dependent table failing wholesale must not abort the whole additive
+    # merge: patients still import and the skip is recorded as a warning.
+    _login(client)
+    import db_merge
+    real_copy = db_merge._copy_table
+
+    def flaky(dst_cur, src_cur, table, fk_cols, remaps, report):
+        if table == 'billing':
+            raise RuntimeError('boom-billing')
+        return real_copy(dst_cur, src_cur, table, fk_cols, remaps, report)
+
+    monkeypatch.setattr(db_merge, '_copy_table', flaky)
+    src = tmp_path / 'other_clinic.db'
+    _make_source_db(src)
+    with open(src, 'rb') as fh:
+        data = {'file': (io.BytesIO(fh.read()), 'other_clinic.db')}
+        resp = client.post('/api/data/merge', data=data, content_type='multipart/form-data')
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['report']['total_added'] >= 1                       # patient still imported
+    assert any('billing' in w for w in body['report']['warnings'])  # skip recorded
 
 
 def test_replace_requires_login(client):
@@ -242,31 +310,9 @@ def test_clear_catalogs_blocked_on_cloud_node(client, monkeypatch):
     assert client.post('/api/data/clear-catalogs').status_code == 404
 
 
-def test_clear_billing_deletes_and_tombstones(client):
+def test_clear_billing_endpoint_removed(client):
+    # The bulk "clear billing" action was removed as too dangerous (it wiped
+    # every invoice in one click). The route must no longer exist — 404 even
+    # for a logged-in staff session.
     _login(client)
-    import sqlite3, dental_clinic
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
-    cur = conn.cursor()
-    cur.execute("INSERT INTO patients (first_name, last_name, phone) VALUES ('B','C','0')")
-    pid = cur.lastrowid
-    conn.commit()
-    conn.close()
-    client.post('/api/billing', json={'patient_id': pid, 'subtotal': 100, 'paid_amount': 50})
-    assert len(client.get('/api/billing').get_json()) >= 1
-
-    r = client.post('/api/data/clear-billing')
-    assert r.status_code == 200
-    assert r.get_json()['billing_cleared'] >= 1
-    assert client.get('/api/billing').get_json() == []
-
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
-    n = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='billing'").fetchone()[0]
-    conn.close()
-    assert n >= 1
-
-
-def test_clear_billing_blocked_on_cloud_node(client, monkeypatch):
-    _login(client)
-    import dental_clinic
-    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
     assert client.post('/api/data/clear-billing').status_code == 404

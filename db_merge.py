@@ -47,6 +47,23 @@ def _dst_columns(dst_cur, table: str) -> list:
     return [r[1] for r in dst_cur.fetchall()]
 
 
+def _src_has_table(src_cur, table: str) -> bool:
+    """True when the source DB actually contains `table`. An older source — e.g.
+    a .db from a clinic PC that predates the odontogram (tooth_conditions,
+    patient_tooth_chart, treatment_plan_teeth) — legitimately lacks newer tables.
+    Skipping those keeps the additive merge going instead of aborting it whole."""
+    src_cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    return src_cur.fetchone() is not None
+
+
+def _skip_missing_source(table: str, report: MergeReport) -> dict:
+    """Record that `table` is absent from the source and contributes nothing."""
+    report.warnings.append(f'{table}: not present in the source database — skipped')
+    report.add(table, 0, 0)
+    return {}
+
+
 def _remap_value(old_value, id_map: dict):
     """Translate one foreign-key value through an id map.
 
@@ -64,6 +81,8 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
     rewrite it through. Returns this table's own old_id -> new_id map. Rows that
     raise a per-row SQLite error are counted as skipped without aborting.
     """
+    if not _src_has_table(src_cur, table):
+        return _skip_missing_source(table, report)
     cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
     sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     src_cur.execute(f'SELECT * FROM {table} ORDER BY id ASC')
@@ -94,6 +113,9 @@ def _copy_table(dst_cur, src_cur, table: str, fk_cols: dict, remaps: dict, repor
 def _copy_medical_images(dst_cur, src_cur, remaps: dict, src_uploads, dst_uploads,
                          report: MergeReport) -> None:
     patient_map = remaps.get('patients', {})
+    if not _src_has_table(src_cur, 'medical_images'):
+        report.warnings.append('medical_images: not present in the source database — skipped')
+        return
     cols = [c for c in _dst_columns(dst_cur, 'medical_images') if c != 'id']
     src_cur.execute('SELECT * FROM medical_images ORDER BY id ASC')
     rows = [dict(r) for r in src_cur.fetchall()]
@@ -166,6 +188,8 @@ def _copy_expenses(dst_cur, src_cur, remaps: dict, report: MergeReport) -> dict:
     """Copy expenses, rewriting patient_id and treatment_id via their maps, and
     reference_id via the follow-up map ONLY when source_type == 'followup'
     (otherwise reference_id is unrelated bookkeeping and is preserved)."""
+    if not _src_has_table(src_cur, 'expenses'):
+        return _skip_missing_source('expenses', report)
     cols = [c for c in _dst_columns(dst_cur, 'expenses') if c != 'id']
     sql = f"INSERT INTO expenses ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     src_cur.execute('SELECT * FROM expenses ORDER BY id ASC')
@@ -201,6 +225,8 @@ def _dedupe_catalog(dst_cur, src_cur, table: str, report: MergeReport, name_col:
     """Merge a name-unique catalog. Reuse the destination row when the name
     already exists (keeping the destination's values); otherwise insert as new.
     Returns old_id -> resolved_id."""
+    if not _src_has_table(src_cur, table):
+        return _skip_missing_source(table, report)
     dst_cur.execute(f'SELECT id, {name_col} FROM {table}')
     existing = {str(r[1]).strip().lower(): r[0] for r in dst_cur.fetchall()}
     cols = [c for c in _dst_columns(dst_cur, table) if c != 'id']
@@ -245,9 +271,29 @@ _GENERIC_ORDER = [
 ]
 
 
+def _safe_table(report: MergeReport, table: str, fn) -> dict:
+    """Run one dependent table's copy in isolation. On any failure record a
+    warning and return an empty id map, so a single problematic table can never
+    abort the whole additive merge (per-row errors are already isolated inside
+    the copiers; this catches a copier that fails wholesale — e.g. an unexpected
+    schema quirk in the source table)."""
+    try:
+        result = fn()
+        return result if isinstance(result, dict) else {}
+    except Exception as exc:  # noqa: BLE001 — isolate the table, keep the merge going
+        report.warnings.append(
+            f'{table}: skipped — table copy failed ({type(exc).__name__}: {exc})')
+        return {}
+
+
 def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
                    include_images=True, include_credit=True) -> MergeReport:
-    """Additively merge the SQLite DB at src_db_path into dst_conn. Caller commits."""
+    """Additively merge the SQLite DB at src_db_path into dst_conn. Caller commits.
+
+    Catalogs and patients are foundational: if either fails wholesale the error
+    propagates so the caller rolls back and surfaces it. Every dependent table is
+    isolated via ``_safe_table`` — its failure is recorded as a warning and the
+    rest of the merge continues."""
     report = MergeReport()
     src_conn = sqlite3.connect(f'file:{src_db_path}?mode=ro', uri=True)
     src_conn.row_factory = sqlite3.Row
@@ -261,21 +307,30 @@ def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
         # Patients next, then everything that hangs off them.
         remaps['patients'] = _copy_table(dst_cur, src_cur, 'patients', {}, remaps, report)
         for table, fk_cols in _GENERIC_ORDER:
-            remaps[table] = _copy_table(dst_cur, src_cur, table, fk_cols, remaps, report)
-        _copy_expenses(dst_cur, src_cur, remaps, report)
-        remaps['patient_tooth_chart'] = _copy_table(
-            dst_cur, src_cur, 'patient_tooth_chart',
-            {'patient_id': 'patients', 'condition_id': 'tooth_conditions'}, remaps, report)
+            remaps[table] = _safe_table(
+                report, table,
+                lambda t=table, f=fk_cols: _copy_table(dst_cur, src_cur, t, f, remaps, report))
+        _safe_table(report, 'expenses',
+                    lambda: _copy_expenses(dst_cur, src_cur, remaps, report))
+        remaps['patient_tooth_chart'] = _safe_table(
+            report, 'patient_tooth_chart',
+            lambda: _copy_table(dst_cur, src_cur, 'patient_tooth_chart',
+                                {'patient_id': 'patients', 'condition_id': 'tooth_conditions'},
+                                remaps, report))
         if include_images:
-            _copy_medical_images(dst_cur, src_cur, remaps, src_uploads, dst_uploads, report)
+            _safe_table(report, 'medical_images',
+                        lambda: _copy_medical_images(dst_cur, src_cur, remaps,
+                                                     src_uploads, dst_uploads, report))
         if include_credit:
-            _copy_table(dst_cur, src_cur, 'patient_credit_transactions',
-                        {'patient_id': 'patients', 'invoice_id': 'billing'}, remaps, report)
+            _safe_table(report, 'patient_credit_transactions',
+                        lambda: _copy_table(dst_cur, src_cur, 'patient_credit_transactions',
+                                            {'patient_id': 'patients', 'invoice_id': 'billing'},
+                                            remaps, report))
         # Recompute running balances for every imported patient.
         for new_pid in remaps['patients'].values():
             try:
                 _recompute_balances(dst_cur, new_pid)
-            except sqlite3.Error as exc:
+            except Exception as exc:  # noqa: BLE001 — a recompute hiccup must not abort the merge
                 report.warnings.append(f'balance recompute failed for patient {new_pid}: {exc}')
     finally:
         src_conn.close()

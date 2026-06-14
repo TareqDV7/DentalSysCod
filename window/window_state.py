@@ -36,6 +36,25 @@ def is_hidden_geometry(x, y, width, height) -> bool:
     return False
 
 
+def clamp_to_screen(state: "WindowState", screen_w: int, screen_h: int) -> "WindowState":
+    """Return a copy of `state` guaranteed to fit on a screen_w x screen_h work
+    area (taskbar already excluded). Caps the size to the screen and pulls a
+    positioned window fully back on-screen. A non-positive screen dimension means
+    "unknown" (e.g. SystemParametersInfo failed) and leaves that axis untouched,
+    so we never distort geometry on a guess.
+
+    This is what stops a window sized on a large monitor from opening with its
+    edges/buttons off the bottom or right of a smaller laptop screen."""
+    new_w = min(state.width, screen_w) if screen_w > 0 else state.width
+    new_h = min(state.height, screen_h) if screen_h > 0 else state.height
+    new_x, new_y = state.x, state.y
+    if screen_w > 0 and new_x is not None:
+        new_x = max(0, min(new_x, screen_w - new_w))
+    if screen_h > 0 and new_y is not None:
+        new_y = max(0, min(new_y, screen_h - new_h))
+    return WindowState(width=new_w, height=new_h, x=new_x, y=new_y)
+
+
 @dataclass(frozen=True)
 class WindowState:
     width: int = DEFAULT_WIDTH

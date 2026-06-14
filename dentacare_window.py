@@ -30,6 +30,7 @@ from window.health_check import wait_for_service
 from window.single_instance import SingleInstanceGuard
 from window.window_state import (
     WindowState,
+    clamp_to_screen,
     is_hidden_geometry,
     load_window_state,
     save_window_state,
@@ -47,8 +48,35 @@ WINDOW_STATE_PATH = (
 )
 
 
+def _screen_work_area():
+    """(width, height) of the primary monitor's work area (taskbar excluded) on
+    Windows, or (0, 0) when it can't be determined. Callers treat (0, 0) as
+    'unknown' and skip clamping. Used so a window saved on a big monitor doesn't
+    open with its edges off a smaller screen."""
+    if sys.platform != 'win32':
+        return (0, 0)
+    try:
+        import ctypes
+        from ctypes import wintypes
+        SPI_GETWORKAREA = 0x0030
+        # Match the per-monitor DPI awareness pywebview sets, so the work area
+        # we read is in the same pixel space as the window geometry.
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            pass
+        rect = wintypes.RECT()
+        ok = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_GETWORKAREA, 0, ctypes.byref(rect), 0)
+        if not ok:
+            return (0, 0)
+        return (rect.right - rect.left, rect.bottom - rect.top)
+    except Exception:
+        return (0, 0)
+
+
 class WindowApi:
-    """Exposed to the offline.html page via pywebview's JS bridge."""
+    """Exposed to the web UI via pywebview's JS bridge."""
 
     def restart_service(self):
         try:
@@ -56,6 +84,27 @@ class WindowApi:
                            capture_output=True, check=False, timeout=10)
         except Exception:
             pass
+
+    def open_path(self, path):
+        """Reveal an exported file (or its folder) in the OS file manager.
+
+        The portal calls this after a desktop export, because the embedded
+        WebView can't surface a browser download — the server writes the bundle
+        to disk and the shell opens it here. Returns True on a best-effort launch."""
+        try:
+            target = os.path.normpath(str(path or ''))
+            if not target:
+                return False
+            if sys.platform == 'win32':
+                # '/select,' opens Explorer with the file highlighted.
+                subprocess.run(['explorer', '/select,', target], check=False)
+            elif sys.platform == 'darwin':
+                subprocess.run(['open', '-R', target], check=False)
+            else:
+                subprocess.run(['xdg-open', os.path.dirname(target) or '.'], check=False)
+            return True
+        except Exception:
+            return False
 
 
 def _resolve_initial_url() -> tuple[str, bool]:
@@ -159,15 +208,19 @@ class App:
 
     def run(self):
         initial_url, booted_on_offline = _resolve_initial_url()
+        # Shrink/reposition a geometry saved on a larger monitor so it fits this
+        # screen — otherwise the bottom edge and buttons can land off-screen.
+        screen_w, screen_h = _screen_work_area()
+        state = clamp_to_screen(self._state, screen_w, screen_h)
         self.window = webview.create_window(
             title='DentaCare',
             url=initial_url,
-            width=self._state.width,
-            height=self._state.height,
-            x=self._state.x,
-            y=self._state.y,
+            width=state.width,
+            height=state.height,
+            x=state.x,
+            y=state.y,
             resizable=True,
-            min_size=(900, 600),
+            min_size=(min(900, state.width), min(600, state.height)),
             js_api=WindowApi(),
         )
         self.window.events.closing += self._on_window_closing

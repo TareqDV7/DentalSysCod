@@ -166,6 +166,17 @@ curl -sX POST https://app.dentacare.tech/api/license/admin/revoke \
 
 A revoked serial then fails `/api/license/validate` with `{valid:false, reason:"revoked"}` and is never reactivated by a newer (renewal) token.
 
+### Listing the serial registry (who's been issued what)
+
+`GET /api/license/admin/serials` (same `X-Admin-Token` gate) returns a read-only view of every serial the cloud knows, with live device usage — so you can confirm a serial is actually registered (and see why a short-serial activation might fail):
+
+```bash
+curl -s https://app.dentacare.tech/api/license/admin/serials \
+  -H "X-Admin-Token: $CLINIC_ADMIN_API_TOKEN" | python -m json.tool
+```
+
+Each row is `{serial, status, plan_name, clinic_name, max_devices, used_devices, has_token, expires_at, …}`. The signed token itself is **never** returned — `has_token:true` means the serial can be activated by short serial alone (a `has_token:false` row needs the full Activation Code re-published via `register-serial`). The vendor minting console (`serial_admin.py`) surfaces this same list under **View cloud registry**.
+
 ## API surface on the cloud node
 
 - `POST /api/clinics/register` — `{serial_number, clinic_name, offline_token?}` → `{clinic_id, clinic_token, already_registered}`. Idempotent per serial. **No clinic token required.** `offline_token` is the **Ed25519** vendor-signed serial from `serial_generator.py`, verified with `CLINIC_SERIAL_PUBLIC_KEY`; required when `CLINIC_REQUIRE_SIGNED_SERIAL=1` (the default), otherwise verified when present. Local servers don't call this directly — they call their own `POST /api/cloud/pair`, which forwards the `offline_token` (from the pair body, `app_settings['cloud_offline_token']`, or env `CLINIC_OFFLINE_TOKEN`). See *Signed serials*.

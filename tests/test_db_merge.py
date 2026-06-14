@@ -222,6 +222,31 @@ def test_merge_tolerates_older_source_missing_column(tmp_path):
     assert report.tables['patients']['added'] == 1
 
 
+def test_merge_tolerates_older_source_missing_table(tmp_path):
+    """An older source DB that predates a whole table (e.g. the odontogram's
+    tooth_conditions / patient_tooth_chart) must NOT abort the entire merge.
+    Regression: merging a .db from an older PC raised
+    'no such table: tooth_conditions' and rolled the whole merge back."""
+    dst = _new_db(tmp_path / 'dst.db')
+    src = _new_db(tmp_path / 'src.db')
+    src.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Old', 'Clinic')")
+    src.commit()
+    # Simulate an older schema: drop recent tables the engine reads from.
+    for t in ('tooth_conditions', 'patient_tooth_chart', 'treatment_plan_teeth'):
+        src.execute(f'DROP TABLE {t}')
+    src.commit()
+
+    report = db_merge.merge_database(dst, str(tmp_path / 'src.db'),
+                                     include_images=False, include_credit=False)
+    dst.commit()
+
+    # The patient still imported despite the missing tables.
+    assert dst.execute("SELECT COUNT(*) FROM patients WHERE first_name='Old'").fetchone()[0] == 1
+    assert report.tables['patients']['added'] == 1
+    # A warning records that a missing source table was skipped.
+    assert any('tooth_conditions' in w for w in report.warnings)
+
+
 def test_merge_garbage_source_raises_cleanly(tmp_path):
     dst = _new_db(tmp_path / 'dst.db')
     junk = tmp_path / 'junk.db'
