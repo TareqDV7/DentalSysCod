@@ -1885,6 +1885,33 @@ HTML_TEMPLATE = '''
             .toast { transition: opacity 0.01s linear; transform: none; }
             .toast--in, .toast--leaving { transform: none; }
         }
+
+        /* ── Duplicate-patient review ──────────────────────────────────────── */
+        .dup-review { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+        .dup-group {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: var(--panel);
+        }
+        .dup-group__title { font-weight: 800; font-size: 0.95rem; }
+        .dup-group__hint { color: var(--muted); font-size: 0.8rem; margin: 4px 0 10px; }
+        .dup-group__patients { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+        .dup-patient {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px;
+            cursor: pointer; transition: border-color 0.15s, background 0.15s;
+        }
+        .dup-patient:hover { border-color: var(--accent); }
+        .dup-patient input[type="radio"] { accent-color: var(--accent); flex-shrink: 0; }
+        .dup-patient__name { font-weight: 700; }
+        .dup-patient__meta { color: var(--muted); font-size: 0.82rem; margin-inline-start: auto; white-space: nowrap; }
+        .dup-patient__del {
+            flex-shrink: 0; background: transparent; border: 1px solid var(--line);
+            color: var(--danger); font: inherit; font-size: 0.8rem; font-weight: 700;
+            padding: 3px 9px; border-radius: 7px; cursor: pointer; transition: background 0.15s, color 0.15s;
+        }
+        .dup-patient__del:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
     </style>
 </head>
 <body>
@@ -2713,8 +2740,10 @@ HTML_TEMPLATE = '''
                     <label class="btn btn-danger" for="replace-file" style="cursor:pointer;" data-i18n="replace_db">&#9851;&#65039; Replace database</label>
                     <input type="file" id="replace-file" accept=".zip,.db" style="display:none" onchange="startDataImport('replace', this)">
                     <button class="btn btn-danger" type="button" onclick="clearCatalogs()" data-en="🧹 Clear catalogs" data-ar="🧹 إفراغ القوائم">🧹 Clear catalogs</button>
+                    <button class="btn" type="button" onclick="findDuplicatePatients()" data-en="👥 Find duplicate patients" data-ar="👥 البحث عن مكرر">👥 Find duplicate patients</button>
                   </div>
                   <div id="data-tools-result" class="muted" style="font-size:0.88em;min-height:1.2em;"></div>
+                  <div id="dup-review-panel" class="dup-review" style="display:none;"></div>
                 </div>
                 <details class="form-panel" id="audit-log-panel" style="margin-bottom:18px;">
                   <summary>🧾 <span data-i18n="audit_log">Audit Log</span></summary>
@@ -3021,6 +3050,18 @@ HTML_TEMPLATE = '''
             en: {
                 undo: 'Undo',
                 close: 'Close',
+                searching: 'Searching…',
+                dup_load_failed: 'Could not load duplicates: ',
+                dup_none: 'No duplicate patients found 🎉',
+                dup_records: 'records',
+                dup_hint: 'Pick the record to KEEP — the others merge into it. Or delete a duplicate directly.',
+                dup_merge: 'Merge others into selected',
+                dup_merge_confirm: 'Click again to confirm',
+                dup_merged: 'Duplicates merged into one record',
+                dup_merge_failed: 'Merge failed: ',
+                dup_del_confirm: 'Confirm?',
+                dup_deleted: 'Duplicate deleted',
+                dup_delete_failed: 'Delete failed: ',
                 title: '{{ SYSTEM_NAME }}',
                 subtitle: '{{ CLINIC_TAGLINE }}',
                 doctor_name: '{{ DOCTOR_NAME }}',
@@ -3403,6 +3444,18 @@ HTML_TEMPLATE = '''
             ar: {
                 undo: 'تراجع',
                 close: 'إغلاق',
+                searching: 'جارٍ البحث…',
+                dup_load_failed: 'تعذّر تحميل المكررين: ',
+                dup_none: 'لا يوجد مرضى مكررون 🎉',
+                dup_records: 'سجل',
+                dup_hint: 'اختر السجل المراد الاحتفاظ به — وتُدمج البقية فيه. أو احذف المكرر مباشرة.',
+                dup_merge: 'دمج الباقي في المحدد',
+                dup_merge_confirm: 'اضغط مرة أخرى للتأكيد',
+                dup_merged: 'تم دمج المكررين في سجل واحد',
+                dup_merge_failed: 'فشل الدمج: ',
+                dup_del_confirm: 'تأكيد؟',
+                dup_deleted: 'تم حذف المكرر',
+                dup_delete_failed: 'فشل الحذف: ',
                 title: '{{ SYSTEM_NAME }}',
                 subtitle: 'إدارة شاملة للمرضى والمواعيد',
                 doctor_name: '{{ DOCTOR_NAME_AR }}',
@@ -5942,6 +5995,114 @@ HTML_TEMPLATE = '''
             if (typeof renderToothConditionsTable === 'function') renderToothConditionsTable();
           } catch (e) {
             if (out) out.textContent = ((currentLanguage === 'ar') ? 'فشل الإفراغ: ' : 'Clear failed: ') + e.message;
+          }
+        }
+
+        // ── Duplicate-patient finder ─────────────────────────────────────────
+        async function findDuplicatePatients() {
+          const panel = document.getElementById('dup-review-panel');
+          const out = document.getElementById('data-tools-result');
+          if (out) out.textContent = '';
+          panel.style.display = '';
+          panel.innerHTML = `<div class="muted">${t('searching', 'Searching…')}</div>`;
+          try {
+            const r = await fetch('/api/data/duplicate-patients');
+            const b = await r.json();
+            if (!r.ok) throw new Error(b.error || 'failed');
+            renderDuplicateGroups(b.groups || []);
+          } catch (e) {
+            panel.innerHTML = '';
+            showToast(t('dup_load_failed', 'Could not load duplicates: ') + (e.message || e), 'error');
+          }
+        }
+
+        function renderDuplicateGroups(groups) {
+          const panel = document.getElementById('dup-review-panel');
+          if (!groups.length) {
+            panel.innerHTML = `<div class="muted">${t('dup_none', 'No duplicate patients found 🎉')}</div>`;
+            return;
+          }
+          const recordsWord = t('dup_records', 'records');
+          panel.innerHTML = groups.map((g, gi) => {
+            const rows = g.patients.map((p, pi) => {
+              const meta = `${p.record_count} ${recordsWord}` + (p.phone ? ` · ${escapeHtml(p.phone)}` : '');
+              return `<label class="dup-patient">
+                <input type="radio" name="dup-survivor-${gi}" value="${p.id}" ${pi === 0 ? 'checked' : ''}>
+                <span class="dup-patient__name">${escapeHtml(p.name)}</span>
+                <span class="dup-patient__meta">${meta}</span>
+                <button type="button" class="dup-patient__del" onclick="deleteDuplicatePatient(${p.id}, this)">${t('delete', 'Delete')}</button>
+              </label>`;
+            }).join('');
+            return `<div class="dup-group" data-gi="${gi}">
+              <div class="dup-group__title">${escapeHtml(g.display_name)} <span class="muted">· ${g.patients.length}</span></div>
+              <div class="dup-group__hint">${t('dup_hint', 'Pick the record to KEEP — the others merge into it. Or delete a duplicate directly.')}</div>
+              <div class="dup-group__patients">${rows}</div>
+              <div class="dup-group__actions">
+                <button class="btn btn-primary" type="button" onclick="mergeDuplicateGroup(${gi})">${t('dup_merge', 'Merge others into selected')}</button>
+              </div>
+            </div>`;
+          }).join('');
+        }
+
+        async function mergeDuplicateGroup(gi) {
+          const group = document.querySelector(`.dup-group[data-gi="${gi}"]`);
+          if (!group) return;
+          const chosen = group.querySelector(`input[name="dup-survivor-${gi}"]:checked`);
+          if (!chosen) return;
+          const survivorId = parseInt(chosen.value, 10);
+          const ids = Array.from(group.querySelectorAll(`input[name="dup-survivor-${gi}"]`)).map(i => parseInt(i.value, 10));
+          const dupIds = ids.filter(id => id !== survivorId);
+          if (!dupIds.length) return;
+          const btn = group.querySelector('.dup-group__actions .btn');
+          // Inline two-step confirm — no native dialog. First click arms, second commits.
+          if (btn.dataset.armed !== '1') {
+            btn.dataset.armed = '1';
+            btn.textContent = t('dup_merge_confirm', 'Click again to confirm');
+            btn.classList.add('btn-danger');
+            setTimeout(() => {
+              if (btn.dataset.armed === '1') {
+                btn.dataset.armed = '0';
+                btn.textContent = t('dup_merge', 'Merge others into selected');
+                btn.classList.remove('btn-danger');
+              }
+            }, 4000);
+            return;
+          }
+          btn.disabled = true;
+          try {
+            const r = await fetch('/api/data/merge-patients', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ survivor_id: survivorId, duplicate_ids: dupIds }),
+            });
+            const b = await r.json();
+            if (!r.ok || !b.success) throw new Error(b.error || 'failed');
+            showToast(t('dup_merged', 'Duplicates merged into one record'), 'success');
+            findDuplicatePatients();
+            if (typeof loadPatients === 'function') loadPatients();
+          } catch (e) {
+            btn.disabled = false;
+            showToast(t('dup_merge_failed', 'Merge failed: ') + (e.message || e), 'error');
+          }
+        }
+
+        async function deleteDuplicatePatient(id, el) {
+          // Inline two-step confirm on the Delete chip itself.
+          if (el.dataset.armed !== '1') {
+            el.dataset.armed = '1';
+            el.textContent = t('dup_del_confirm', 'Confirm?');
+            setTimeout(() => {
+              if (el.dataset.armed === '1') { el.dataset.armed = '0'; el.textContent = t('delete', 'Delete'); }
+            }, 4000);
+            return;
+          }
+          try {
+            const r = await fetch('/api/patients/' + id, { method: 'DELETE' });
+            if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.error || r.status); }
+            showToast(t('dup_deleted', 'Duplicate deleted'), 'success');
+            findDuplicatePatients();
+            if (typeof loadPatients === 'function') loadPatients();
+          } catch (e) {
+            showToast(t('dup_delete_failed', 'Delete failed: ') + (e.message || e), 'error');
           }
         }
 
