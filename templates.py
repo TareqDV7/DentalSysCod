@@ -6732,9 +6732,15 @@ HTML_TEMPLATE = '''
 
         let currentChartConditions = [];
 
+        // Tooth chart is temporarily hidden pending the UI-overhaul redraw — the
+        // placeholder tooth silhouettes don't read well yet. Backend endpoints and
+        // any saved tooth data are untouched; flip this to true to restore the chart.
+        const ODONTOGRAM_ENABLED = false;
+
         async function renderOdontogram(patientId) {
           const card = document.getElementById('odontogram-card');
           if (!card) return;
+          if (!ODONTOGRAM_ENABLED) { card.style.display = 'none'; return; }
           try {
             const resp = await fetch(`/api/patients/${patientId}/tooth-chart`);
             const chart = await resp.json();
