@@ -1693,6 +1693,10 @@ HTML_TEMPLATE = '''
         .tooth-note-row label { font-size:0.8em; min-width:90px; color:var(--muted); }
         [data-theme="dark"] .tooth-num { fill: #94a3b8; }
         [data-theme="dark"] path[stroke="#94a3b8"] { stroke: #475569; }
+        .tooth-palmer { fill: none; stroke: var(--muted, #64748b); stroke-width: 1; }
+        [data-theme="dark"] .tooth-palmer { stroke: #94a3b8; }
+        .tooth-chip.selected::after { content: '×'; margin-inline-start: 3px; font-weight: 800; opacity: 0.65; }
+        .tooth-popup-hint { font-size: 0.78em; color: var(--muted); margin: 2px 0 8px; }
 
         /* `.hidden` must beat component display rules defined after it (e.g.
            `.license-overlay`/`.license-banner` use display:flex), otherwise
@@ -3014,6 +3018,7 @@ HTML_TEMPLATE = '''
         <h3 id="tooth-popup-title">—</h3>
         <div class="form-group">
           <label data-i18n="condition">Condition</label>
+          <div class="tooth-popup-hint" data-i18n="tooth_remove_hint">Tap to add · tap a selected one to remove</div>
           <div id="tooth-popup-conditions" class="tooth-chip-row"></div>
         </div>
         <div id="tooth-popup-notes"></div>
@@ -3428,6 +3433,10 @@ HTML_TEMPLATE = '''
                 unknown_patient: 'Unknown patient',
                 odontogram: 'Tooth chart',
                 tooth: 'Tooth',
+                tooth_saved: 'Tooth updated',
+                tooth_reverted: 'Change undone',
+                tooth_save_failed: 'Could not save: ',
+                tooth_remove_hint: 'Tap to add · tap a selected one to remove',
                 condition: 'Condition',
                 tooth_conditions: 'Tooth conditions',
                 healthy: 'Healthy',
@@ -3821,6 +3830,10 @@ HTML_TEMPLATE = '''
                 unknown_patient: 'مريض غير معروف',
                 odontogram: 'مخطط الأسنان',
                 tooth: 'سن',
+                tooth_saved: 'تم تحديث السن',
+                tooth_reverted: 'تم التراجع',
+                tooth_save_failed: 'تعذّر الحفظ: ',
+                tooth_remove_hint: 'اضغط للإضافة · اضغط على المحدد للإزالة',
                 condition: 'الحالة',
                 tooth_conditions: 'حالات الأسنان',
                 healthy: 'سليم',
@@ -6624,7 +6637,11 @@ HTML_TEMPLATE = '''
         }
 
         // ── Odontogram helpers ──────────────────────────────────────────────────
-        // FDI permanent dentition, clinician's view (patient's right on the left).
+        // FDI permanent dentition in canonical quadrant order. Stored tooth ids are
+        // ALWAYS FDI (data-fdi, the API, conditions and plans all key on it); the chart
+        // is only DISPLAYED differently: rendered in patient/self view (patient's right
+        // on the screen's right, by reversing each row in buildToothArchSvg) and labelled
+        // in Palmer notation (1-8 per quadrant + corner bracket) in buildToothRowSvg.
         const FDI_UPPER = ['18','17','16','15','14','13','12','11','21','22','23','24','25','26','27','28'];
         const FDI_LOWER = ['48','47','46','45','44','43','42','41','31','32','33','34','35','36','37','38'];
 
@@ -6681,10 +6698,22 @@ HTML_TEMPLATE = '''
               ? `<circle cx="${x+34}" cy="6" r="4" fill="#7c3aed"><title>${t('has_plan','Has plan')}</title></circle>` : '';
             const warn = entry && entry.unpaid_balance > 0
               ? `<circle cx="${x+34}" cy="${cellH-8}" r="4" fill="#f59e0b"><title>${t('unpaid','Unpaid')}: ₪ ${entry.unpaid_balance.toFixed(2)}</title></circle>` : '';
-            const label = `<text x="${x+20}" y="${isLower ? cellH-1 : 10}" text-anchor="middle" class="tooth-num">${fdi}</text>`;
+            // Palmer label: tooth 1-8 (FDI 2nd digit) with a quadrant corner bracket.
+            // The bracket's vertical arm sits on the midline side (toward screen centre)
+            // and its horizontal arm on the arch-separation side. FDI stays the stored id.
+            const cx = x + 20, half = 7;
+            const leftHalf = i < 8;                       // screen-left = patient's left in this view
+            const vx = leftHalf ? cx + half : cx - half;  // midline side
+            const hx = leftHalf ? cx - half : cx + half;  // lateral end of the horizontal arm
+            const hy = isLower ? 52 : 11.5;               // arm between the number and the other arch
+            const vy = isLower ? 62 : 2;
+            const palmer = fdi[1];
+            const bracket = `<path d="M ${vx} ${vy} L ${vx} ${hy} L ${hx} ${hy}" class="tooth-palmer"/>`;
+            const label = `<text x="${cx}" y="${isLower ? cellH-1 : 10}" text-anchor="middle" class="tooth-num">${palmer}</text>`;
             const titleNames = conds.map(c => c.condition_name).filter(Boolean).join(', ');
-            const titleTag = titleNames ? `<title>${fdi}: ${titleNames}</title>` : '';
-            cells += `<g class="tooth" data-fdi="${fdi}" tabindex="0" role="button" aria-label="${t('tooth','Tooth')} ${fdi}">${titleTag}${fillSvg}${label}${dot}${warn}</g>`;
+            const titleBase = `${palmer} (FDI ${fdi})`;
+            const titleTag = `<title>${titleNames ? `${titleBase}: ${titleNames}` : titleBase}</title>`;
+            cells += `<g class="tooth" data-fdi="${fdi}" tabindex="0" role="button" aria-label="${t('tooth','Tooth')} ${palmer} (FDI ${fdi})">${titleTag}${fillSvg}${bracket}${label}${dot}${warn}</g>`;
           });
           const midX = 8 * cellW + pad;
           const midline = `<line x1="${midX}" y1="2" x2="${midX}" y2="${cellH-2}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3 3"/>`;
@@ -6693,8 +6722,12 @@ HTML_TEMPLATE = '''
         }
 
         function buildToothArchSvg(chart) {
-          return `<div class="arch arch-upper">${buildToothRowSvg(FDI_UPPER, chart, false)}</div>`
-               + `<div class="arch arch-lower">${buildToothRowSvg(FDI_LOWER, chart, true)}</div>`;
+          // Patient/self view: reverse each row so the patient's right side sits on
+          // the screen's right. Copies, so the canonical FDI arrays stay intact.
+          const upper = [...FDI_UPPER].reverse();
+          const lower = [...FDI_LOWER].reverse();
+          return `<div class="arch arch-upper">${buildToothRowSvg(upper, chart, false)}</div>`
+               + `<div class="arch arch-lower">${buildToothRowSvg(lower, chart, true)}</div>`;
         }
 
         let currentChartConditions = [];
@@ -6766,6 +6799,7 @@ HTML_TEMPLATE = '''
         let _popupPatientId = null, _popupFdi = null;
 
         let _popupSel = {};   // {condition_id: note}
+        let _popupOrigConditions = [];   // the tooth's saved conditions when the popup opened (for Undo)
 
         function _renderToothNotes() {
           const wrap = document.getElementById('tooth-popup-notes');
@@ -6785,8 +6819,9 @@ HTML_TEMPLATE = '''
         function openToothPopup(patientId, fdi, chart) {
           _popupPatientId = patientId; _popupFdi = fdi;
           const entry = (chart.teeth || {})[fdi] || {};
-          document.getElementById('tooth-popup-title').textContent = `${t('tooth','Tooth')} ${fdi}`;
+          document.getElementById('tooth-popup-title').textContent = `${t('tooth','Tooth')} ${fdi[1]} (FDI ${fdi})`;
           _popupSel = {};
+          _popupOrigConditions = (entry.conditions || []).map(c => ({ condition_id: c.condition_id, note: c.note || null }));
           (entry.conditions || []).forEach(c => { _popupSel[c.condition_id] = c.note || ''; });
           const row = document.getElementById('tooth-popup-conditions');
           row.innerHTML = currentChartConditions
@@ -6813,17 +6848,40 @@ HTML_TEMPLATE = '''
 
         document.getElementById('tooth-popup-close').addEventListener('click', closeToothPopup);
 
+        async function _saveToothChart(patientId, fdi, conditions) {
+          const r = await fetch(`/api/patients/${patientId}/tooth-chart`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ tooth_no: fdi, conditions }),
+          });
+          if (!r.ok) throw new Error('save failed');
+        }
+
         document.getElementById('tooth-popup-save').addEventListener('click', async () => {
+          // Capture identity + prior state now, so a later popup can't clobber the Undo closure.
+          const patientId = _popupPatientId, fdi = _popupFdi, prev = _popupOrigConditions;
           const conditions = Object.keys(_popupSel).map(cid => ({
             condition_id: parseInt(cid, 10),
             note: (_popupSel[cid] || '').trim() || null,
           }));
-          await fetch(`/api/patients/${_popupPatientId}/tooth-chart`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ tooth_no: _popupFdi, conditions }),
-          });
-          closeToothPopup();
-          renderOdontogram(_popupPatientId);
+          try {
+            await _saveToothChart(patientId, fdi, conditions);
+            closeToothPopup();
+            renderOdontogram(patientId);
+            // Undo restores the exact prior set — covers both adding and removing conditions.
+            showToast(t('tooth_saved', 'Tooth updated'), 'success', {
+              action: { label: t('undo', 'Undo'), onClick: async () => {
+                try {
+                  await _saveToothChart(patientId, fdi, prev);
+                  renderOdontogram(patientId);
+                  showToast(t('tooth_reverted', 'Change undone'), 'info');
+                } catch (e) {
+                  showToast(t('tooth_save_failed', 'Could not save: ') + (e.message || e), 'error');
+                }
+              } },
+            });
+          } catch (e) {
+            showToast(t('tooth_save_failed', 'Could not save: ') + (e.message || e), 'error');
+          }
         });
 
         document.getElementById('tooth-popup-log').addEventListener('click', () => {
