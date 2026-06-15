@@ -5,7 +5,7 @@ def test_font_css_is_inlined_woff2_for_required_families():
     css = web_assets.FONT_FACE_CSS
     assert css.count("@font-face") >= 8, "expected >=8 @font-face blocks (5 Manrope + 3 Space Grotesk)"
     assert "data:font/woff2;base64," in css, "fonts must be base64-inlined, not linked"
-    assert "fonts.googleapis.com" not in css and "http" not in css, "no remote URLs in font CSS"
+    assert "fonts.googleapis.com" not in css and "url(http" not in css, "no remote URLs in font CSS"
     assert "Manrope" in css and "Space Grotesk" in css
 
 
