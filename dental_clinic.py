@@ -1934,6 +1934,7 @@ from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE, FOR
 # Data-tools helpers (pure, no Flask).
 import db_import
 import db_merge
+import patient_dedupe
 
 
 def _safe_next_url(target):
@@ -1952,7 +1953,8 @@ _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure
                         '/api/cloud/pairing-qr',
                         '/api/data/export-bundle', '/api/data/export-bundle-file',
                         '/api/data/merge', '/api/data/replace',
-                        '/api/data/clear-catalogs'}
+                        '/api/data/clear-catalogs',
+                        '/api/data/duplicate-patients', '/api/data/merge-patients'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
@@ -4097,6 +4099,67 @@ def data_clear_catalogs():
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'procedures_cleared': procedures, 'conditions_cleared': conditions})
+
+
+@app.route('/api/data/duplicate-patients')
+def data_duplicate_patients():
+    """Patients that share a normalized name (likely the same person entered
+    twice — e.g. after a cross-clinic merge), each with a record count so the UI
+    can flag the empty shell. Read-only; never auto-merges. Disabled on cloud."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    conn = sqlite3.connect(str(DB_NAME))
+    conn.row_factory = sqlite3.Row
+    try:
+        groups = patient_dedupe.find_duplicate_groups(conn.cursor())
+    finally:
+        conn.close()
+    return jsonify({'groups': groups, 'count': len(groups)})
+
+
+@app.route('/api/data/merge-patients', methods=['POST'])
+def data_merge_patients():
+    """Fold the chosen duplicate patient(s) into one survivor: reassign their
+    records, recompute the survivor's balance, and delete the empty shells (each
+    tombstoned so the deletion syncs). Takes a safety backup first; rolls the
+    whole thing back on any failure. Disabled on the cloud node.
+
+    Body: {"survivor_id": int, "duplicate_ids": [int, ...]}.
+    To remove a single empty duplicate without picking a survivor, use the
+    existing DELETE /api/patients/<id>.
+    """
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    data = request.get_json(silent=True) or {}
+    survivor_id = data.get('survivor_id')
+    duplicate_ids = data.get('duplicate_ids') or []
+    if survivor_id is None or not duplicate_ids:
+        return jsonify({'error': 'survivor_id and a non-empty duplicate_ids are required'}), 400
+
+    backups = run_database_backup()
+    backup_path = backups[0] if backups else None
+    conn = sqlite3.connect(str(DB_NAME))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        summary = patient_dedupe.merge_patients(cursor, survivor_id, duplicate_ids)
+        for dup in summary['merged_ids']:
+            record_tombstone(cursor, 'patients', dup)
+        _recompute_followup_balances(cursor, summary['survivor_id'])
+        append_audit_log(cursor, 'merge', 'patient', summary['survivor_id'],
+                         {'merged_ids': summary['merged_ids'], 'moved': summary['moved']})
+        conn.commit()
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001 — any failure must roll back the whole merge
+        conn.rollback()
+        app.logger.exception('Patient merge failed')
+        return jsonify({'error': f'Merge failed and was rolled back: {type(exc).__name__}: {exc}',
+                        'backup_path': backup_path}), 500
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'summary': summary, 'backup_path': backup_path})
 
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])

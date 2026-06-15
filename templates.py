@@ -1693,6 +1693,10 @@ HTML_TEMPLATE = '''
         .tooth-note-row label { font-size:0.8em; min-width:90px; color:var(--muted); }
         [data-theme="dark"] .tooth-num { fill: #94a3b8; }
         [data-theme="dark"] path[stroke="#94a3b8"] { stroke: #475569; }
+        .tooth-palmer { fill: none; stroke: var(--muted, #64748b); stroke-width: 1; }
+        [data-theme="dark"] .tooth-palmer { stroke: #94a3b8; }
+        .tooth-chip.selected::after { content: '×'; margin-inline-start: 3px; font-weight: 800; opacity: 0.65; }
+        .tooth-popup-hint { font-size: 0.78em; color: var(--muted); margin: 2px 0 8px; }
 
         /* `.hidden` must beat component display rules defined after it (e.g.
            `.license-overlay`/`.license-banner` use display:flex), otherwise
@@ -1817,6 +1821,101 @@ HTML_TEMPLATE = '''
         }
 
         body.view-only [data-write] { pointer-events:none; opacity:.5; }
+
+        /* ── Toast notifications (transient, non-blocking) ─────────────────── */
+        #toast-container {
+            position: fixed;
+            top: 18px;
+            inset-inline-end: 18px;
+            z-index: 10001;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: min(360px, calc(100vw - 36px));
+            pointer-events: none;
+        }
+        .toast {
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-inline-start: 4px solid var(--accent);
+            border-radius: 12px;
+            background: var(--panel);
+            color: var(--text);
+            box-shadow: var(--shadow);
+            font-size: 0.9rem;
+            font-weight: 600;
+            line-height: 1.35;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .toast--in { opacity: 1; transform: translateY(0); }
+        .toast--leaving { opacity: 0; transform: translateY(-8px); }
+        .toast--success { border-inline-start-color: var(--ok); }
+        .toast--error   { border-inline-start-color: var(--danger); }
+        .toast--warning { border-inline-start-color: var(--warning); }
+        .toast--info    { border-inline-start-color: var(--accent); }
+        .toast__msg { flex: 1; word-break: break-word; }
+        .toast__action {
+            flex-shrink: 0;
+            background: transparent;
+            border: 1px solid var(--line);
+            color: var(--accent);
+            font: inherit;
+            font-weight: 800;
+            padding: 3px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .toast__action:hover { background: var(--bg-1); border-color: var(--accent); }
+        .toast__close {
+            flex-shrink: 0;
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            font-size: 1.15rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 2px;
+            transition: color 0.15s;
+        }
+        .toast__close:hover { color: var(--text); }
+        @media (prefers-reduced-motion: reduce) {
+            .toast { transition: opacity 0.01s linear; transform: none; }
+            .toast--in, .toast--leaving { transform: none; }
+        }
+
+        /* ── Duplicate-patient review ──────────────────────────────────────── */
+        .dup-review { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+        .dup-group {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: var(--panel);
+        }
+        .dup-group__title { font-weight: 800; font-size: 0.95rem; }
+        .dup-group__hint { color: var(--muted); font-size: 0.8rem; margin: 4px 0 10px; }
+        .dup-group__patients { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+        .dup-patient {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px;
+            cursor: pointer; transition: border-color 0.15s, background 0.15s;
+        }
+        .dup-patient:hover { border-color: var(--accent); }
+        .dup-patient input[type="radio"] { accent-color: var(--accent); flex-shrink: 0; }
+        .dup-patient__name { font-weight: 700; }
+        .dup-patient__meta { color: var(--muted); font-size: 0.82rem; margin-inline-start: auto; white-space: nowrap; }
+        .dup-patient__del {
+            flex-shrink: 0; background: transparent; border: 1px solid var(--line);
+            color: var(--danger); font: inherit; font-size: 0.8rem; font-weight: 700;
+            padding: 3px 9px; border-radius: 7px; cursor: pointer; transition: background 0.15s, color 0.15s;
+        }
+        .dup-patient__del:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
     </style>
 </head>
 <body>
@@ -2645,8 +2744,10 @@ HTML_TEMPLATE = '''
                     <label class="btn btn-danger" for="replace-file" style="cursor:pointer;" data-i18n="replace_db">&#9851;&#65039; Replace database</label>
                     <input type="file" id="replace-file" accept=".zip,.db" style="display:none" onchange="startDataImport('replace', this)">
                     <button class="btn btn-danger" type="button" onclick="clearCatalogs()" data-en="🧹 Clear catalogs" data-ar="🧹 إفراغ القوائم">🧹 Clear catalogs</button>
+                    <button class="btn" type="button" onclick="findDuplicatePatients()" data-en="👥 Find duplicate patients" data-ar="👥 البحث عن مكرر">👥 Find duplicate patients</button>
                   </div>
                   <div id="data-tools-result" class="muted" style="font-size:0.88em;min-height:1.2em;"></div>
+                  <div id="dup-review-panel" class="dup-review" style="display:none;"></div>
                 </div>
                 <details class="form-panel" id="audit-log-panel" style="margin-bottom:18px;">
                   <summary>🧾 <span data-i18n="audit_log">Audit Log</span></summary>
@@ -2917,6 +3018,7 @@ HTML_TEMPLATE = '''
         <h3 id="tooth-popup-title">—</h3>
         <div class="form-group">
           <label data-i18n="condition">Condition</label>
+          <div class="tooth-popup-hint" data-i18n="tooth_remove_hint">Tap to add · tap a selected one to remove</div>
           <div id="tooth-popup-conditions" class="tooth-chip-row"></div>
         </div>
         <div id="tooth-popup-notes"></div>
@@ -2951,6 +3053,20 @@ HTML_TEMPLATE = '''
         // Language translations map
         const translations = {
             en: {
+                undo: 'Undo',
+                close: 'Close',
+                searching: 'Searching…',
+                dup_load_failed: 'Could not load duplicates: ',
+                dup_none: 'No duplicate patients found 🎉',
+                dup_records: 'records',
+                dup_hint: 'Pick the record to KEEP — the others merge into it. Or delete a duplicate directly.',
+                dup_merge: 'Merge others into selected',
+                dup_merge_confirm: 'Click again to confirm',
+                dup_merged: 'Duplicates merged into one record',
+                dup_merge_failed: 'Merge failed: ',
+                dup_del_confirm: 'Confirm?',
+                dup_deleted: 'Duplicate deleted',
+                dup_delete_failed: 'Delete failed: ',
                 title: '{{ SYSTEM_NAME }}',
                 subtitle: '{{ CLINIC_TAGLINE }}',
                 doctor_name: '{{ DOCTOR_NAME }}',
@@ -3317,6 +3433,10 @@ HTML_TEMPLATE = '''
                 unknown_patient: 'Unknown patient',
                 odontogram: 'Tooth chart',
                 tooth: 'Tooth',
+                tooth_saved: 'Tooth updated',
+                tooth_reverted: 'Change undone',
+                tooth_save_failed: 'Could not save: ',
+                tooth_remove_hint: 'Tap to add · tap a selected one to remove',
                 condition: 'Condition',
                 tooth_conditions: 'Tooth conditions',
                 healthy: 'Healthy',
@@ -3331,6 +3451,20 @@ HTML_TEMPLATE = '''
                 plan: 'Plan'
             },
             ar: {
+                undo: 'تراجع',
+                close: 'إغلاق',
+                searching: 'جارٍ البحث…',
+                dup_load_failed: 'تعذّر تحميل المكررين: ',
+                dup_none: 'لا يوجد مرضى مكررون 🎉',
+                dup_records: 'سجل',
+                dup_hint: 'اختر السجل المراد الاحتفاظ به — وتُدمج البقية فيه. أو احذف المكرر مباشرة.',
+                dup_merge: 'دمج الباقي في المحدد',
+                dup_merge_confirm: 'اضغط مرة أخرى للتأكيد',
+                dup_merged: 'تم دمج المكررين في سجل واحد',
+                dup_merge_failed: 'فشل الدمج: ',
+                dup_del_confirm: 'تأكيد؟',
+                dup_deleted: 'تم حذف المكرر',
+                dup_delete_failed: 'فشل الحذف: ',
                 title: '{{ SYSTEM_NAME }}',
                 subtitle: 'إدارة شاملة للمرضى والمواعيد',
                 doctor_name: '{{ DOCTOR_NAME_AR }}',
@@ -3696,6 +3830,10 @@ HTML_TEMPLATE = '''
                 unknown_patient: 'مريض غير معروف',
                 odontogram: 'مخطط الأسنان',
                 tooth: 'سن',
+                tooth_saved: 'تم تحديث السن',
+                tooth_reverted: 'تم التراجع',
+                tooth_save_failed: 'تعذّر الحفظ: ',
+                tooth_remove_hint: 'اضغط للإضافة · اضغط على المحدد للإزالة',
                 condition: 'الحالة',
                 tooth_conditions: 'حالات الأسنان',
                 healthy: 'سليم',
@@ -3720,6 +3858,85 @@ HTML_TEMPLATE = '''
             const selectedLang = lang === 'ar' ? 'ar' : 'en';
             const value = translations[selectedLang]?.[key];
             return typeof value === 'string' ? value : fallback;
+        }
+
+        // ── Toast notifications ──────────────────────────────────────────────
+        // Transient, non-blocking messages. New code should call showToast()
+        // instead of native alert(); blocking confirm()/prompt() stay until the
+        // modal sweep. type is one of success|error|warning|info.
+        // opts: { duration (ms), sticky (bool), action: { label, onClick } }.
+        // Returns { dismiss } so callers can close it programmatically.
+        const TOAST_MAX = 4;
+        function _toastContainer() {
+            let c = document.getElementById('toast-container');
+            if (!c) {
+                c = document.createElement('div');
+                c.id = 'toast-container';
+                document.body.appendChild(c);
+            }
+            c.dir = currentLanguage === 'ar' ? 'rtl' : 'ltr';
+            return c;
+        }
+        function showToast(message, type = 'info', opts = {}) {
+            const c = _toastContainer();
+            while (c.children.length >= TOAST_MAX && c.firstElementChild) {
+                c.removeChild(c.firstElementChild);
+            }
+            const kind = ['success', 'error', 'warning', 'info'].includes(type) ? type : 'info';
+            const toast = document.createElement('div');
+            toast.className = 'toast toast--' + kind;
+            toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+            toast.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+
+            const msg = document.createElement('div');
+            msg.className = 'toast__msg';
+            msg.textContent = String(message == null ? '' : message);   // textContent → no HTML injection
+            toast.appendChild(msg);
+
+            let actionBtn = null;
+            if (opts.action && typeof opts.action.onClick === 'function') {
+                actionBtn = document.createElement('button');
+                actionBtn.type = 'button';
+                actionBtn.className = 'toast__action';
+                actionBtn.textContent = opts.action.label || t('undo', 'Undo');
+                toast.appendChild(actionBtn);
+            }
+
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'toast__close';
+            closeBtn.setAttribute('aria-label', t('close', 'Close'));
+            closeBtn.textContent = '×';
+            toast.appendChild(closeBtn);
+
+            c.appendChild(toast);
+            requestAnimationFrame(() => toast.classList.add('toast--in'));
+
+            const sticky = !!opts.sticky;
+            const duration = opts.duration != null ? opts.duration : (kind === 'error' ? 7000 : 4000);
+            let timer = null;
+            let dismissed = false;
+            const dismiss = () => {
+                if (dismissed) return;
+                dismissed = true;
+                if (timer) { clearTimeout(timer); timer = null; }
+                toast.classList.add('toast--leaving');
+                toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+                setTimeout(() => toast.remove(), 400);   // fallback if transitionend never fires
+            };
+            const arm = () => { if (!sticky && !dismissed && timer === null) timer = setTimeout(dismiss, duration); };
+            const disarm = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+            closeBtn.addEventListener('click', dismiss);
+            if (actionBtn) {
+                actionBtn.addEventListener('click', () => {
+                    try { opts.action.onClick(); } finally { dismiss(); }
+                });
+            }
+            toast.addEventListener('mouseenter', disarm);   // pause countdown while hovered
+            toast.addEventListener('mouseleave', arm);
+            arm();
+            return { dismiss };
         }
 
         function getInvoicePrintLanguage() {
@@ -5794,6 +6011,114 @@ HTML_TEMPLATE = '''
           }
         }
 
+        // ── Duplicate-patient finder ─────────────────────────────────────────
+        async function findDuplicatePatients() {
+          const panel = document.getElementById('dup-review-panel');
+          const out = document.getElementById('data-tools-result');
+          if (out) out.textContent = '';
+          panel.style.display = '';
+          panel.innerHTML = `<div class="muted">${t('searching', 'Searching…')}</div>`;
+          try {
+            const r = await fetch('/api/data/duplicate-patients');
+            const b = await r.json();
+            if (!r.ok) throw new Error(b.error || 'failed');
+            renderDuplicateGroups(b.groups || []);
+          } catch (e) {
+            panel.innerHTML = '';
+            showToast(t('dup_load_failed', 'Could not load duplicates: ') + (e.message || e), 'error');
+          }
+        }
+
+        function renderDuplicateGroups(groups) {
+          const panel = document.getElementById('dup-review-panel');
+          if (!groups.length) {
+            panel.innerHTML = `<div class="muted">${t('dup_none', 'No duplicate patients found 🎉')}</div>`;
+            return;
+          }
+          const recordsWord = t('dup_records', 'records');
+          panel.innerHTML = groups.map((g, gi) => {
+            const rows = g.patients.map((p, pi) => {
+              const meta = `${p.record_count} ${recordsWord}` + (p.phone ? ` · ${escapeHtml(p.phone)}` : '');
+              return `<label class="dup-patient">
+                <input type="radio" name="dup-survivor-${gi}" value="${p.id}" ${pi === 0 ? 'checked' : ''}>
+                <span class="dup-patient__name">${escapeHtml(p.name)}</span>
+                <span class="dup-patient__meta">${meta}</span>
+                <button type="button" class="dup-patient__del" onclick="deleteDuplicatePatient(${p.id}, this)">${t('delete', 'Delete')}</button>
+              </label>`;
+            }).join('');
+            return `<div class="dup-group" data-gi="${gi}">
+              <div class="dup-group__title">${escapeHtml(g.display_name)} <span class="muted">· ${g.patients.length}</span></div>
+              <div class="dup-group__hint">${t('dup_hint', 'Pick the record to KEEP — the others merge into it. Or delete a duplicate directly.')}</div>
+              <div class="dup-group__patients">${rows}</div>
+              <div class="dup-group__actions">
+                <button class="btn btn-primary" type="button" onclick="mergeDuplicateGroup(${gi})">${t('dup_merge', 'Merge others into selected')}</button>
+              </div>
+            </div>`;
+          }).join('');
+        }
+
+        async function mergeDuplicateGroup(gi) {
+          const group = document.querySelector(`.dup-group[data-gi="${gi}"]`);
+          if (!group) return;
+          const chosen = group.querySelector(`input[name="dup-survivor-${gi}"]:checked`);
+          if (!chosen) return;
+          const survivorId = parseInt(chosen.value, 10);
+          const ids = Array.from(group.querySelectorAll(`input[name="dup-survivor-${gi}"]`)).map(i => parseInt(i.value, 10));
+          const dupIds = ids.filter(id => id !== survivorId);
+          if (!dupIds.length) return;
+          const btn = group.querySelector('.dup-group__actions .btn');
+          // Inline two-step confirm — no native dialog. First click arms, second commits.
+          if (btn.dataset.armed !== '1') {
+            btn.dataset.armed = '1';
+            btn.textContent = t('dup_merge_confirm', 'Click again to confirm');
+            btn.classList.add('btn-danger');
+            setTimeout(() => {
+              if (btn.dataset.armed === '1') {
+                btn.dataset.armed = '0';
+                btn.textContent = t('dup_merge', 'Merge others into selected');
+                btn.classList.remove('btn-danger');
+              }
+            }, 4000);
+            return;
+          }
+          btn.disabled = true;
+          try {
+            const r = await fetch('/api/data/merge-patients', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ survivor_id: survivorId, duplicate_ids: dupIds }),
+            });
+            const b = await r.json();
+            if (!r.ok || !b.success) throw new Error(b.error || 'failed');
+            showToast(t('dup_merged', 'Duplicates merged into one record'), 'success');
+            findDuplicatePatients();
+            if (typeof loadPatients === 'function') loadPatients();
+          } catch (e) {
+            btn.disabled = false;
+            showToast(t('dup_merge_failed', 'Merge failed: ') + (e.message || e), 'error');
+          }
+        }
+
+        async function deleteDuplicatePatient(id, el) {
+          // Inline two-step confirm on the Delete chip itself.
+          if (el.dataset.armed !== '1') {
+            el.dataset.armed = '1';
+            el.textContent = t('dup_del_confirm', 'Confirm?');
+            setTimeout(() => {
+              if (el.dataset.armed === '1') { el.dataset.armed = '0'; el.textContent = t('delete', 'Delete'); }
+            }, 4000);
+            return;
+          }
+          try {
+            const r = await fetch('/api/patients/' + id, { method: 'DELETE' });
+            if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.error || r.status); }
+            showToast(t('dup_deleted', 'Duplicate deleted'), 'success');
+            findDuplicatePatients();
+            if (typeof loadPatients === 'function') loadPatients();
+          } catch (e) {
+            showToast(t('dup_delete_failed', 'Delete failed: ') + (e.message || e), 'error');
+          }
+        }
+
         async function changeAccountPassword() {
             const current = document.getElementById('acct-current-password')?.value || '';
             const next = document.getElementById('acct-new-password')?.value || '';
@@ -6312,7 +6637,11 @@ HTML_TEMPLATE = '''
         }
 
         // ── Odontogram helpers ──────────────────────────────────────────────────
-        // FDI permanent dentition, clinician's view (patient's right on the left).
+        // FDI permanent dentition in canonical quadrant order. Stored tooth ids are
+        // ALWAYS FDI (data-fdi, the API, conditions and plans all key on it); the chart
+        // is only DISPLAYED differently: rendered in patient/self view (patient's right
+        // on the screen's right, by reversing each row in buildToothArchSvg) and labelled
+        // in Palmer notation (1-8 per quadrant + corner bracket) in buildToothRowSvg.
         const FDI_UPPER = ['18','17','16','15','14','13','12','11','21','22','23','24','25','26','27','28'];
         const FDI_LOWER = ['48','47','46','45','44','43','42','41','31','32','33','34','35','36','37','38'];
 
@@ -6369,10 +6698,22 @@ HTML_TEMPLATE = '''
               ? `<circle cx="${x+34}" cy="6" r="4" fill="#7c3aed"><title>${t('has_plan','Has plan')}</title></circle>` : '';
             const warn = entry && entry.unpaid_balance > 0
               ? `<circle cx="${x+34}" cy="${cellH-8}" r="4" fill="#f59e0b"><title>${t('unpaid','Unpaid')}: ₪ ${entry.unpaid_balance.toFixed(2)}</title></circle>` : '';
-            const label = `<text x="${x+20}" y="${isLower ? cellH-1 : 10}" text-anchor="middle" class="tooth-num">${fdi}</text>`;
+            // Palmer label: tooth 1-8 (FDI 2nd digit) with a quadrant corner bracket.
+            // The bracket's vertical arm sits on the midline side (toward screen centre)
+            // and its horizontal arm on the arch-separation side. FDI stays the stored id.
+            const cx = x + 20, half = 7;
+            const leftHalf = i < 8;                       // screen-left = patient's left in this view
+            const vx = leftHalf ? cx + half : cx - half;  // midline side
+            const hx = leftHalf ? cx - half : cx + half;  // lateral end of the horizontal arm
+            const hy = isLower ? 52 : 11.5;               // arm between the number and the other arch
+            const vy = isLower ? 62 : 2;
+            const palmer = fdi[1];
+            const bracket = `<path d="M ${vx} ${vy} L ${vx} ${hy} L ${hx} ${hy}" class="tooth-palmer"/>`;
+            const label = `<text x="${cx}" y="${isLower ? cellH-1 : 10}" text-anchor="middle" class="tooth-num">${palmer}</text>`;
             const titleNames = conds.map(c => c.condition_name).filter(Boolean).join(', ');
-            const titleTag = titleNames ? `<title>${fdi}: ${titleNames}</title>` : '';
-            cells += `<g class="tooth" data-fdi="${fdi}" tabindex="0" role="button" aria-label="${t('tooth','Tooth')} ${fdi}">${titleTag}${fillSvg}${label}${dot}${warn}</g>`;
+            const titleBase = `${palmer} (FDI ${fdi})`;
+            const titleTag = `<title>${titleNames ? `${titleBase}: ${titleNames}` : titleBase}</title>`;
+            cells += `<g class="tooth" data-fdi="${fdi}" tabindex="0" role="button" aria-label="${t('tooth','Tooth')} ${palmer} (FDI ${fdi})">${titleTag}${fillSvg}${bracket}${label}${dot}${warn}</g>`;
           });
           const midX = 8 * cellW + pad;
           const midline = `<line x1="${midX}" y1="2" x2="${midX}" y2="${cellH-2}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3 3"/>`;
@@ -6381,15 +6722,25 @@ HTML_TEMPLATE = '''
         }
 
         function buildToothArchSvg(chart) {
-          return `<div class="arch arch-upper">${buildToothRowSvg(FDI_UPPER, chart, false)}</div>`
-               + `<div class="arch arch-lower">${buildToothRowSvg(FDI_LOWER, chart, true)}</div>`;
+          // Patient/self view: reverse each row so the patient's right side sits on
+          // the screen's right. Copies, so the canonical FDI arrays stay intact.
+          const upper = [...FDI_UPPER].reverse();
+          const lower = [...FDI_LOWER].reverse();
+          return `<div class="arch arch-upper">${buildToothRowSvg(upper, chart, false)}</div>`
+               + `<div class="arch arch-lower">${buildToothRowSvg(lower, chart, true)}</div>`;
         }
 
         let currentChartConditions = [];
 
+        // Tooth chart is temporarily hidden pending the UI-overhaul redraw — the
+        // placeholder tooth silhouettes don't read well yet. Backend endpoints and
+        // any saved tooth data are untouched; flip this to true to restore the chart.
+        const ODONTOGRAM_ENABLED = false;
+
         async function renderOdontogram(patientId) {
           const card = document.getElementById('odontogram-card');
           if (!card) return;
+          if (!ODONTOGRAM_ENABLED) { card.style.display = 'none'; return; }
           try {
             const resp = await fetch(`/api/patients/${patientId}/tooth-chart`);
             const chart = await resp.json();
@@ -6454,6 +6805,7 @@ HTML_TEMPLATE = '''
         let _popupPatientId = null, _popupFdi = null;
 
         let _popupSel = {};   // {condition_id: note}
+        let _popupOrigConditions = [];   // the tooth's saved conditions when the popup opened (for Undo)
 
         function _renderToothNotes() {
           const wrap = document.getElementById('tooth-popup-notes');
@@ -6473,8 +6825,9 @@ HTML_TEMPLATE = '''
         function openToothPopup(patientId, fdi, chart) {
           _popupPatientId = patientId; _popupFdi = fdi;
           const entry = (chart.teeth || {})[fdi] || {};
-          document.getElementById('tooth-popup-title').textContent = `${t('tooth','Tooth')} ${fdi}`;
+          document.getElementById('tooth-popup-title').textContent = `${t('tooth','Tooth')} ${fdi[1]} (FDI ${fdi})`;
           _popupSel = {};
+          _popupOrigConditions = (entry.conditions || []).map(c => ({ condition_id: c.condition_id, note: c.note || null }));
           (entry.conditions || []).forEach(c => { _popupSel[c.condition_id] = c.note || ''; });
           const row = document.getElementById('tooth-popup-conditions');
           row.innerHTML = currentChartConditions
@@ -6501,17 +6854,40 @@ HTML_TEMPLATE = '''
 
         document.getElementById('tooth-popup-close').addEventListener('click', closeToothPopup);
 
+        async function _saveToothChart(patientId, fdi, conditions) {
+          const r = await fetch(`/api/patients/${patientId}/tooth-chart`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ tooth_no: fdi, conditions }),
+          });
+          if (!r.ok) throw new Error('save failed');
+        }
+
         document.getElementById('tooth-popup-save').addEventListener('click', async () => {
+          // Capture identity + prior state now, so a later popup can't clobber the Undo closure.
+          const patientId = _popupPatientId, fdi = _popupFdi, prev = _popupOrigConditions;
           const conditions = Object.keys(_popupSel).map(cid => ({
             condition_id: parseInt(cid, 10),
             note: (_popupSel[cid] || '').trim() || null,
           }));
-          await fetch(`/api/patients/${_popupPatientId}/tooth-chart`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ tooth_no: _popupFdi, conditions }),
-          });
-          closeToothPopup();
-          renderOdontogram(_popupPatientId);
+          try {
+            await _saveToothChart(patientId, fdi, conditions);
+            closeToothPopup();
+            renderOdontogram(patientId);
+            // Undo restores the exact prior set — covers both adding and removing conditions.
+            showToast(t('tooth_saved', 'Tooth updated'), 'success', {
+              action: { label: t('undo', 'Undo'), onClick: async () => {
+                try {
+                  await _saveToothChart(patientId, fdi, prev);
+                  renderOdontogram(patientId);
+                  showToast(t('tooth_reverted', 'Change undone'), 'info');
+                } catch (e) {
+                  showToast(t('tooth_save_failed', 'Could not save: ') + (e.message || e), 'error');
+                }
+              } },
+            });
+          } catch (e) {
+            showToast(t('tooth_save_failed', 'Could not save: ') + (e.message || e), 'error');
+          }
         });
 
         document.getElementById('tooth-popup-log').addEventListener('click', () => {

@@ -21,7 +21,7 @@ import 'patient_payment_history_screen.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/gradient_button.dart';
-import 'odontogram_view.dart';
+// 'odontogram_view.dart' import removed while the tooth chart is hidden.
 
 class PatientDetailScreen extends StatefulWidget {
   final Patient patient;
@@ -54,7 +54,9 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
   void initState() {
     super.initState();
     _patient = widget.patient;
-    _tabs = TabController(length: 5, vsync: this);
+    // Tooth chart tab hidden for now (length 4, was 5) — pending the
+    // UI-overhaul odontogram redraw. OdontogramView + data layer are kept.
+    _tabs = TabController(length: 4, vsync: this);
     _tabs.addListener(_onTabChanged);
     _load();
   }
@@ -588,7 +590,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
               Tab(text: t('appointments')),
               Tab(text: t('plans')),
               Tab(text: t('images')),
-              Tab(text: isArabic ? 'خريطة الأسنان' : 'Tooth chart'),
+              // Tooth chart tab hidden for now — pending the UI-overhaul redraw.
             ],
           ),
 
@@ -618,12 +620,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen>
                         onDelete: _deleteImage,
                         onRefresh: _syncImages,
                       ),
-                      OdontogramView(
-                        patientId: _patient.id!,
-                        onLogTreatment: (fdi) =>
-                            _addFollowup(initialTooth: fdi),
-                        onAddToPlan: (_) => _addPlan(),
-                      ),
+                      // OdontogramView hidden for now — pending the UI-overhaul redraw.
                     ],
                   ),
           ),
