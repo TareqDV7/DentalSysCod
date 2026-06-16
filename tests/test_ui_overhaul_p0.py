@@ -40,3 +40,13 @@ def test_template_inlines_self_hosted_fonts():
     assert "data:font/woff2;base64," in HTML_TEMPLATE
     # families still referenced by the UI
     assert "Space Grotesk" in HTML_TEMPLATE and "Manrope" in HTML_TEMPLATE
+
+
+# --- Task 3: inline Phosphor icon sprite (offline, no CDN) ---
+
+
+def test_template_embeds_icon_sprite():
+    assert 'id="i-house"' in HTML_TEMPLATE and 'id="i-house-fill"' in HTML_TEMPLATE
+    assert 'id="i-gear"' in HTML_TEMPLATE  # the icon the mockup broke — must be real
+    assert "unpkg.com" not in HTML_TEMPLATE  # never the CDN webfont at runtime
+    assert "@phosphor-icons/web" not in HTML_TEMPLATE

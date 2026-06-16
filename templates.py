@@ -1921,6 +1921,7 @@ HTML_TEMPLATE = '''
     </style>
 </head>
 <body>
+    <!--__ICON_SPRITE__-->
     <div id="license-renew-banner" class="license-banner hidden">
       <span class="license-banner__dot"></span>
       <span class="license-banner__text" id="license-renew-text"></span>
@@ -8151,6 +8152,7 @@ MOBILE_PORTAL_TEMPLATE = '''
 # before Jinja ever sees the string — the substituted CSS/SVG carries no
 # {{ }} / {% %} metacharacters, so the templates.py JS-escaping trap does not apply).
 HTML_TEMPLATE = HTML_TEMPLATE.replace("/*__FONT_FACE__*/", FONT_FACE_CSS)
+HTML_TEMPLATE = HTML_TEMPLATE.replace("<!--__ICON_SPRITE__-->", ICON_SPRITE)
 
 LOGIN_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
