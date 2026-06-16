@@ -22,3 +22,14 @@ def test_confirm_modal_markup_present():
     assert 'id="confirm-modal-title"' in HTML_TEMPLATE
     assert 'class="confirm-modal__input"' in HTML_TEMPLATE
     assert 'class="btn confirm-modal__ok"' in HTML_TEMPLATE
+
+
+def test_confirm_controller_present():
+    for fn in ("function showConfirm", "function showTypedConfirm",
+               "function _openConfirm", "function _closeConfirm"):
+        assert fn in HTML_TEMPLATE, f"{fn} missing"
+    # capture-phase keydown so it resolves before the global Escape handler
+    assert "addEventListener('keydown', _confirmKeydownHandler, true)" in HTML_TEMPLATE
+    # backdrop/Esc/cancel resolve false; only ok/Enter resolve true
+    assert "_closeConfirm(false)" in HTML_TEMPLATE
+    assert "_closeConfirm(true)" in HTML_TEMPLATE

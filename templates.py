@@ -4016,9 +4016,9 @@ HTML_TEMPLATE = '''
         }
 
         // ── Toast notifications ──────────────────────────────────────────────
-        // Transient, non-blocking messages. New code should call showToast()
-        // instead of native alert(); blocking confirm()/prompt() stay until the
-        // modal sweep. type is one of success|error|warning|info.
+        // Transient, non-blocking messages. Use showToast() for info/errors and
+        // showConfirm()/showTypedConfirm() for blocking decisions — no native dialogs.
+        // type is one of success|error|warning|info.
         // opts: { duration (ms), sticky (bool), action: { label, onClick } }.
         // Returns { dismiss } so callers can close it programmatically.
         const TOAST_MAX = 4;
@@ -4862,6 +4862,108 @@ HTML_TEMPLATE = '''
                 document.querySelectorAll('.modal.active').forEach(m => m.classList.remove('active'));
             }
         });
+
+        // ── Confirm / typed-confirm modal controller ─────────────────────────
+        // Promise-based replacements for native confirm()/prompt(). Reuse the
+        // existing .modal/.modal-content classes (theme parity). Single instance,
+        // injected once as #confirm-modal. Esc / backdrop / Cancel resolve(false);
+        // Enter (outside the input) / OK resolve(true). The keydown listener is
+        // registered in CAPTURE phase so it resolves the promise and stops the
+        // event before the global Escape handler merely hides the node.
+        let _confirmResolver = null;
+        let _confirmLastFocus = null;
+        let _confirmKeydownHandler = null;
+
+        function _confirmModalEl() { return document.getElementById('confirm-modal'); }
+
+        function _closeConfirm(result) {
+            const m = _confirmModalEl();
+            if (m) m.classList.remove('active');
+            if (_confirmKeydownHandler) {
+                document.removeEventListener('keydown', _confirmKeydownHandler, true);
+                _confirmKeydownHandler = null;
+            }
+            const resolve = _confirmResolver;
+            _confirmResolver = null;
+            const last = _confirmLastFocus;
+            _confirmLastFocus = null;
+            if (last && typeof last.focus === 'function') last.focus();
+            if (resolve) resolve(result);
+        }
+
+        function showConfirm(opts) {
+            const o = opts || {};
+            const danger = o.danger !== false;
+            const m = _confirmModalEl();
+            if (!m) return Promise.resolve(false);
+            if (_confirmResolver) _closeConfirm(false);
+            m.classList.toggle('confirm-modal--danger', danger);
+            m.classList.toggle('confirm-modal--neutral', !danger);
+            m.querySelector('#confirm-modal-title').textContent = o.title || t('please_confirm', 'Please confirm');
+            m.querySelector('.confirm-modal__msg').textContent = o.message || '';
+            m.querySelector('.confirm-modal__icon').textContent = danger ? '⚠' : 'ℹ';
+            m.querySelector('.confirm-modal__typed').hidden = true;
+            const okBtn = m.querySelector('.confirm-modal__ok');
+            okBtn.disabled = false;
+            okBtn.textContent = o.confirmLabel || (danger ? t('delete', 'Delete') : t('confirm', 'Confirm'));
+            m.querySelector('.confirm-modal__cancel').textContent = o.cancelLabel || t('cancel', 'Cancel');
+            return _openConfirm(m.querySelector('.confirm-modal__cancel'));
+        }
+
+        function showTypedConfirm(opts) {
+            const o = opts || {};
+            const word = String(o.word || '');
+            const m = _confirmModalEl();
+            if (!m) return Promise.resolve(false);
+            if (_confirmResolver) _closeConfirm(false);
+            m.classList.add('confirm-modal--danger');
+            m.classList.remove('confirm-modal--neutral');
+            m.querySelector('#confirm-modal-title').textContent = o.title || t('please_confirm', 'Please confirm');
+            m.querySelector('.confirm-modal__msg').textContent = o.message || '';
+            m.querySelector('.confirm-modal__icon').textContent = '⚠';
+            m.querySelector('.confirm-modal__typed').hidden = false;
+            const input = m.querySelector('.confirm-modal__input');
+            input.value = '';
+            m.querySelector('.confirm-modal__hint').textContent =
+                t('type_to_confirm', 'Type {word} to confirm.').replace('{word}', word);
+            const okBtn = m.querySelector('.confirm-modal__ok');
+            okBtn.textContent = o.confirmLabel || t('confirm', 'Confirm');
+            okBtn.disabled = true;
+            input.oninput = function () { okBtn.disabled = input.value.trim() !== word; };
+            m.querySelector('.confirm-modal__cancel').textContent = t('cancel', 'Cancel');
+            return _openConfirm(input);
+        }
+
+        function _openConfirm(focusEl) {
+            const m = _confirmModalEl();
+            return new Promise(function (resolve) {
+                _confirmResolver = resolve;
+                _confirmLastFocus = document.activeElement;
+                const okBtn = m.querySelector('.confirm-modal__ok');
+                const cancelBtn = m.querySelector('.confirm-modal__cancel');
+                okBtn.onclick = function () { _closeConfirm(true); };
+                cancelBtn.onclick = function () { _closeConfirm(false); };
+                m.onclick = function (e) { if (e.target === m) _closeConfirm(false); };
+                _confirmKeydownHandler = function (e) {
+                    if (e.key === 'Escape') {
+                        e.preventDefault(); e.stopPropagation(); _closeConfirm(false);
+                    } else if (e.key === 'Enter') {
+                        if (document.activeElement === cancelBtn) return;
+                        if (!okBtn.disabled) { e.preventDefault(); _closeConfirm(true); }
+                    } else if (e.key === 'Tab') {
+                        const f = Array.prototype.slice.call(m.querySelectorAll('button, input'))
+                            .filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+                        if (!f.length) return;
+                        const first = f[0], lastEl = f[f.length - 1];
+                        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); lastEl.focus(); }
+                        else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); first.focus(); }
+                    }
+                };
+                document.addEventListener('keydown', _confirmKeydownHandler, true);
+                m.classList.add('active');
+                requestAnimationFrame(function () { (focusEl || okBtn).focus(); });
+            });
+        }
 
         // Load patients into select dropdown
         async function loadPatientsSelect(selectId) {
