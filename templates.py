@@ -1508,6 +1508,44 @@ HTML_TEMPLATE = '''
             align-items: center;
         }
 
+        /* ── Phase 1: live billing math preview ───────────────────────────── */
+        .form-with-preview { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+        .form-with-preview > form { flex: 1 1 360px; min-width: 0; }
+        .billing-preview {
+            flex: 0 1 260px; min-width: 220px;
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--elev-card);
+            padding: 14px 16px;
+            font-size: 0.9rem;
+        }
+        .billing-preview__title {
+            font-size: 0.7rem; font-weight: 800; letter-spacing: .08em;
+            text-transform: uppercase; color: var(--ink-subtle); margin-bottom: 10px;
+        }
+        .billing-preview__row {
+            display: flex; justify-content: space-between; gap: 12px; padding: 3px 0;
+            font-variant-numeric: tabular-nums;
+        }
+        .billing-preview__row b { font-weight: 700; }
+        .billing-preview__row--muted { color: var(--ink-muted); }
+        .billing-preview__row--net {
+            border-top: 1px solid var(--surface-border); margin-top: 4px; padding-top: 6px;
+        }
+        .billing-preview__balance {
+            display: flex; justify-content: space-between; gap: 12px;
+            border-top: 1px solid var(--surface-border); margin-top: 6px; padding-top: 8px;
+            font-size: 1.02rem; font-variant-numeric: tabular-nums;
+        }
+        .billing-preview__balance--owes b { color: var(--warning); }
+        .billing-preview__balance--credit b,
+        .billing-preview__balance--settled b { color: var(--ok); }
+        .billing-preview__hint { color: var(--ink-subtle); font-size: 0.82rem; margin-top: 6px; }
+        @media (max-width: 720px) {
+            .form-with-preview > form, .billing-preview { flex-basis: 100%; }
+        }
+
         /* ── Bluetooth-sync toggle row ── */
         .bt-toggle-row {
             display: flex;
@@ -2592,6 +2630,7 @@ HTML_TEMPLATE = '''
                 <details class="form-panel" open>
                 <summary>➕ <span data-i18n="payment_management">Payment Record</span></summary>
                 <div class="form-panel-body">
+                <div class="form-with-preview">
                 <form id="billing-form">
                     <div class="form-row">
                         <div class="form-group">
@@ -2612,13 +2651,13 @@ HTML_TEMPLATE = '''
                         </div>
                         <div class="form-group">
                             <label data-i18n="discount">Discount <small style="font-weight:400;color:var(--muted);">(or %, e.g. 20%)</small></label>
-                            <input type="text" inputmode="decimal" name="discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="billing-subtotal" placeholder="0" autocomplete="off">
+                            <input type="text" inputmode="decimal" name="discount" id="billing-discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="billing-subtotal" placeholder="0" autocomplete="off">
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label data-i18n="paid_amount">Paid Amount</label>
-                            <input type="text" inputmode="decimal" name="paid_amount" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
+                            <input type="text" inputmode="decimal" name="paid_amount" id="billing-paid" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
                         </div>
                         <div class="form-group">
                             <label data-i18n="payment_method">Payment Method</label>
@@ -2631,6 +2670,8 @@ HTML_TEMPLATE = '''
                     </div>
                     <button class="btn btn-primary" type="submit" data-i18n="record_payment">Record Payment</button>
                 </form>
+                <div class="billing-preview" id="billing-preview" aria-live="polite"></div>
+                </div>
                 </div>
                 </details>
                 <div class="table-container" id="billing-history-container" style="margin-top:12px;display:none;">
@@ -3084,6 +3125,7 @@ HTML_TEMPLATE = '''
         let currentPatientInvoicePayload = null;
         let currentProfilePatient = null;
         let currentFollowupBalance = 0;
+        let currentFollowupBalanceSigned = null;   // null until a patient profile loads (safe-by-default)
         let patientProfileCache = {};
         let followupsCache = {};
         let currentCalendarDate = new Date();
@@ -3286,6 +3328,18 @@ HTML_TEMPLATE = '''
                 overdue_days: 'Overdue Days',
                 billing_management: 'Billing Management',
                 subtotal_required: 'Charge',
+                preview_title: 'Live summary',
+                preview_charge: 'Charge',
+                preview_discount: 'Discount',
+                preview_net: 'Net charge',
+                preview_paid: 'Paid now',
+                preview_change: 'Change / overpayment',
+                preview_new_balance: 'New balance',
+                preview_owes: 'owes',
+                preview_credit: 'in credit',
+                preview_settled: 'Settled',
+                preview_select_patient: 'Select a patient to see the balance',
+                preview_discount_exceeds: 'Discount exceeds charge',
                 discount: 'Discount',
                 paid_amount: 'Paid Amount',
                 payment_method: 'Payment Method',
@@ -3684,6 +3738,18 @@ HTML_TEMPLATE = '''
                 overdue_days: 'أيام التأخير',
                 billing_management: 'إدارة الفواتير',
                 subtotal_required: 'المبلغ',
+                preview_title: 'ملخص مباشر',
+                preview_charge: 'المبلغ',
+                preview_discount: 'الخصم',
+                preview_net: 'الصافي بعد الخصم',
+                preview_paid: 'المدفوع الآن',
+                preview_change: 'الفائض / الباقي للمريض',
+                preview_new_balance: 'الرصيد الجديد',
+                preview_owes: 'مستحق على المريض',
+                preview_credit: 'رصيد دائن',
+                preview_settled: 'مسدّد بالكامل',
+                preview_select_patient: 'اختر مريضًا لعرض الرصيد',
+                preview_discount_exceeds: 'الخصم أكبر من المبلغ',
                 discount: 'الخصم',
                 paid_amount: 'المبلغ المدفوع',
                 payment_method: 'طريقة الدفع',
@@ -6437,6 +6503,7 @@ HTML_TEMPLATE = '''
             // Header balance uses the UNIFIED ledger (sheet + billing) so it
             // matches receivables, the patient list, and the mobile app.
             currentFollowupBalance = Math.max(0, parseCurrency(profile.outstanding || 0));
+            currentFollowupBalanceSigned = parseCurrency(profile.outstanding || 0);
             content.innerHTML = `
                 <div class="profile-stats">
                     <div class="stat-card stat-card-teal">
@@ -6506,6 +6573,7 @@ HTML_TEMPLATE = '''
                     <details class="form-panel" open>
                         <summary>➕ ${t('add_entry','Add New Entry')}</summary>
                         <div class="form-panel-body">
+                        <div class="form-with-preview">
                         <form id="patient-followup-form">
                             <div class="form-row">
                                 <div class="form-group"><label>${t('date','Date')}</label>
@@ -6546,6 +6614,8 @@ HTML_TEMPLATE = '''
                             <input type="hidden" name="patient_id" value="${patient.id}">
                             <button class="btn btn-primary" type="submit">${t('add_entry','Add Entry')}</button>
                         </form>
+                        <div class="billing-preview" id="followup-preview" aria-live="polite"></div>
+                        </div>
                         </div>
                     </details>
                     <div class="table-container">
@@ -6611,6 +6681,10 @@ HTML_TEMPLATE = '''
                 followupProcedureSelect.addEventListener('change', updateFollowupProcedureUi);
                 updateFollowupProcedureUi();
             }
+            wireBillingPreview(document.getElementById('patient-followup-form'), {
+                chargeId: 'followup-price', discountId: 'followup-discount', paidId: 'followup-payment',
+                panelId: 'followup-preview', getBalance: () => currentFollowupBalanceSigned
+            });
             document.getElementById('patient-followup-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const data = Object.fromEntries(new FormData(e.target));
@@ -7458,6 +7532,125 @@ HTML_TEMPLATE = '''
             return String(pct) + '%';   // parseFloat already trimmed trailing zeros
         }
 
+        function previewDebounce(fn, ms) {
+            let timer;
+            return function () { clearTimeout(timer); timer = setTimeout(fn, ms); };
+        }
+
+        function fmtPreviewMoney(n) {
+            const v = Math.round((Number(n) || 0) * 100) / 100;
+            return '₪ ' + v.toFixed(2);
+        }
+
+        // Read a calc field's live numeric value WITHOUT mutating it (mirrors evalCalcField).
+        function resolveCalcValue(el, base) {
+            if (!el) return 0;
+            const raw = String(el.value || '').trim();
+            if (!raw) return 0;
+            if (/^[\\d]*\\.?[\\d]*$/.test(raw)) return parseFloat(raw) || 0;
+            const pct = parsePercent(raw);
+            if (pct !== null) return base ? Math.max(0, base * pct / 100) : 0;
+            const expr = evalArithmeticExpr(raw);
+            if (expr !== null) return expr;
+            return parseCurrency(raw) || 0;
+        }
+
+        // Pure transaction math. balance may be null (no patient selected).
+        function computeBillingPreview(o) {
+            const charge = Math.max(0, Number(o.charge) || 0);
+            const discountRaw = Math.max(0, Number(o.discount) || 0);
+            const discount = Math.min(discountRaw, charge);     // capped at charge
+            const paid = Math.max(0, Number(o.paid) || 0);
+            const net = charge - discount;
+            const change = Math.max(0, paid - net);
+            const hasBalance = (o.balance !== null && o.balance !== undefined && !isNaN(o.balance));
+            const prev = hasBalance ? Number(o.balance) : 0;
+            const newBalance = prev + net - paid;
+            let state = 'unknown';
+            if (hasBalance) {
+                if (Math.abs(newBalance) < 0.005) state = 'settled';
+                else if (newBalance > 0) state = 'owes';
+                else state = 'credit';
+            }
+            return { charge, discount, net, paid, change,
+                     discountExceeds: discountRaw > charge,
+                     hasBalance, newBalance, state };
+        }
+
+        function renderBillingPreview(panel, r) {
+            if (!panel) return;
+            const row = (label, val, cls) =>
+                `<div class="billing-preview__row ${cls || ''}"><span>${label}</span><b>${val}</b></div>`;
+            const rows = [];
+            rows.push(row(t('preview_charge', 'Charge'), fmtPreviewMoney(r.charge)));
+            if (r.discount > 0) {
+                rows.push(row('− ' + t('preview_discount', 'Discount'),
+                              '− ' + fmtPreviewMoney(r.discount), 'billing-preview__row--muted'));
+            }
+            rows.push(row(t('preview_net', 'Net charge'), fmtPreviewMoney(r.net), 'billing-preview__row--net'));
+            rows.push(row(t('preview_paid', 'Paid now'), fmtPreviewMoney(r.paid)));
+            if (r.change > 0) {
+                rows.push(row(t('preview_change', 'Change / overpayment'),
+                              fmtPreviewMoney(r.change), 'billing-preview__row--muted'));
+            }
+            let tail;
+            if (r.hasBalance) {
+                const word = r.state === 'owes' ? t('preview_owes', 'owes')
+                          : r.state === 'credit' ? t('preview_credit', 'in credit') : '';
+                const amount = r.state === 'settled'
+                    ? t('preview_settled', 'Settled')
+                    : word + ' ' + fmtPreviewMoney(Math.abs(r.newBalance));
+                tail = `<div class="billing-preview__balance billing-preview__balance--${r.state}">` +
+                       `<span>${t('preview_new_balance', 'New balance')}</span><b>${amount}</b></div>`;
+            } else {
+                tail = `<div class="billing-preview__hint">${t('preview_select_patient', 'Select a patient to see the balance')}</div>`;
+            }
+            const warn = r.discountExceeds
+                ? `<div class="billing-preview__hint">${t('preview_discount_exceeds', 'Discount exceeds charge')}</div>`
+                : '';
+            panel.innerHTML = `<div class="billing-preview__title">${t('preview_title', 'Live summary')}</div>` +
+                              rows.join('') + tail + warn;
+        }
+
+        let billingPatientBalance = null;   // signed; null = no patient selected
+
+        async function loadBillingPatientBalance(pid) {
+            billingPatientBalance = null;
+            if (pid) {
+                try {
+                    const res = await fetch(`/api/patients/${pid}/full-profile`);
+                    if (res.ok) {
+                        const d = await res.json();
+                        // null (not 0) when the field is absent — 0 means "selected, owes nothing"
+                        billingPatientBalance = (d.outstanding != null) ? parseCurrency(d.outstanding) : null;
+                    }
+                } catch (e) { billingPatientBalance = null; }
+            }
+            const form = document.getElementById('billing-form');
+            if (form && form.recomputePreview) form.recomputePreview();
+        }
+
+        function wireBillingPreview(formEl, opts) {
+            if (!formEl || formEl.dataset.previewWired) return;
+            formEl.dataset.previewWired = '1';
+            const panel = document.getElementById(opts.panelId);
+            const byId = id => document.getElementById(id);
+            const recompute = () => {
+                const charge = resolveCalcValue(byId(opts.chargeId));
+                const discount = resolveCalcValue(byId(opts.discountId), charge);
+                const paid = resolveCalcValue(byId(opts.paidId));
+                const balance = opts.getBalance ? opts.getBalance() : null;
+                renderBillingPreview(panel, computeBillingPreview({ charge, discount, paid, balance }));
+            };
+            const debounced = previewDebounce(recompute, 120);   // 120ms: responsive but not jumpy while typing
+            [opts.chargeId, opts.discountId, opts.paidId].forEach(id => {
+                const el = byId(id);
+                if (el) { el.addEventListener('input', debounced); el.addEventListener('blur', recompute); }
+            });
+            formEl.recomputePreview = recompute;   // patient-select can refresh
+            recompute();
+        }
+
         function evalCalcField(el) {
             const raw = el.value.trim();
             if (!raw) { delete el.dataset.expr; return; }
@@ -7535,6 +7728,22 @@ HTML_TEMPLATE = '''
         }
 
         document.addEventListener('DOMContentLoaded', () => wireCalcInputs(document));
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const billingForm = document.getElementById('billing-form');
+            if (billingForm) {
+                wireBillingPreview(billingForm, {
+                    chargeId: 'billing-subtotal', discountId: 'billing-discount', paidId: 'billing-paid',
+                    panelId: 'billing-preview', getBalance: () => billingPatientBalance
+                });
+            }
+            // Intentionally a separate listener from the credit-hint one wired in loadBilling():
+            // they do different jobs (credit hint/history vs. preview balance fetch).
+            const billingPatientSel = document.getElementById('billing-patient-select');
+            if (billingPatientSel) {
+                billingPatientSel.addEventListener('change', e => loadBillingPatientBalance(e.target.value));
+            }
+        });
 
         // ── Universal date-picker button wiring ─────────────────────────────────
         function attachDatePickerButtons(root) {
