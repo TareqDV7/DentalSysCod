@@ -46,3 +46,9 @@ def test_no_native_confirm_remains():
 
 def test_confirm_sites_use_showconfirm():
     assert HTML_TEMPLATE.count("await showConfirm(") >= 6
+
+
+def test_db_import_uses_typed_confirm():
+    assert "await showTypedConfirm(" in HTML_TEMPLATE
+    # the two odontogram prompts are intentionally deferred (chart is hidden)
+    assert HTML_TEMPLATE.count("prompt(") == 2, "expected exactly the 2 deferred odontogram prompts"

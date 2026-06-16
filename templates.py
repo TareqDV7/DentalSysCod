@@ -3438,6 +3438,8 @@ HTML_TEMPLATE = '''
                 please_confirm: 'Please confirm',
                 confirm: 'Confirm',
                 type_to_confirm: 'Type {word} to confirm.',
+                replace_data: 'Replace data',
+                merge_data: 'Merge data',
                 other: 'Other',
                 no_data: 'No data',
                 yes: 'Yes',
@@ -3851,6 +3853,8 @@ HTML_TEMPLATE = '''
                 please_confirm: 'يرجى التأكيد',
                 confirm: 'تأكيد',
                 type_to_confirm: 'اكتب {word} للتأكيد.',
+                replace_data: 'استبدال البيانات',
+                merge_data: 'دمج البيانات',
                 other: 'أخرى',
                 no_data: 'لا توجد بيانات',
                 yes: 'نعم',
@@ -6224,8 +6228,8 @@ HTML_TEMPLATE = '''
             const warn = mode === 'replace'
                 ? 'This REPLACES all current data with the imported file. A safety backup is taken first.'
                 : "This MERGES the imported clinic's records into your current data. Existing data is kept.";
-            const typed = prompt(warn + '\\n\\nType ' + verb + ' to confirm:');
-            if (typed !== verb) return;
+            const okTyped = await showTypedConfirm({ message: warn, word: verb, confirmLabel: verb === 'REPLACE' ? t('replace_data', 'Replace data') : t('merge_data', 'Merge data') });
+            if (!okTyped) return;
             const result = document.getElementById('data-tools-result');
             result.textContent = 'Working… do not close this window.';
             const fd = new FormData();
