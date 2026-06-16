@@ -20,7 +20,8 @@ def test_followup_form_has_preview_panel():
 
 
 def test_preview_i18n_keys_present_both_langs():
-    for key in ("preview_title", "preview_net", "preview_new_balance",
+    for key in ("preview_title", "preview_charge", "preview_discount",
+                "preview_net", "preview_paid", "preview_new_balance",
                 "preview_owes", "preview_credit", "preview_settled",
                 "preview_change", "preview_select_patient", "preview_discount_exceeds"):
         # one definition in the EN dict + one in the AR dict
@@ -38,5 +39,6 @@ def test_preview_core_functions_present():
 def test_wiring_present():
     assert "function wireBillingPreview" in HTML_TEMPLATE
     assert "wireBillingPreview(" in HTML_TEMPLATE          # at least one call site
-    assert "/full-profile" in HTML_TEMPLATE                # billing balance fetch
+    assert "function loadBillingPatientBalance" in HTML_TEMPLATE  # billing balance fetch (P1-specific)
+    assert "/full-profile" in HTML_TEMPLATE                # the endpoint it calls
     assert "currentFollowupBalanceSigned" in HTML_TEMPLATE  # signed balance for follow-up
