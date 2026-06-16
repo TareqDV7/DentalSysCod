@@ -20,7 +20,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 PHOSPHOR_VER = "2.1.1"
 CORE = f"https://unpkg.com/@phosphor-icons/core@{PHOSPHOR_VER}/assets"
 ICONS = ["house", "users", "calendar-dots", "receipt", "gear", "magnifying-glass",
-         "bell", "caret-down", "moon", "sun", "sign-out", "user", "user-plus"]
+         "bell", "caret-down", "moon", "sun", "sign-out", "user", "user-plus",
+         # added in Task 5 to cover the real shell's nav (Reports, Catalog):
+         "chart-bar", "folders"]
 FILL_ICONS = ["house"]  # active-item only
 
 def _get(url: str) -> bytes:
