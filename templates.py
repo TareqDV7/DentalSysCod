@@ -5,6 +5,8 @@ were extracted verbatim from dental_clinic.py to shrink that module. They are
 rendered there via flask.render_template_string; content is byte-for-byte
 identical to the originals."""
 
+from web_assets import FONT_FACE_CSS, ICON_SPRITE
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
@@ -13,9 +15,30 @@ HTML_TEMPLATE = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ CLINIC_NAME }} — {{ SYSTEM_NAME }}</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap');
+        /*__FONT_FACE__*/
 
         :root {
+            /* chrome (header + sidebar) — slate in BOTH themes */
+            --chrome-bg: #0f172a;
+            --chrome-bg-2: #0b1220;
+            --chrome-border: rgba(255,255,255,.06);
+            /* content */
+            --canvas: #f1f5f9;
+            --surface: #ffffff;              /* solid data card — never frosted */
+            --surface-border: rgba(15,23,42,.07);
+            /* ink (text/icons/rails/rings) */
+            --ink: #0f172a;
+            --ink-muted: #64748b;
+            --ink-subtle: #94a3b8;
+            /* accent — solid blue ink, teal->blue gradient on FILLS only */
+            --accent: #38bdf8;               /* logo blue (re-accented from the old teal) */
+            --accent-strong: #1d7fb7;
+            --accent-cta-from: #1d7fb7;
+            --accent-cta-to: #2563eb;
+            --accent-soft: rgba(56,189,248,.13);
+            --accent-teal: #14b8a6;          /* gradient stop — fills only, never ink */
+            --accent-gradient: linear-gradient(135deg, var(--accent-teal), var(--accent-cta-to));
+            /* legacy names kept so existing rules don't break */
             --bg-1: #f1f7f8;
             --bg-2: #e7f0ff;
             --panel: #ffffff;
@@ -24,11 +47,23 @@ HTML_TEMPLATE = '''
             --muted: #627386;
             --brand: #0f6d7b;
             --brand-2: #1d7fb7;
-            --accent: #13b5a7;
             --danger: #d9434e;
             --warning: #d89e1f;
             --ok: #1f9a5f;
+            /* spacing (moved here from the second :root) */
+            --space-1: 6px; --space-2: 10px; --space-3: 14px;
+            --space-4: 18px; --space-5: 24px; --space-6: 32px;
+            --gap: var(--space-3);
+            --input-padding: 12px 14px;
+            /* radius */
+            --radius-sm: 8px; --radius-md: 11px; --radius-lg: 14px;
+            --radius-xl: 16px; --radius-pill: 999px;
+            /* elevation (opaque) */
             --shadow: 0 14px 36px rgba(19, 39, 66, 0.12);
+            --elev-card: 0 10px 30px -16px rgba(15,23,42,.30);
+            --elev-raised: 0 24px 60px -24px rgba(15,23,42,.50);
+            /* motion */
+            --dur-fast: 150ms; --dur: 300ms; --ease: cubic-bezier(.16,1,.3,1);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -52,6 +87,13 @@ HTML_TEMPLATE = '''
             --text: #e7eef8;
             --muted: #9bb0c8;
             --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+            --canvas: #020617;               /* slate-950 content canvas */
+            --surface: #1e293b;              /* solid slate-800 data card (opaque) */
+            --surface-border: rgba(255,255,255,.07);
+            --ink: #f1f5f9;
+            --warning: #fbbf24;              /* lightened so 'due' stays legible on dark */
+            --elev-card: 0 12px 34px -16px rgba(0,0,0,.6);
+            /* chrome tokens unchanged — chrome is slate in both themes */
             background:
                 radial-gradient(1200px 500px at 100% -30%, rgba(29, 127, 183, 0.18) 0%, transparent 60%),
                 radial-gradient(1000px 500px at -10% 0%, rgba(19, 181, 167, 0.12) 0%, transparent 58%),
@@ -80,8 +122,9 @@ HTML_TEMPLATE = '''
         /* ── Header ── */
         .header {
             padding: 20px 28px 18px;
-            color: #fff;
-            background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 55%, #3565b8 100%);
+            color: #e2e8f0;
+            background: linear-gradient(135deg, var(--chrome-bg) 0%, var(--chrome-bg-2) 100%);
+            border-bottom: 1px solid var(--chrome-border);
             position: relative;
             overflow: hidden;
         }
@@ -115,7 +158,8 @@ HTML_TEMPLATE = '''
         }
 
         body[data-theme="dark"] .header {
-            background: linear-gradient(135deg, #0e2b4d 0%, #124c71 55%, #1d5f87 100%);
+            /* chrome is slate in both themes — keep the same slate as light */
+            background: linear-gradient(135deg, var(--chrome-bg) 0%, var(--chrome-bg-2) 100%);
         }
 
         .header-top {
@@ -502,8 +546,8 @@ HTML_TEMPLATE = '''
             flex-direction: column;
             gap: 4px;
             padding: 16px 10px;
-            background: #f3f7fb;
-            border-right: 1px solid var(--line);
+            background: var(--chrome-bg);
+            border-right: 1px solid var(--chrome-border);
             overflow-y: auto;
             width: 196px;
             min-width: 196px;
@@ -515,13 +559,14 @@ HTML_TEMPLATE = '''
             font-weight: 800;
             letter-spacing: 0.08em;
             text-transform: uppercase;
-            color: var(--muted);
+            color: var(--ink-subtle);
             padding: 4px 6px 10px;
         }
 
         body[data-theme="dark"] .nav-tabs {
-            background: #10192a;
-            border-right-color: #1e2e42;
+            /* chrome is slate in both themes */
+            background: var(--chrome-bg);
+            border-right-color: var(--chrome-border);
         }
 
         .nav-tab {
@@ -530,8 +575,8 @@ HTML_TEMPLATE = '''
             text-align: left;
             border: 1px solid transparent;
             background: transparent;
-            border-radius: 10px;
-            color: #35516d;
+            border-radius: var(--radius-md);
+            color: var(--ink-subtle);
             padding: 11px 13px;
             font-weight: 700;
             font-size: 0.92rem;
@@ -548,7 +593,7 @@ HTML_TEMPLATE = '''
             outline-offset: 2px;
         }
 
-        .nav-tab:hover { background: #e8f1fa; transform: translateX(4px); box-shadow: 0 4px 12px rgba(30, 136, 229, 0.1); }
+        .nav-tab:hover { background: rgba(255, 255, 255, 0.05); color: #cbd5e1; transform: translateX(2px); }
 
         body[data-theme="dark"] .nav-tab {
             color: #bfd0e4;
@@ -559,12 +604,12 @@ HTML_TEMPLATE = '''
         }
 
         .nav-tab.active {
-            background: linear-gradient(135deg, rgba(62, 168, 255, 0.1) 0%, rgba(30, 136, 229, 0.15) 100%);
-            border-color: rgba(30, 136, 229, 0.4);
-            color: #1e88e5;
-            box-shadow: 0 0 15px rgba(30, 136, 229, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.8);
-            text-shadow: 0 0 8px rgba(30, 136, 229, 0.2);
-            transform: translateX(4px);
+            /* soft teal->blue gradient TINT (fill), solid-blue ink, inset accent rail */
+            background: linear-gradient(135deg, rgba(20, 184, 166, 0.16) 0%, rgba(56, 189, 248, 0.16) 100%);
+            border-color: transparent;
+            color: #7dd3fc;
+            box-shadow: inset 3px 0 0 var(--accent);
+            transform: translateX(2px);
         }
 
         .nav-group-label {
@@ -574,7 +619,7 @@ HTML_TEMPLATE = '''
             font-weight: 900;
             letter-spacing: 0.1em;
             text-transform: uppercase;
-            color: var(--muted);
+            color: var(--ink-subtle);
         }
 
         .nav-subtabs {
@@ -588,10 +633,10 @@ HTML_TEMPLATE = '''
         .nav-subtab {
             width: 100%;
             border: 1px solid transparent;
-            border-radius: 10px;
+            border-radius: var(--radius-md);
             padding: 9px 12px 9px 16px;
             background: transparent;
-            color: #4a6480;
+            color: var(--ink-subtle);
             font-weight: 700;
             font-size: 0.88rem;
             text-align: left;
@@ -609,17 +654,18 @@ HTML_TEMPLATE = '''
             height: 5px;
             border-radius: 999px;
             transform: translateY(-50%);
-            background: rgba(77, 108, 143, 0.55);
+            background: rgba(148, 163, 184, 0.55);
         }
 
         .nav-subtab:hover {
-            background: #edf6ff;
+            background: rgba(255, 255, 255, 0.05);
+            color: #cbd5e1;
         }
 
         .nav-subtab.active {
-            background: rgba(123, 182, 226, 0.16);
-            border-color: rgba(123, 182, 226, 0.4);
-            color: #113f64;
+            background: rgba(56, 189, 248, 0.14);
+            border-color: transparent;
+            color: #7dd3fc;
         }
 
         body[data-theme="dark"] .nav-group-label {
@@ -639,15 +685,16 @@ HTML_TEMPLATE = '''
         }
 
         body[data-theme="dark"] .nav-subtab.active {
-            background: rgba(19, 181, 167, 0.14);
-            border-color: rgba(96, 135, 179, 0.38);
-            color: #f3f8ff;
+            background: rgba(56, 189, 248, 0.16);
+            border-color: transparent;
+            color: #7dd3fc;
         }
 
         body[data-theme="dark"] .nav-tab.active {
-            background: linear-gradient(135deg, rgba(19, 181, 167, 0.18) 0%, rgba(29, 127, 183, 0.2) 100%);
-            border-color: rgba(96, 135, 179, 0.5);
-            color: #f3f8ff;
+            /* same slate-friendly active as light; rail comes from the base rule */
+            background: linear-gradient(135deg, rgba(20, 184, 166, 0.20) 0%, rgba(56, 189, 248, 0.20) 100%);
+            border-color: transparent;
+            color: #7dd3fc;
         }
 
         /* Collapsible sidebar quick-win: compact width and icon-only mode */
@@ -752,17 +799,8 @@ HTML_TEMPLATE = '''
             color: var(--text);
         }
 
-        /* Design tokens (quick-win) */
-        :root {
-            --space-1: 6px;
-            --space-2: 10px;
-            --space-3: 14px;
-            --space-4: 18px;
-            --space-5: 24px;
-            --space-6: 32px;
-            --gap: var(--space-3);
-            --input-padding: 12px 14px;
-        }
+        /* Design tokens (spacing/radius/elevation/motion) now live in the
+           consolidated :root at the top of this stylesheet. */
 
         .form-group textarea { resize: vertical; min-height: 96px; }
 
@@ -1003,7 +1041,7 @@ HTML_TEMPLATE = '''
         .date-picker-day-name { font-weight: 700; font-size: 0.75rem; color: #627386; padding: 8px 0; }
         body[data-theme="dark"] .date-picker-day:hover { background: rgba(255,255,255,0.08); }
         .date-picker-day.empty { cursor: default; }
-        .date-picker-day.today { background: #e6f7f5; border-color: #13b5a7; color: #0f6d7b; font-weight: 700; }
+        .date-picker-day.today { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 700; }
 
 
         .calendar-event {
@@ -1227,7 +1265,7 @@ HTML_TEMPLATE = '''
                 background: var(--panel);
                 box-shadow: 8px 0 32px rgba(0,0,0,0.12);
             }
-            body[data-theme="dark"] .nav-tabs { background: #0f1728; }
+            body[data-theme="dark"] .nav-tabs { background: var(--chrome-bg); }
             .nav-tabs.mobile-open { left: 0; }
             html[dir="rtl"] .nav-tabs {
                 left: auto; right: -220px; border-left: 1px solid var(--line); border-right: none;
@@ -1324,7 +1362,7 @@ HTML_TEMPLATE = '''
         }
         html[dir="rtl"] .stat-card .stat-icon { right: auto; left: 14px; }
         .stat-card h3, .stat-card p { position: relative; z-index: 1; }
-        .stat-card-teal { background: linear-gradient(135deg, #0f6d7b 0%, #13b5a7 100%) !important; }
+        .stat-card-teal { background: linear-gradient(135deg, #0f6d7b 0%, #14b8a6 100%) !important; }
         .stat-card-blue { background: linear-gradient(135deg, #1d7fb7 0%, #3565b8 100%) !important; }
         .stat-card-green { background: linear-gradient(135deg, #1f9a5f 0%, #22b7a1 100%) !important; }
         .stat-card-amber { background: linear-gradient(135deg, #c47f10 0%, #d89e1f 100%) !important; color: #fff !important; }
@@ -1332,7 +1370,10 @@ HTML_TEMPLATE = '''
         body[data-theme="dark"] .stat-card-blue { background: linear-gradient(135deg, #133a60 0%, #1d4a82 100%) !important; }
         body[data-theme="dark"] .stat-card-green { background: linear-gradient(135deg, #0c4d30 0%, #0f6050 100%) !important; }
         body[data-theme="dark"] .stat-card-amber { background: linear-gradient(135deg, #5a3a00 0%, #704800 100%) !important; }
-        .nav-tab .tab-icon { font-size: 1.05rem; flex-shrink: 0; }
+        .nav-tab .tab-icon { font-size: 1.05rem; flex-shrink: 0; display: inline-flex; }
+        /* Self-hosted Phosphor sprite icons (inherit text color via currentColor) */
+        .ic { width: 1.18em; height: 1.18em; display: inline-block; vertical-align: -0.18em; fill: currentColor; }
+        .nav-tab .ic, .nav-subtab .ic { width: 19px; height: 19px; }
         table td { padding: 13px 12px; }
         .holiday-panel { margin-top: 22px; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; }
         .holiday-panel > summary {
@@ -1437,10 +1478,11 @@ HTML_TEMPLATE = '''
 
         /* ── Section card ── */
         .section-card {
-            border: 1px solid var(--line);
-            border-radius: 14px;
+            border: 1px solid var(--surface-border);
+            border-radius: var(--radius-lg);
             padding: 18px;
-            background: var(--panel);
+            background: var(--surface);          /* solid data surface — never frosted */
+            box-shadow: var(--elev-card);
             margin-bottom: 18px;
         }
         .section-card + .section-card { margin-top: 16px; }
@@ -1561,7 +1603,8 @@ HTML_TEMPLATE = '''
             color: var(--muted);
             margin-bottom: 14px;
         }
-        body[data-theme="dark"] .section-card { background: #0f1728; border-color: #253347; }
+        /* .section-card colors are token-driven (--surface / --surface-border), so the
+           dark theme is handled by the dark :root override — no per-component override. */
 
         /* ── Readonly info grid ── */
         .info-grid {
@@ -1919,6 +1962,7 @@ HTML_TEMPLATE = '''
     </style>
 </head>
 <body>
+    <!--__ICON_SPRITE__-->
     <div id="license-renew-banner" class="license-banner hidden">
       <span class="license-banner__dot"></span>
       <span class="license-banner__text" id="license-renew-text"></span>
@@ -2010,37 +2054,37 @@ HTML_TEMPLATE = '''
             <div class="nav-tabs-label" data-i18n="navigation">Navigation</div>
 
             <button class="nav-tab active" data-tab="dashboard" onclick="switchTab('dashboard', this)">
-                <span class="tab-icon">🏠</span>
+                <span class="tab-icon"><svg class="ic ic-fill"><use href="#i-house-fill"/></svg></span>
                 <span data-en="Dashboard" data-ar="لوحة المعلومات">Dashboard</span>
             </button>
             <button class="nav-tab" data-tab="patients" onclick="switchTab('patients', this)">
-                <span class="tab-icon">👥</span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-users"/></svg></span>
                 <span data-en="Patients" data-ar="المرضى">Patients</span>
             </button>
 
             <div class="nav-group-label" data-i18n="scheduling">Scheduling</div>
             <button class="nav-tab" data-tab="appointments" onclick="switchTab('appointments', this)">
-                <span class="tab-icon">📅</span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-calendar-dots"/></svg></span>
                 <span data-en="Appointments" data-ar="المواعيد">Appointments</span>
             </button>
 
             <div class="nav-group-label" data-i18n="financial">Financial</div>
             <button class="nav-tab" data-tab="financial" onclick="switchTab('financial', this)">
-                <span class="tab-icon">💰</span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-receipt"/></svg></span>
                 <span data-en="Billing" data-ar="المالي">Billing</span>
             </button>
             <button class="nav-tab" data-tab="reports" onclick="switchTab('reports', this)">
-                <span class="tab-icon">📊</span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-chart-bar"/></svg></span>
                 <span data-en="Reports" data-ar="التقارير">Reports</span>
             </button>
 
             <div class="nav-group-label" data-i18n="management">Management</div>
             <button class="nav-tab" data-tab="treatments" onclick="switchTab('treatments', this)">
-                <span class="tab-icon">🗂️</span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-folders"/></svg></span>
                 <span data-en="Catalog" data-ar="الفهرس">Catalog</span>
             </button>
             <button class="nav-tab" data-tab="support" onclick="switchTab('support', this)">
-                <span class="tab-icon">🔧</span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-gear"/></svg></span>
                 <span data-en="Settings" data-ar="الإعدادات">Settings</span>
             </button>
         </div>
@@ -8144,6 +8188,12 @@ MOBILE_PORTAL_TEMPLATE = '''
 </body>
 </html>
 '''
+
+# Vendored self-hosted assets are spliced in AFTER the literal (at import time,
+# before Jinja ever sees the string — the substituted CSS/SVG carries no
+# {{ }} / {% %} metacharacters, so the templates.py JS-escaping trap does not apply).
+HTML_TEMPLATE = HTML_TEMPLATE.replace("/*__FONT_FACE__*/", FONT_FACE_CSS)
+HTML_TEMPLATE = HTML_TEMPLATE.replace("<!--__ICON_SPRITE__-->", ICON_SPRITE)
 
 LOGIN_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
