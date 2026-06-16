@@ -25,3 +25,11 @@ def test_preview_i18n_keys_present_both_langs():
                 "preview_change", "preview_select_patient", "preview_discount_exceeds"):
         # one definition in the EN dict + one in the AR dict
         assert HTML_TEMPLATE.count(key + ":") >= 2, f"{key} missing from a language dict"
+
+
+def test_preview_core_functions_present():
+    for fn in ("function computeBillingPreview",
+               "function renderBillingPreview",
+               "function resolveCalcValue",
+               "function previewDebounce"):
+        assert fn in HTML_TEMPLATE, f"{fn} missing"

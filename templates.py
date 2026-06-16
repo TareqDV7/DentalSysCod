@@ -7526,6 +7526,86 @@ HTML_TEMPLATE = '''
             return String(pct) + '%';   // parseFloat already trimmed trailing zeros
         }
 
+        function previewDebounce(fn, ms) {
+            let timer;
+            return function () { clearTimeout(timer); timer = setTimeout(fn, ms); };
+        }
+
+        function fmtPreviewMoney(n) {
+            const v = Math.round((Number(n) || 0) * 100) / 100;
+            return '₪ ' + v.toFixed(2);
+        }
+
+        // Read a calc field's live numeric value WITHOUT mutating it (mirrors evalCalcField).
+        function resolveCalcValue(el, base) {
+            if (!el) return 0;
+            const raw = String(el.value || '').trim();
+            if (!raw) return 0;
+            if (/^[\\d]*\\.?[\\d]*$/.test(raw)) return parseFloat(raw) || 0;
+            const pct = parsePercent(raw);
+            if (pct !== null) return base ? Math.max(0, base * pct / 100) : 0;
+            const expr = evalArithmeticExpr(raw);
+            if (expr !== null) return expr;
+            return parseCurrency(raw) || 0;
+        }
+
+        // Pure transaction math. balance may be null (no patient selected).
+        function computeBillingPreview(o) {
+            const charge = Math.max(0, Number(o.charge) || 0);
+            const discountRaw = Math.max(0, Number(o.discount) || 0);
+            const discount = Math.min(discountRaw, charge);     // capped at charge
+            const paid = Math.max(0, Number(o.paid) || 0);
+            const net = charge - discount;
+            const change = Math.max(0, paid - net);
+            const hasBalance = (o.balance !== null && o.balance !== undefined && !isNaN(o.balance));
+            const prev = hasBalance ? Number(o.balance) : 0;
+            const newBalance = prev + net - paid;
+            let state = 'unknown';
+            if (hasBalance) {
+                if (Math.abs(newBalance) < 0.005) state = 'settled';
+                else if (newBalance > 0) state = 'owes';
+                else state = 'credit';
+            }
+            return { charge, discount, net, paid, change,
+                     discountExceeds: discountRaw > charge,
+                     hasBalance, newBalance, state };
+        }
+
+        function renderBillingPreview(panel, r) {
+            if (!panel) return;
+            const row = (label, val, cls) =>
+                `<div class="billing-preview__row ${cls || ''}"><span>${label}</span><b>${val}</b></div>`;
+            const rows = [];
+            rows.push(row(t('preview_charge', 'Charge'), fmtPreviewMoney(r.charge)));
+            if (r.discount > 0) {
+                rows.push(row('− ' + t('preview_discount', 'Discount'),
+                              '− ' + fmtPreviewMoney(r.discount), 'billing-preview__row--muted'));
+            }
+            rows.push(row(t('preview_net', 'Net charge'), fmtPreviewMoney(r.net), 'billing-preview__row--net'));
+            rows.push(row(t('preview_paid', 'Paid now'), fmtPreviewMoney(r.paid)));
+            if (r.change > 0) {
+                rows.push(row(t('preview_change', 'Change / overpayment'),
+                              fmtPreviewMoney(r.change), 'billing-preview__row--muted'));
+            }
+            let tail;
+            if (r.hasBalance) {
+                const word = r.state === 'owes' ? t('preview_owes', 'owes')
+                          : r.state === 'credit' ? t('preview_credit', 'in credit') : '';
+                const amount = r.state === 'settled'
+                    ? t('preview_settled', 'Settled')
+                    : word + ' ' + fmtPreviewMoney(Math.abs(r.newBalance));
+                tail = `<div class="billing-preview__balance billing-preview__balance--${r.state}">` +
+                       `<span>${t('preview_new_balance', 'New balance')}</span><b>${amount}</b></div>`;
+            } else {
+                tail = `<div class="billing-preview__hint">${t('preview_select_patient', 'Select a patient to see the balance')}</div>`;
+            }
+            const warn = r.discountExceeds
+                ? `<div class="billing-preview__hint">${t('preview_discount_exceeds', 'Discount exceeds charge')}</div>`
+                : '';
+            panel.innerHTML = `<div class="billing-preview__title">${t('preview_title', 'Live summary')}</div>` +
+                              rows.join('') + tail + warn;
+        }
+
         function evalCalcField(el) {
             const raw = el.value.trim();
             if (!raw) { delete el.dataset.expr; return; }
