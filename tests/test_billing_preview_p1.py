@@ -17,3 +17,11 @@ def test_billing_form_has_preview_panel_and_field_ids():
 
 def test_followup_form_has_preview_panel():
     assert 'id="followup-preview"' in HTML_TEMPLATE
+
+
+def test_preview_i18n_keys_present_both_langs():
+    for key in ("preview_title", "preview_net", "preview_new_balance",
+                "preview_owes", "preview_credit", "preview_settled",
+                "preview_change", "preview_select_patient", "preview_discount_exceeds"):
+        # one definition in the EN dict + one in the AR dict
+        assert HTML_TEMPLATE.count(key + ":") >= 2, f"{key} missing from a language dict"
