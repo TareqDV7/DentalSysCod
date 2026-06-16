@@ -4190,12 +4190,12 @@ HTML_TEMPLATE = '''
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({doctor_name: nameEn, doctor_name_ar: nameAr})
                 });
-                if (!resp.ok) { alert(t('save_failed','Save failed')); return; }
+                if (!resp.ok) { showToast(t('save_failed', 'Save failed'), 'error'); return; }
                 if (nameEn) translations.en.doctor_name = nameEn;
                 if (nameAr) translations.ar.doctor_name = nameAr;
                 refreshDoctorBadge();
                 document.getElementById('doctor-edit-popover')?.classList.remove('open');
-            } catch(_) { alert(t('save_failed','Save failed')); }
+            } catch(_) { showToast(t('save_failed', 'Save failed'), 'error'); }
         }
 
         document.addEventListener('click', (e) => {
@@ -5293,7 +5293,7 @@ HTML_TEMPLATE = '''
         function openFirstPatientMatch() {
             const query = (document.getElementById('patient-search-input')?.value || '').trim().toLowerCase();
             if (!query) {
-                alert(t('select_patient_first', 'Please type a patient name first.'));
+                showToast(t('select_patient_first', 'Please type a patient name first.'), 'warning');
                 return;
             }
 
@@ -5305,7 +5305,7 @@ HTML_TEMPLATE = '''
             });
 
             if (!match) {
-                alert(t('no_patient_match', 'No patient matched your search.'));
+                showToast(t('no_patient_match', 'No patient matched your search.'), 'info');
                 return;
             }
 
@@ -5858,7 +5858,7 @@ HTML_TEMPLATE = '''
         async function deleteBillingRecord(id) {
             if (!(await showConfirm({ message: t('confirm_delete', 'Are you sure you want to delete?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/billing/${id}`, { method: 'DELETE' });
-            if (!resp.ok) { alert('Delete failed'); return; }
+            if (!resp.ok) { showToast('Delete failed', 'error'); return; }
             loadBilling();
             loadAuditLogs();
         }
@@ -5993,7 +5993,7 @@ HTML_TEMPLATE = '''
 
         function printInvoicePayload(payload) {
             if (!payload || !Array.isArray(payload.items)) {
-                alert(t('invoice_preview_unavailable', 'No invoice data to print yet.'));
+                showToast(t('invoice_preview_unavailable', 'No invoice data to print yet.'), 'warning');
                 return;
             }
 
@@ -6384,9 +6384,9 @@ HTML_TEMPLATE = '''
             const current = document.getElementById('acct-current-password')?.value || '';
             const next = document.getElementById('acct-new-password')?.value || '';
             const confirm = document.getElementById('acct-confirm-password')?.value || '';
-            if (!current || !next) { alert(t('fill_all_fields', 'Please fill in all fields.')); return; }
-            if (next.length < 4) { alert(t('password_too_short', 'New password must be at least 4 characters.')); return; }
-            if (next !== confirm) { alert(t('passwords_do_not_match', 'New passwords do not match.')); return; }
+            if (!current || !next) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
+            if (next.length < 4) { showToast(t('password_too_short', 'New password must be at least 4 characters.'), 'warning'); return; }
+            if (next !== confirm) { showToast(t('passwords_do_not_match', 'New passwords do not match.'), 'warning'); return; }
             try {
                 const resp = await fetch('/api/auth/change-password', {
                     method: 'POST',
@@ -6394,13 +6394,13 @@ HTML_TEMPLATE = '''
                     body: JSON.stringify({ current_password: current, new_password: next })
                 });
                 const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) { alert(payload.error || t('save_failed', 'Save failed')); return; }
+                if (!resp.ok) { showToast(payload.error || t('save_failed', 'Save failed'), 'error'); return; }
                 document.getElementById('acct-current-password').value = '';
                 document.getElementById('acct-new-password').value = '';
                 document.getElementById('acct-confirm-password').value = '';
-                alert(t('password_changed', 'Password changed successfully.'));
+                showToast(t('password_changed', 'Password changed successfully.'), 'success');
             } catch (_) {
-                alert(t('save_failed', 'Save failed'));
+                showToast(t('save_failed', 'Save failed'), 'error');
             }
         }
 
@@ -6494,22 +6494,22 @@ HTML_TEMPLATE = '''
             try {
                 const st = await fetchCloudStatus();
                 if (st && st.activated === false) {
-                    alert(_ar() ? 'فعّل الترخيص أولاً.' : 'Activate a license first.');
+                    showToast(_ar() ? 'فعّل الترخيص أولاً.' : 'Activate a license first.', 'warning');
                     return;
                 }
                 const endpoint = (st && st.configured) ? '/api/cloud/sync-now' : '/api/cloud/enable';
                 const resp = await fetch(endpoint, { method: 'POST' });
                 const payload = await resp.json().catch(() => ({}));
                 if (!resp.ok) {
-                    alert(payload.error || (_ar() ? 'فشل المزامنة' : 'Sync failed'));
+                    showToast(payload.error || (_ar() ? 'فشل المزامنة' : 'Sync failed'), 'error');
                 } else if (payload.ok || payload.success) {
                     const fs = payload.first_sync || payload;
-                    alert((_ar() ? 'تمت المزامنة. ' : 'Synced. ') + `↓${fs.pulled || 0} ↑${fs.pushed || 0}`);
+                    showToast((_ar() ? 'تمت المزامنة. ' : 'Synced. ') + `↓${fs.pulled || 0} ↑${fs.pushed || 0}`, 'success');
                 } else {
-                    alert((_ar() ? 'لم تكتمل المزامنة: ' : 'Sync did not complete: ') + (payload.error || ''));
+                    showToast((_ar() ? 'لم تكتمل المزامنة: ' : 'Sync did not complete: ') + (payload.error || ''), 'warning');
                 }
             } catch (_) {
-                alert(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.');
+                showToast(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.', 'error');
             } finally { if (btn) btn.disabled = false; await loadCloudSyncSettings(); }
         }
 
@@ -6607,7 +6607,7 @@ HTML_TEMPLATE = '''
           try {
             const res = await _btConfigure(!!enabled);
             if (!res) {
-              alert(_ar() ? 'فشل الحفظ' : 'Save failed');
+              showToast(_ar() ? 'فشل الحفظ' : 'Save failed', 'error');
             }
             await loadBluetoothSyncSettings();
           } finally {
@@ -6844,11 +6844,11 @@ HTML_TEMPLATE = '''
                 data.lab_expense_expr = calcExprOf(document.getElementById('followup-lab-expense'));
                 data.payment_expr = calcExprOf(document.getElementById('followup-payment'));
                 if (!data.followup_date) {
-                    alert(t('date_required', 'Please pick a date (day, month, and year).'));
+                    showToast(t('date_required', 'Please pick a date (day, month, and year).'), 'warning');
                     return;
                 }
                 if (!data.procedure_id && !String(data.treatment_procedure || '').trim()) {
-                    alert(t('procedure_required', 'Please select a procedure or enter a custom procedure name.'));
+                    showToast(t('procedure_required', 'Please select a procedure or enter a custom procedure name.'), 'warning');
                     return;
                 }
                 const response = await fetch(`/api/patients/${patient.id}/followups`, {
@@ -6858,7 +6858,7 @@ HTML_TEMPLATE = '''
                 });
                 if (!response.ok) {
                     const payload = await response.json().catch(() => ({}));
-                    alert(payload.error || t('unable_save_followup', 'Unable to save follow-up.'));
+                    showToast(payload.error || t('unable_save_followup', 'Unable to save follow-up.'), 'error');
                     return;
                 }
                 await viewPatientProfile(patientId);
@@ -7196,7 +7196,7 @@ HTML_TEMPLATE = '''
             if (!(await showConfirm({ message: t('confirm_delete', 'Are you sure you want to delete?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/patients/${patientId}/followups/${followupId}`, {method:'DELETE'});
             if (!resp.ok) {
-                alert('Delete failed');
+                showToast('Delete failed', 'error');
                 return;
             }
             viewPatientProfile(patientId);
@@ -7232,7 +7232,7 @@ HTML_TEMPLATE = '''
         function editFollowupById(patientId, followupId) {
             const list = followupsCache[patientId] || [];
             const item = list.find(f => Number(f.id) === Number(followupId));
-            if (!item) { alert(t('no_entry_found', 'Entry not found')); return; }
+            if (!item) { showToast(t('no_entry_found', 'Entry not found'), 'error'); return; }
             editFollowup(item);
         }
 
@@ -7273,7 +7273,7 @@ HTML_TEMPLATE = '''
 
         function showEditPatientModalById(patientId) {
             const patient = patientProfileCache[patientId];
-            if (!patient) { alert('Patient data not loaded'); return; }
+            if (!patient) { showToast('Patient data not loaded', 'error'); return; }
             showEditPatientModal(patientId, patient);
         }
 
@@ -7295,7 +7295,7 @@ HTML_TEMPLATE = '''
                         viewPatientProfile(parseInt(patientId));
                         loadPatients();
                     } else {
-                        alert(t('save_failed', 'Save failed'));
+                        showToast(t('save_failed', 'Save failed'), 'error');
                     }
                 });
             }
@@ -7329,7 +7329,7 @@ HTML_TEMPLATE = '''
                         closeModal('edit-followup-modal');
                         viewPatientProfile(parseInt(patientId));
                     } else {
-                        alert(t('save_failed', 'Save failed'));
+                        showToast(t('save_failed', 'Save failed'), 'error');
                     }
                 });
             }
@@ -7387,7 +7387,7 @@ HTML_TEMPLATE = '''
             });
             if (!resp.ok) {
                 const err = await resp.json().catch(() => ({}));
-                alert(err.error || t('save_failed', 'Save failed'));
+                showToast(err.error || t('save_failed', 'Save failed'), 'error');
                 return;
             }
             closeModal('add-patient-modal');
@@ -7497,7 +7497,7 @@ HTML_TEMPLATE = '''
                 body: JSON.stringify(data)
             });
             if (!response.ok) {
-                alert(t('unable_add_expense', 'Unable to add expense.'));
+                showToast(t('unable_add_expense', 'Unable to add expense.'), 'error');
                 return;
             }
             e.target.reset();
@@ -7535,7 +7535,7 @@ HTML_TEMPLATE = '''
 
                 if (!response.ok) {
                     const payload = await response.json().catch(() => ({}));
-                    alert(payload.error || t('unable_add_billing', 'Unable to create invoice.'));
+                    showToast(payload.error || t('unable_add_billing', 'Unable to create invoice.'), 'error');
                     return;
                 }
 
@@ -7578,14 +7578,14 @@ HTML_TEMPLATE = '''
 
                 if (!response.ok) {
                     const payloadError = await response.json().catch(() => ({}));
-                    alert(payloadError.error || t('unable_save_procedure', 'Unable to save procedure.'));
+                    showToast(payloadError.error || t('unable_save_procedure', 'Unable to save procedure.'), 'error');
                     return;
                 }
 
                 resetProcedureForm();
                 await loadProcedureCatalog();
                 await loadTreatmentProcedures();
-                alert(t('procedure_saved', 'Procedure saved successfully.'));
+                showToast(t('procedure_saved', 'Procedure saved successfully.'), 'success');
             });
         }
 
@@ -7600,7 +7600,7 @@ HTML_TEMPLATE = '''
                     body: JSON.stringify(data)
                 });
                 if (!response.ok) {
-                    alert(t('unable_add_holiday', 'Unable to add holiday.'));
+                    showToast(t('unable_add_holiday', 'Unable to add holiday.'), 'error');
                     return;
                 }
                 e.target.reset();
@@ -7624,7 +7624,7 @@ HTML_TEMPLATE = '''
             const resp = await fetch(`/api/patients/${id}`, {method: 'DELETE'});
             if (!resp.ok) {
                 const p = await resp.json().catch(() => ({}));
-                alert(p.error || 'Delete failed');
+                showToast(p.error || 'Delete failed', 'error');
                 return;
             }
             loadPatients();
@@ -7646,10 +7646,10 @@ HTML_TEMPLATE = '''
             });
             if (!response.ok) {
                 const payload = await response.json().catch(() => ({}));
-                alert(payload.message || payload.error || t('unable_start_visit', 'Unable to start visit.'));
+                showToast(payload.message || payload.error || t('unable_start_visit', 'Unable to start visit.'), 'error');
                 return;
             }
-            alert(t('visit_started', 'Visit started from appointment successfully.'));
+            showToast(t('visit_started', 'Visit started from appointment successfully.'), 'success');
             loadAppointments();
             loadDashboard();
         }

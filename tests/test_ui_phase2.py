@@ -52,3 +52,14 @@ def test_db_import_uses_typed_confirm():
     assert "await showTypedConfirm(" in HTML_TEMPLATE
     # the two odontogram prompts are intentionally deferred (chart is hidden)
     assert HTML_TEMPLATE.count("prompt(") == 2, "expected exactly the 2 deferred odontogram prompts"
+
+
+def test_no_native_alert_remains():
+    assert HTML_TEMPLATE.count("alert(") == 0, "a native alert( call (or comment) still remains"
+
+
+def test_alert_messages_now_toast():
+    # representative former-alert messages now route through showToast
+    assert "showToast(t('save_failed', 'Save failed'), 'error')" in HTML_TEMPLATE
+    assert "showToast(t('password_changed', 'Password changed successfully.'), 'success')" in HTML_TEMPLATE
+    assert HTML_TEMPLATE.count("showToast(") >= 30
