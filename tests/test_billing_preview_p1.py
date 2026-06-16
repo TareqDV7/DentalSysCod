@@ -13,3 +13,7 @@ def test_billing_form_has_preview_panel_and_field_ids():
     assert 'id="billing-discount"' in HTML_TEMPLATE
     assert 'id="billing-paid"' in HTML_TEMPLATE
     assert 'class="form-with-preview"' in HTML_TEMPLATE
+
+
+def test_followup_form_has_preview_panel():
+    assert 'id="followup-preview"' in HTML_TEMPLATE

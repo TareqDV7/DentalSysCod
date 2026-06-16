@@ -6547,6 +6547,7 @@ HTML_TEMPLATE = '''
                     <details class="form-panel" open>
                         <summary>➕ ${t('add_entry','Add New Entry')}</summary>
                         <div class="form-panel-body">
+                        <div class="form-with-preview">
                         <form id="patient-followup-form">
                             <div class="form-row">
                                 <div class="form-group"><label>${t('date','Date')}</label>
@@ -6587,6 +6588,8 @@ HTML_TEMPLATE = '''
                             <input type="hidden" name="patient_id" value="${patient.id}">
                             <button class="btn btn-primary" type="submit">${t('add_entry','Add Entry')}</button>
                         </form>
+                        <div class="billing-preview" id="followup-preview" aria-live="polite"></div>
+                        </div>
                         </div>
                     </details>
                     <div class="table-container">
