@@ -1,4 +1,5 @@
 import web_assets
+from templates import HTML_TEMPLATE
 
 
 def test_font_css_is_inlined_woff2_for_required_families():
@@ -24,3 +25,18 @@ def test_icon_sprite_has_all_symbols_with_paths():
 def test_render_icon_emits_use_reference():
     assert web_assets.render_icon("bell") == '<svg class="ic" aria-hidden="true"><use href="#i-bell"/></svg>'
     assert web_assets.render_icon("house", fill=True) == '<svg class="ic ic-fill" aria-hidden="true"><use href="#i-house-fill"/></svg>'
+
+
+# --- Task 2: fonts self-hosted in the template (no Google CDN) ---
+
+
+def test_template_has_no_google_fonts_cdn():
+    assert "fonts.googleapis.com" not in HTML_TEMPLATE
+    assert "fonts.gstatic.com" not in HTML_TEMPLATE
+
+
+def test_template_inlines_self_hosted_fonts():
+    assert "@font-face" in HTML_TEMPLATE
+    assert "data:font/woff2;base64," in HTML_TEMPLATE
+    # families still referenced by the UI
+    assert "Space Grotesk" in HTML_TEMPLATE and "Manrope" in HTML_TEMPLATE

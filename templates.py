@@ -5,6 +5,8 @@ were extracted verbatim from dental_clinic.py to shrink that module. They are
 rendered there via flask.render_template_string; content is byte-for-byte
 identical to the originals."""
 
+from web_assets import FONT_FACE_CSS, ICON_SPRITE
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
@@ -13,7 +15,7 @@ HTML_TEMPLATE = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ CLINIC_NAME }} — {{ SYSTEM_NAME }}</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap');
+        /*__FONT_FACE__*/
 
         :root {
             --bg-1: #f1f7f8;
@@ -8144,6 +8146,11 @@ MOBILE_PORTAL_TEMPLATE = '''
 </body>
 </html>
 '''
+
+# Vendored self-hosted assets are spliced in AFTER the literal (at import time,
+# before Jinja ever sees the string — the substituted CSS/SVG carries no
+# {{ }} / {% %} metacharacters, so the templates.py JS-escaping trap does not apply).
+HTML_TEMPLATE = HTML_TEMPLATE.replace("/*__FONT_FACE__*/", FONT_FACE_CSS)
 
 LOGIN_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
