@@ -2630,6 +2630,7 @@ HTML_TEMPLATE = '''
                 <details class="form-panel" open>
                 <summary>➕ <span data-i18n="payment_management">Payment Record</span></summary>
                 <div class="form-panel-body">
+                <div class="form-with-preview">
                 <form id="billing-form">
                     <div class="form-row">
                         <div class="form-group">
@@ -2650,13 +2651,13 @@ HTML_TEMPLATE = '''
                         </div>
                         <div class="form-group">
                             <label data-i18n="discount">Discount <small style="font-weight:400;color:var(--muted);">(or %, e.g. 20%)</small></label>
-                            <input type="text" inputmode="decimal" name="discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="billing-subtotal" placeholder="0" autocomplete="off">
+                            <input type="text" inputmode="decimal" name="discount" id="billing-discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="billing-subtotal" placeholder="0" autocomplete="off">
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label data-i18n="paid_amount">Paid Amount</label>
-                            <input type="text" inputmode="decimal" name="paid_amount" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
+                            <input type="text" inputmode="decimal" name="paid_amount" id="billing-paid" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off">
                         </div>
                         <div class="form-group">
                             <label data-i18n="payment_method">Payment Method</label>
@@ -2669,6 +2670,8 @@ HTML_TEMPLATE = '''
                     </div>
                     <button class="btn btn-primary" type="submit" data-i18n="record_payment">Record Payment</button>
                 </form>
+                <div class="billing-preview" id="billing-preview" aria-live="polite"></div>
+                </div>
                 </div>
                 </details>
                 <div class="table-container" id="billing-history-container" style="margin-top:12px;display:none;">
