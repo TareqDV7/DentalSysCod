@@ -3139,6 +3139,22 @@ HTML_TEMPLATE = '''
       </div>
     </div>
 
+    <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+        <div class="modal-content">
+            <div class="confirm-modal__icon" aria-hidden="true">⚠</div>
+            <div class="modal-header"><h2 id="confirm-modal-title"></h2></div>
+            <p class="confirm-modal__msg"></p>
+            <div class="confirm-modal__typed" hidden>
+                <input class="confirm-modal__input" type="text" autocomplete="off" spellcheck="false">
+                <div class="confirm-modal__hint"></div>
+            </div>
+            <div class="confirm-modal__actions">
+                <button type="button" class="btn confirm-modal__cancel"></button>
+                <button type="button" class="btn confirm-modal__ok"></button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let patientsCache = [];
         let appointmentsCache = [];

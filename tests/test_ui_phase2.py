@@ -13,3 +13,12 @@ def test_confirm_modal_css_present():
     assert ".confirm-modal__ok:disabled" in HTML_TEMPLATE
     # danger button uses the Phase 0 danger token, solid (never frosted)
     assert "var(--danger)" in HTML_TEMPLATE
+
+
+def test_confirm_modal_markup_present():
+    assert 'id="confirm-modal"' in HTML_TEMPLATE
+    assert 'role="dialog"' in HTML_TEMPLATE
+    assert 'aria-modal="true"' in HTML_TEMPLATE
+    assert 'id="confirm-modal-title"' in HTML_TEMPLATE
+    assert 'class="confirm-modal__input"' in HTML_TEMPLATE
+    assert 'class="btn confirm-modal__ok"' in HTML_TEMPLATE
