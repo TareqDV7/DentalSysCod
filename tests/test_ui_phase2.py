@@ -37,3 +37,12 @@ def test_confirm_controller_present():
     # backdrop/Esc/cancel resolve false; only ok/Enter resolve true
     assert "_closeConfirm(false)" in HTML_TEMPLATE
     assert "_closeConfirm(true)" in HTML_TEMPLATE
+
+
+def test_no_native_confirm_remains():
+    # all 6 confirm() sites migrated; controller uses no native fallback
+    assert HTML_TEMPLATE.count("confirm(") == 0, "a native confirm( call still remains"
+
+
+def test_confirm_sites_use_showconfirm():
+    assert HTML_TEMPLATE.count("await showConfirm(") >= 6

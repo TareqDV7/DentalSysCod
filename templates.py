@@ -5513,7 +5513,7 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteHoliday(id) {
-            if (!confirm(t('delete_holiday_confirm', 'Delete this holiday?'))) return;
+            if (!(await showConfirm({ message: t('delete_holiday_confirm', 'Delete this holiday?'), confirmLabel: t('delete', 'Delete') }))) return;
             await fetch(`/api/holidays/${id}`, { method: 'DELETE' });
             await loadAppointments();
         }
@@ -5852,7 +5852,7 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteBillingRecord(id) {
-            if (!confirm(t('confirm_delete', 'Are you sure you want to delete?'))) return;
+            if (!(await showConfirm({ message: t('confirm_delete', 'Are you sure you want to delete?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/billing/${id}`, { method: 'DELETE' });
             if (!resp.ok) { alert('Delete failed'); return; }
             loadBilling();
@@ -6177,7 +6177,7 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteExpense(id) {
-            if (!confirm(t('delete_expense_confirm', 'Delete this expense?'))) return;
+            if (!(await showConfirm({ message: t('delete_expense_confirm', 'Delete this expense?'), confirmLabel: t('delete', 'Delete') }))) return;
             await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
             loadExpenses();
             loadReports();
@@ -6250,7 +6250,7 @@ HTML_TEMPLATE = '''
           const msg = (currentLanguage === 'ar')
             ? 'سيتم إفراغ كل الإجراءات وحالات الأسنان من القوائم (تبقى بيانات المرضى كما هي). متابعة؟'
             : 'This empties every procedure and tooth condition from the catalogs (patient data is kept). Continue?';
-          if (!confirm(msg)) return;
+          if (!(await showConfirm({ message: msg, confirmLabel: t('delete', 'Delete') }))) return;
           const out = document.getElementById('data-tools-result');
           if (out) out.textContent = (currentLanguage === 'ar') ? 'جارٍ الإفراغ…' : 'Clearing…';
           try {
@@ -7189,7 +7189,7 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteFollowup(patientId, followupId) {
-            if (!confirm(t('confirm_delete', 'Are you sure you want to delete?'))) return;
+            if (!(await showConfirm({ message: t('confirm_delete', 'Are you sure you want to delete?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/patients/${patientId}/followups/${followupId}`, {method:'DELETE'});
             if (!resp.ok) {
                 alert('Delete failed');
@@ -7616,7 +7616,7 @@ HTML_TEMPLATE = '''
 
         // Delete functions
         async function deletePatient(id) {
-            if (!confirm(t('confirm_delete_patient', 'Are you sure you want to delete this patient?'))) return;
+            if (!(await showConfirm({ message: t('confirm_delete_patient', 'Are you sure you want to delete this patient?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/patients/${id}`, {method: 'DELETE'});
             if (!resp.ok) {
                 const p = await resp.json().catch(() => ({}));
