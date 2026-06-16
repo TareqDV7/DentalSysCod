@@ -69,3 +69,18 @@ def test_dark_theme_canvas_and_surface_tokens():
     # dark block must redefine the data canvas + surface as opaque slate
     assert "--canvas: #020617;" in HTML_TEMPLATE
     assert "--surface: #1e293b;" in HTML_TEMPLATE
+
+
+# --- Task 5: shared chrome reskin (Editorial Slate) ---
+
+
+def test_chrome_uses_slate_tokens_not_old_light_sidebar():
+    # the sidebar was a light #f3f7fb panel; after reskin it must use the chrome token
+    assert "--chrome-bg" in HTML_TEMPLATE
+    # active nav item references the fill icon + sprite controls (not emoji)
+    assert "i-house-fill" in HTML_TEMPLATE
+    assert 'use href="#i-' in HTML_TEMPLATE
+
+
+def test_data_card_uses_surface_token():
+    assert "var(--surface)" in HTML_TEMPLATE
