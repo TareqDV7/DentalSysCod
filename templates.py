@@ -3125,6 +3125,7 @@ HTML_TEMPLATE = '''
         let currentPatientInvoicePayload = null;
         let currentProfilePatient = null;
         let currentFollowupBalance = 0;
+        let currentFollowupBalanceSigned = 0;
         let patientProfileCache = {};
         let followupsCache = {};
         let currentCalendarDate = new Date();
@@ -6502,6 +6503,7 @@ HTML_TEMPLATE = '''
             // Header balance uses the UNIFIED ledger (sheet + billing) so it
             // matches receivables, the patient list, and the mobile app.
             currentFollowupBalance = Math.max(0, parseCurrency(profile.outstanding || 0));
+            currentFollowupBalanceSigned = parseCurrency(profile.outstanding || 0);
             content.innerHTML = `
                 <div class="profile-stats">
                     <div class="stat-card stat-card-teal">
@@ -6679,6 +6681,10 @@ HTML_TEMPLATE = '''
                 followupProcedureSelect.addEventListener('change', updateFollowupProcedureUi);
                 updateFollowupProcedureUi();
             }
+            wireBillingPreview(document.getElementById('patient-followup-form'), {
+                chargeId: 'followup-price', discountId: 'followup-discount', paidId: 'followup-payment',
+                panelId: 'followup-preview', getBalance: () => currentFollowupBalanceSigned
+            });
             document.getElementById('patient-followup-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const data = Object.fromEntries(new FormData(e.target));
@@ -7606,6 +7612,44 @@ HTML_TEMPLATE = '''
                               rows.join('') + tail + warn;
         }
 
+        let billingPatientBalance = null;   // signed; null = no patient selected
+
+        async function loadBillingPatientBalance(pid) {
+            billingPatientBalance = null;
+            if (pid) {
+                try {
+                    const res = await fetch(`/api/patients/${pid}/full-profile`);
+                    if (res.ok) {
+                        const d = await res.json();
+                        billingPatientBalance = parseCurrency(d.outstanding);
+                    }
+                } catch (e) { billingPatientBalance = null; }
+            }
+            const form = document.getElementById('billing-form');
+            if (form && form.recomputePreview) form.recomputePreview();
+        }
+
+        function wireBillingPreview(formEl, opts) {
+            if (!formEl || formEl.dataset.previewWired) return;
+            formEl.dataset.previewWired = '1';
+            const panel = document.getElementById(opts.panelId);
+            const byId = id => document.getElementById(id);
+            const recompute = () => {
+                const charge = resolveCalcValue(byId(opts.chargeId));
+                const discount = resolveCalcValue(byId(opts.discountId), charge);
+                const paid = resolveCalcValue(byId(opts.paidId));
+                const balance = opts.getBalance ? opts.getBalance() : null;
+                renderBillingPreview(panel, computeBillingPreview({ charge, discount, paid, balance }));
+            };
+            const debounced = previewDebounce(recompute, 120);   // 120ms: responsive but not jumpy while typing
+            [opts.chargeId, opts.discountId, opts.paidId].forEach(id => {
+                const el = byId(id);
+                if (el) { el.addEventListener('input', debounced); el.addEventListener('blur', recompute); }
+            });
+            formEl.recomputePreview = recompute;   // patient-select can refresh
+            recompute();
+        }
+
         function evalCalcField(el) {
             const raw = el.value.trim();
             if (!raw) { delete el.dataset.expr; return; }
@@ -7683,6 +7727,20 @@ HTML_TEMPLATE = '''
         }
 
         document.addEventListener('DOMContentLoaded', () => wireCalcInputs(document));
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const billingForm = document.getElementById('billing-form');
+            if (billingForm) {
+                wireBillingPreview(billingForm, {
+                    chargeId: 'billing-subtotal', discountId: 'billing-discount', paidId: 'billing-paid',
+                    panelId: 'billing-preview', getBalance: () => billingPatientBalance
+                });
+            }
+            const billingPatientSel = document.getElementById('billing-patient-select');
+            if (billingPatientSel) {
+                billingPatientSel.addEventListener('change', e => loadBillingPatientBalance(e.target.value));
+            }
+        });
 
         // ── Universal date-picker button wiring ─────────────────────────────────
         function attachDatePickerButtons(root) {

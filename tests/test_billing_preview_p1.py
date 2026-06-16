@@ -33,3 +33,10 @@ def test_preview_core_functions_present():
                "function resolveCalcValue",
                "function previewDebounce"):
         assert fn in HTML_TEMPLATE, f"{fn} missing"
+
+
+def test_wiring_present():
+    assert "function wireBillingPreview" in HTML_TEMPLATE
+    assert "wireBillingPreview(" in HTML_TEMPLATE          # at least one call site
+    assert "/full-profile" in HTML_TEMPLATE                # billing balance fetch
+    assert "currentFollowupBalanceSigned" in HTML_TEMPLATE  # signed balance for follow-up
