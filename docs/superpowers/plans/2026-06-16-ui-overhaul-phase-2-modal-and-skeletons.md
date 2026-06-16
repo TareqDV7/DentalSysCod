@@ -238,7 +238,7 @@ Expected: FAIL.
 
 ```javascript
         // ── Confirm / typed-confirm modal controller ─────────────────────────
-        // Promise-based replacements for native confirm()/prompt(). Reuse the
+        // Promise-based replacements for the native blocking dialogs. Reuse the
         // existing .modal/.modal-content classes (theme parity). Single instance,
         // injected once as #confirm-modal. Esc / backdrop / Cancel resolve(false);
         // Enter (outside the input) / OK resolve(true). The keydown listener is
