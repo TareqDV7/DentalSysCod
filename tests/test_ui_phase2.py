@@ -22,6 +22,10 @@ def test_confirm_modal_markup_present():
     assert 'id="confirm-modal-title"' in HTML_TEMPLATE
     assert 'class="confirm-modal__input"' in HTML_TEMPLATE
     assert 'class="btn confirm-modal__ok"' in HTML_TEMPLATE
+    # a11y: message + typed hint are programmatically associated
+    assert 'aria-describedby="confirm-modal-desc"' in HTML_TEMPLATE
+    assert 'id="confirm-modal-desc"' in HTML_TEMPLATE
+    assert 'aria-describedby="confirm-modal-hint"' in HTML_TEMPLATE
 
 
 def test_confirm_controller_present():

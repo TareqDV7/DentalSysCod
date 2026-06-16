@@ -3139,14 +3139,14 @@ HTML_TEMPLATE = '''
       </div>
     </div>
 
-    <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-desc">
         <div class="modal-content">
             <div class="confirm-modal__icon" aria-hidden="true">⚠</div>
             <div class="modal-header"><h2 id="confirm-modal-title"></h2></div>
-            <p class="confirm-modal__msg"></p>
+            <p class="confirm-modal__msg" id="confirm-modal-desc"></p>
             <div class="confirm-modal__typed" hidden>
-                <input class="confirm-modal__input" type="text" autocomplete="off" spellcheck="false">
-                <div class="confirm-modal__hint"></div>
+                <input class="confirm-modal__input" type="text" autocomplete="off" spellcheck="false" aria-describedby="confirm-modal-hint">
+                <div class="confirm-modal__hint" id="confirm-modal-hint"></div>
             </div>
             <div class="confirm-modal__actions">
                 <button type="button" class="btn confirm-modal__cancel"></button>
