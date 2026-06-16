@@ -50,3 +50,22 @@ def test_template_embeds_icon_sprite():
     assert 'id="i-gear"' in HTML_TEMPLATE  # the icon the mockup broke — must be real
     assert "unpkg.com" not in HTML_TEMPLATE  # never the CDN webfont at runtime
     assert "@phosphor-icons/web" not in HTML_TEMPLATE
+
+
+# --- Task 4: consolidated + hardened tokens (accent teal -> blue) ---
+
+
+def test_accent_flipped_to_blue():
+    assert "--accent: #38bdf8;" in HTML_TEMPLATE
+    assert "#13b5a7" not in HTML_TEMPLATE, "teal accent must be fully removed"
+
+
+def test_gradient_and_new_scales_present():
+    for token in ("--accent-teal:", "--accent-gradient:", "--radius-lg:", "--elev-card:", "--dur:"):
+        assert token in HTML_TEMPLATE, f"missing token {token}"
+
+
+def test_dark_theme_canvas_and_surface_tokens():
+    # dark block must redefine the data canvas + surface as opaque slate
+    assert "--canvas: #020617;" in HTML_TEMPLATE
+    assert "--surface: #1e293b;" in HTML_TEMPLATE

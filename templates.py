@@ -18,6 +18,27 @@ HTML_TEMPLATE = '''
         /*__FONT_FACE__*/
 
         :root {
+            /* chrome (header + sidebar) — slate in BOTH themes */
+            --chrome-bg: #0f172a;
+            --chrome-bg-2: #0b1220;
+            --chrome-border: rgba(255,255,255,.06);
+            /* content */
+            --canvas: #f1f5f9;
+            --surface: #ffffff;              /* solid data card — never frosted */
+            --surface-border: rgba(15,23,42,.07);
+            /* ink (text/icons/rails/rings) */
+            --ink: #0f172a;
+            --ink-muted: #64748b;
+            --ink-subtle: #94a3b8;
+            /* accent — solid blue ink, teal->blue gradient on FILLS only */
+            --accent: #38bdf8;               /* logo blue (re-accented from the old teal) */
+            --accent-strong: #1d7fb7;
+            --accent-cta-from: #1d7fb7;
+            --accent-cta-to: #2563eb;
+            --accent-soft: rgba(56,189,248,.13);
+            --accent-teal: #14b8a6;          /* gradient stop — fills only, never ink */
+            --accent-gradient: linear-gradient(135deg, var(--accent-teal), var(--accent-cta-to));
+            /* legacy names kept so existing rules don't break */
             --bg-1: #f1f7f8;
             --bg-2: #e7f0ff;
             --panel: #ffffff;
@@ -26,11 +47,23 @@ HTML_TEMPLATE = '''
             --muted: #627386;
             --brand: #0f6d7b;
             --brand-2: #1d7fb7;
-            --accent: #13b5a7;
             --danger: #d9434e;
             --warning: #d89e1f;
             --ok: #1f9a5f;
+            /* spacing (moved here from the second :root) */
+            --space-1: 6px; --space-2: 10px; --space-3: 14px;
+            --space-4: 18px; --space-5: 24px; --space-6: 32px;
+            --gap: var(--space-3);
+            --input-padding: 12px 14px;
+            /* radius */
+            --radius-sm: 8px; --radius-md: 11px; --radius-lg: 14px;
+            --radius-xl: 16px; --radius-pill: 999px;
+            /* elevation (opaque) */
             --shadow: 0 14px 36px rgba(19, 39, 66, 0.12);
+            --elev-card: 0 10px 30px -16px rgba(15,23,42,.30);
+            --elev-raised: 0 24px 60px -24px rgba(15,23,42,.50);
+            /* motion */
+            --dur-fast: 150ms; --dur: 300ms; --ease: cubic-bezier(.16,1,.3,1);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -54,6 +87,13 @@ HTML_TEMPLATE = '''
             --text: #e7eef8;
             --muted: #9bb0c8;
             --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+            --canvas: #020617;               /* slate-950 content canvas */
+            --surface: #1e293b;              /* solid slate-800 data card (opaque) */
+            --surface-border: rgba(255,255,255,.07);
+            --ink: #f1f5f9;
+            --warning: #fbbf24;              /* lightened so 'due' stays legible on dark */
+            --elev-card: 0 12px 34px -16px rgba(0,0,0,.6);
+            /* chrome tokens unchanged — chrome is slate in both themes */
             background:
                 radial-gradient(1200px 500px at 100% -30%, rgba(29, 127, 183, 0.18) 0%, transparent 60%),
                 radial-gradient(1000px 500px at -10% 0%, rgba(19, 181, 167, 0.12) 0%, transparent 58%),
@@ -754,17 +794,8 @@ HTML_TEMPLATE = '''
             color: var(--text);
         }
 
-        /* Design tokens (quick-win) */
-        :root {
-            --space-1: 6px;
-            --space-2: 10px;
-            --space-3: 14px;
-            --space-4: 18px;
-            --space-5: 24px;
-            --space-6: 32px;
-            --gap: var(--space-3);
-            --input-padding: 12px 14px;
-        }
+        /* Design tokens (spacing/radius/elevation/motion) now live in the
+           consolidated :root at the top of this stylesheet. */
 
         .form-group textarea { resize: vertical; min-height: 96px; }
 
@@ -1005,7 +1036,7 @@ HTML_TEMPLATE = '''
         .date-picker-day-name { font-weight: 700; font-size: 0.75rem; color: #627386; padding: 8px 0; }
         body[data-theme="dark"] .date-picker-day:hover { background: rgba(255,255,255,0.08); }
         .date-picker-day.empty { cursor: default; }
-        .date-picker-day.today { background: #e6f7f5; border-color: #13b5a7; color: #0f6d7b; font-weight: 700; }
+        .date-picker-day.today { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 700; }
 
 
         .calendar-event {
@@ -1326,7 +1357,7 @@ HTML_TEMPLATE = '''
         }
         html[dir="rtl"] .stat-card .stat-icon { right: auto; left: 14px; }
         .stat-card h3, .stat-card p { position: relative; z-index: 1; }
-        .stat-card-teal { background: linear-gradient(135deg, #0f6d7b 0%, #13b5a7 100%) !important; }
+        .stat-card-teal { background: linear-gradient(135deg, #0f6d7b 0%, #14b8a6 100%) !important; }
         .stat-card-blue { background: linear-gradient(135deg, #1d7fb7 0%, #3565b8 100%) !important; }
         .stat-card-green { background: linear-gradient(135deg, #1f9a5f 0%, #22b7a1 100%) !important; }
         .stat-card-amber { background: linear-gradient(135deg, #c47f10 0%, #d89e1f 100%) !important; color: #fff !important; }
