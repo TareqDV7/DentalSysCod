@@ -7621,7 +7621,8 @@ HTML_TEMPLATE = '''
                     const res = await fetch(`/api/patients/${pid}/full-profile`);
                     if (res.ok) {
                         const d = await res.json();
-                        billingPatientBalance = parseCurrency(d.outstanding);
+                        // null (not 0) when the field is absent — 0 means "selected, owes nothing"
+                        billingPatientBalance = (d.outstanding != null) ? parseCurrency(d.outstanding) : null;
                     }
                 } catch (e) { billingPatientBalance = null; }
             }
@@ -7736,6 +7737,8 @@ HTML_TEMPLATE = '''
                     panelId: 'billing-preview', getBalance: () => billingPatientBalance
                 });
             }
+            // Intentionally a separate listener from the credit-hint one wired in loadBilling():
+            // they do different jobs (credit hint/history vs. preview balance fetch).
             const billingPatientSel = document.getElementById('billing-patient-select');
             if (billingPatientSel) {
                 billingPatientSel.addEventListener('change', e => loadBillingPatientBalance(e.target.value));
