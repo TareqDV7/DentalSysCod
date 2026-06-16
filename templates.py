@@ -1508,6 +1508,44 @@ HTML_TEMPLATE = '''
             align-items: center;
         }
 
+        /* ── Phase 1: live billing math preview ───────────────────────────── */
+        .form-with-preview { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+        .form-with-preview > form { flex: 1 1 360px; min-width: 0; }
+        .billing-preview {
+            flex: 0 1 260px; min-width: 220px;
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--elev-card);
+            padding: 14px 16px;
+            font-size: 0.9rem;
+        }
+        .billing-preview__title {
+            font-size: 0.7rem; font-weight: 800; letter-spacing: .08em;
+            text-transform: uppercase; color: var(--ink-subtle); margin-bottom: 10px;
+        }
+        .billing-preview__row {
+            display: flex; justify-content: space-between; gap: 12px; padding: 3px 0;
+            font-variant-numeric: tabular-nums;
+        }
+        .billing-preview__row b { font-weight: 700; }
+        .billing-preview__row--muted { color: var(--ink-muted); }
+        .billing-preview__row--net {
+            border-top: 1px solid var(--surface-border); margin-top: 4px; padding-top: 6px;
+        }
+        .billing-preview__balance {
+            display: flex; justify-content: space-between; gap: 12px;
+            border-top: 1px solid var(--surface-border); margin-top: 6px; padding-top: 8px;
+            font-size: 1.02rem; font-variant-numeric: tabular-nums;
+        }
+        .billing-preview__balance--owes b { color: var(--warning); }
+        .billing-preview__balance--credit b,
+        .billing-preview__balance--settled b { color: var(--ok); }
+        .billing-preview__hint { color: var(--ink-subtle); font-size: 0.82rem; margin-top: 6px; }
+        @media (max-width: 720px) {
+            .form-with-preview > form, .billing-preview { flex-basis: 100%; }
+        }
+
         /* ── Bluetooth-sync toggle row ── */
         .bt-toggle-row {
             display: flex;
