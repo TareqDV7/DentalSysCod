@@ -1329,6 +1329,22 @@ HTML_TEMPLATE = '''
             .header-meta { gap: 7px; }
         }
 
+        /* ── P3 editorial dashboard: narrow rail + wide main (RTL-safe via grid order) ── */
+        .dash-grid { display: grid; grid-template-columns: minmax(260px, 300px) 1fr; gap: 18px; align-items: start; }
+        .dash-rail { display: flex; flex-direction: column; gap: 14px; }
+        .dash-rail .stats-grid--rail { grid-template-columns: 1fr; gap: 12px; }
+        .dash-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+        .quick-actions { display: flex; flex-direction: column; gap: 8px; background: var(--surface);
+            border: 1px solid var(--surface-border); border-radius: var(--radius-lg); padding: 14px; }
+        .quick-actions__title { font-size: .8rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
+        .quick-actions__btn { width: 100%; justify-content: flex-start; }
+        .today-panel .today-empty { padding: 18px 14px; color: var(--muted); font-size: .92rem; }
+        @media (max-width: 720px) {
+            .dash-grid { grid-template-columns: 1fr; }
+            .dash-rail .stats-grid--rail { grid-template-columns: 1fr 1fr; }
+        }
+
         /* RTL Support */
         html[dir="rtl"] body {
             direction: rtl;

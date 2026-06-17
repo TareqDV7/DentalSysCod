@@ -38,3 +38,17 @@ def test_phase3_i18n_keys_present_both_langs():
     for key in ("today_schedule", "quick_actions", "new_appointment",
                 "no_appointments_today", "loading_today", "schedule_load_failed"):
         assert HTML_TEMPLATE.count(key + ":") >= 2, f"{key} missing from a language dict"
+
+
+def test_dashboard_two_column_css_present():
+    assert ".dash-grid" in HTML_TEMPLATE
+    assert ".dash-rail" in HTML_TEMPLATE
+    assert ".dash-main" in HTML_TEMPLATE
+    assert ".quick-actions" in HTML_TEMPLATE
+    # responsive: stacks at the narrow breakpoint
+    assert ".dash-grid" in HTML_TEMPLATE[HTML_TEMPLATE.find("@media (max-width: 720px)"):]
+
+
+def test_dashboard_rail_uses_logical_props_for_rtl():
+    # the grid is defined with a logical column order so RTL mirrors for free
+    assert "grid-template-columns" in HTML_TEMPLATE[HTML_TEMPLATE.find(".dash-grid"):HTML_TEMPLATE.find(".dash-grid") + 400]
