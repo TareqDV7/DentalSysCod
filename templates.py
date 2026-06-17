@@ -942,10 +942,19 @@ HTML_TEMPLATE = '''
             letter-spacing: 0.04em;
         }
 
-        .badge-success { background: #e0f4e8; color: #166942; }
-        .badge-warning { background: #fff1d4; color: #8b5e00; }
-        .badge-danger { background: #ffe2e5; color: #8d1f33; }
-        .badge-info { background: #e3f1ff; color: #1f5d9e; }
+        /* ── Status badges — ONE semantic palette (P3). Each rule pairs the semantic
+           name with its legacy alias so existing call sites keep working untouched. ── */
+        .badge-success, .badge-active { background: #e0f4e8; color: #166942; }
+        .badge-warning, .badge-pending { background: #fbeaca; color: #875600; }
+        .badge-danger, .badge-blocked { background: #fbdfe2; color: #a11f2e; }
+        .badge-info, .badge-secondary { background: var(--accent-soft); color: var(--accent-strong); }
+        .badge-neutral, .badge-muted { background: #eef2f8; color: #4a5a6e; }
+        /* dark variants — translucent fills + lightened ink (verify >= 4.5:1 on the slate card) */
+        body[data-theme="dark"] .badge-success, body[data-theme="dark"] .badge-active { background: rgba(34,197,94,.16); color: #7ee2a8; }
+        body[data-theme="dark"] .badge-warning, body[data-theme="dark"] .badge-pending { background: rgba(251,191,36,.18); color: #f3ca63; }
+        body[data-theme="dark"] .badge-danger, body[data-theme="dark"] .badge-blocked { background: rgba(239,68,68,.20); color: #ff9aa6; }
+        body[data-theme="dark"] .badge-info, body[data-theme="dark"] .badge-secondary { background: rgba(56,189,248,.16); color: #8fd3f7; }
+        body[data-theme="dark"] .badge-neutral, body[data-theme="dark"] .badge-muted { background: rgba(148,163,184,.18); color: #c3cdda; }
 
         .expense-status-select { padding: 4px 6px; font-size: 0.85rem; border-radius: 6px; border: 1px solid #cdd9e6; }
         .expense-status-select[data-status="paid"] { background: #e0f4e8; color: #166942; }
@@ -1318,6 +1327,22 @@ HTML_TEMPLATE = '''
         @media (max-width: 480px) {
             .stats-grid { grid-template-columns: 1fr; }
             .header-meta { gap: 7px; }
+        }
+
+        /* ── P3 editorial dashboard: narrow rail + wide main (RTL-safe via grid order) ── */
+        .dash-grid { display: grid; grid-template-columns: minmax(260px, 300px) 1fr; gap: 18px; align-items: start; }
+        .dash-rail { display: flex; flex-direction: column; gap: 14px; }
+        .dash-rail .stats-grid--rail { grid-template-columns: 1fr; gap: 12px; }
+        .dash-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+        .quick-actions { display: flex; flex-direction: column; gap: 8px; background: var(--surface);
+            border: 1px solid var(--surface-border); border-radius: var(--radius-lg); padding: 14px; }
+        .quick-actions__title { font-size: .8rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
+        .quick-actions__btn { width: 100%; display: flex; align-items: center; justify-content: flex-start; }
+        .today-panel .today-empty { padding: 18px 14px; color: var(--muted); font-size: .92rem; }
+        @media (max-width: 720px) {
+            .dash-grid { grid-template-columns: 1fr; }
+            .dash-rail .stats-grid--rail { grid-template-columns: 1fr 1fr; }
         }
 
         /* RTL Support */
@@ -1705,12 +1730,6 @@ HTML_TEMPLATE = '''
             animation: skeletonShimmer 1.25s var(--ease) infinite;
         }
         body[data-theme="dark"] .stats-grid.is-loading .stat-card h3 { background: rgba(255, 255, 255, 0.10); }
-        .badge-neutral { background: #eef4fb; color: #33536d; }
-        .badge-active { background: #e0f4e8; color: #166942; }
-        .badge-pending { background: #fff1d4; color: #8b5e00; }
-        .badge-muted { background: #e9eef5; color: #596a7c; }
-        .badge-secondary { background: #e3f1ff; color: #1f5d9e; }
-        .badge-blocked { background: #ffe2e5; color: #8d1f33; }
         .section-card-title {
             font-family: 'Space Grotesk', 'Manrope', sans-serif;
             font-size: 0.9rem;
@@ -2212,60 +2231,93 @@ HTML_TEMPLATE = '''
             <!-- Dashboard Tab -->
             <div id="dashboard" class="tab-content active">
                 <div class="screen-shell">
-                    <div class="section-card">
-                        <div class="section-card-header">
-                            <div>
-                                <h2 data-i18n="dashboard_overview">Dashboard Overview</h2>
-                                <p data-i18n="dashboard_summary">Snapshot of today's activity, totals, and recent appointments.</p>
-                            </div>
-                            <div class="section-card-actions">
-                                <span id="cloud-sync-badge" style="display:none;align-self:center;font-size:0.85em;color:var(--muted);"></span>
-                                <button class="btn btn-primary" onclick="downloadBackup()" data-i18n="download_backup">💾 Download Backup</button>
-                            </div>
+                    <div class="section-card-header">
+                        <div>
+                            <h2 data-i18n="dashboard_overview">Dashboard Overview</h2>
+                            <p data-i18n="dashboard_summary">Snapshot of today's activity, totals, and recent appointments.</p>
                         </div>
-                        <div class="stats-grid" id="stats-grid">
-                            <div class="stat-card stat-card-teal">
-                                <span class="stat-icon">👥</span>
-                                <h3 id="total-patients">0</h3>
-                                <p data-i18n="total_patients">Total Patients</p>
-                            </div>
-                            <div class="stat-card stat-card-blue">
-                                <span class="stat-icon">📅</span>
-                                <h3 id="today-appointments">0</h3>
-                                <p data-i18n="todays_appointments">Today's Appointments</p>
-                            </div>
-                            <div class="stat-card stat-card-green">
-                                <span class="stat-icon">🩺</span>
-                                <h3 id="total-visits">0</h3>
-                                <p data-i18n="todays_visits">Today's Visits</p>
-                            </div>
-                            <div class="stat-card stat-card-amber">
-                                <span class="stat-icon">💰</span>
-                                <h3 id="total-revenue">₪ 0</h3>
-                                <p data-i18n="todays_revenue">Today's Revenue</p>
-                            </div>
+                        <div class="section-card-actions">
+                            <span id="cloud-sync-badge" style="display:none;align-self:center;font-size:0.85em;color:var(--muted);"></span>
+                            <button class="btn btn-primary" onclick="downloadBackup()" data-i18n="download_backup">💾 Download Backup</button>
                         </div>
                     </div>
 
-                    <div class="section-card table-shell">
-                        <div class="table-meta">
-                            <div>
-                                <div class="section-card-title" data-i18n="recent_appointments">Recent Appointments</div>
-                                <div class="table-meta-text" data-i18n="recent_appointments_hint">Latest scheduled visits and their current status.</div>
+                    <div class="dash-grid">
+                        <aside class="dash-rail">
+                            <div class="stats-grid stats-grid--rail" id="stats-grid">
+                                <div class="stat-card stat-card-teal">
+                                    <span class="stat-icon">👥</span>
+                                    <h3 id="total-patients">0</h3>
+                                    <p data-i18n="total_patients">Total Patients</p>
+                                </div>
+                                <div class="stat-card stat-card-blue">
+                                    <span class="stat-icon">📅</span>
+                                    <h3 id="today-appointments">0</h3>
+                                    <p data-i18n="todays_appointments">Today's Appointments</p>
+                                </div>
+                                <div class="stat-card stat-card-green">
+                                    <span class="stat-icon">🩺</span>
+                                    <h3 id="total-visits">0</h3>
+                                    <p data-i18n="todays_visits">Today's Visits</p>
+                                </div>
+                                <div class="stat-card stat-card-amber">
+                                    <span class="stat-icon">💰</span>
+                                    <h3 id="total-revenue">₪ 0</h3>
+                                    <p data-i18n="todays_revenue">Today's Revenue</p>
+                                </div>
                             </div>
-                        </div>
-                        <div class="responsive-table-wrap">
-                            <table id="recent-appointments-table">
-                                <thead>
-                                    <tr>
-                                        <th data-i18n="patient">Patient</th>
-                                        <th data-i18n="date_time">Date & Time</th>
-                                        <th data-i18n="treatment_type">Treatment Type</th>
-                                        <th class="center-cell" data-i18n="status">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="recent-appointments-body"></tbody>
-                            </table>
+                            <div class="quick-actions">
+                                <div class="quick-actions__title" data-i18n="quick_actions">Quick Actions</div>
+                                <button class="btn btn-primary quick-actions__btn" onclick="showAddPatientModal()" data-i18n="add_new_patient">+ Add New Patient</button>
+                                <button class="btn btn-secondary quick-actions__btn" onclick="showAddAppointmentModal()" data-i18n="new_appointment">New Appointment</button>
+                                <button class="btn btn-secondary quick-actions__btn" onclick="downloadBackup()" data-i18n="download_backup">💾 Download Backup</button>
+                            </div>
+                        </aside>
+
+                        <div class="dash-main">
+                            <div class="section-card table-shell today-panel">
+                                <div class="table-meta">
+                                    <div>
+                                        <div class="section-card-title" data-i18n="today_schedule">Today's Schedule</div>
+                                        <div class="table-meta-text" data-i18n="todays_appointments">Today's Appointments</div>
+                                    </div>
+                                </div>
+                                <div class="responsive-table-wrap">
+                                    <table id="today-schedule-table">
+                                        <thead>
+                                            <tr>
+                                                <th data-i18n="date_time">Date &amp; Time</th>
+                                                <th data-i18n="patient">Patient</th>
+                                                <th data-i18n="treatment_type">Treatment Type</th>
+                                                <th class="center-cell" data-i18n="status">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="today-schedule-body"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="section-card table-shell">
+                                <div class="table-meta">
+                                    <div>
+                                        <div class="section-card-title" data-i18n="recent_appointments">Recent Appointments</div>
+                                        <div class="table-meta-text" data-i18n="recent_appointments_hint">Latest scheduled visits and their current status.</div>
+                                    </div>
+                                </div>
+                                <div class="responsive-table-wrap">
+                                    <table id="recent-appointments-table">
+                                        <thead>
+                                            <tr>
+                                                <th data-i18n="patient">Patient</th>
+                                                <th data-i18n="date_time">Date &amp; Time</th>
+                                                <th data-i18n="treatment_type">Treatment Type</th>
+                                                <th class="center-cell" data-i18n="status">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="recent-appointments-body"></tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -3259,6 +3311,12 @@ HTML_TEMPLATE = '''
                 todays_appointments: "Today's Appointments",
                 appointments: 'Appointments',
                 recent_appointments: 'Recent Appointments',
+                today_schedule: "Today's Schedule",
+                quick_actions: 'Quick Actions',
+                new_appointment: 'New Appointment',
+                no_appointments_today: 'No appointments scheduled today.',
+                loading_today: "Loading today's schedule...",
+                schedule_load_failed: "Couldn't load today's schedule.",
                 patient: 'Patient',
                 patient_required: 'Patient *',
                 date_time: 'Date and Time',
@@ -3674,6 +3732,12 @@ HTML_TEMPLATE = '''
                 todays_appointments: 'مواعيد اليوم',
                 appointments: 'المواعيد',
                 recent_appointments: 'أحدث المواعيد',
+                today_schedule: 'جدول اليوم',
+                quick_actions: 'إجراءات سريعة',
+                new_appointment: 'موعد جديد',
+                no_appointments_today: 'لا توجد مواعيد مجدولة اليوم.',
+                loading_today: 'جارٍ تحميل جدول اليوم...',
+                schedule_load_failed: 'تعذّر تحميل جدول اليوم.',
                 patient: 'المريض',
                 patient_required: 'المريض *',
                 date_time: 'التاريخ والوقت',
@@ -5173,10 +5237,11 @@ HTML_TEMPLATE = '''
 
         function getStatusBadgeClass(status) {
             const normalized = String(status || '').toLowerCase();
-            if (normalized === 'completed' || normalized === 'paid' || normalized === 'active') return 'badge-active';
-            if (normalized === 'confirmed' || normalized === 'scheduled' || normalized === 'pending') return 'badge-secondary';
-            if (normalized === 'cancelled' || normalized === 'postponed' || normalized === 'inactive') return 'badge-pending';
-            if (normalized === 'error' || normalized === 'failed') return 'badge-blocked';
+            if (normalized === 'completed' || normalized === 'paid' || normalized === 'active') return 'badge-success';
+            if (normalized === 'scheduled' || normalized === 'confirmed') return 'badge-info';
+            if (normalized === 'pending' || normalized === 'postponed') return 'badge-warning';
+            if (normalized === 'cancelled' || normalized === 'no_show' || normalized === 'no-show') return 'badge-danger';
+            if (normalized === 'error' || normalized === 'failed') return 'badge-danger';
             return 'badge-neutral';
         }
 
@@ -5221,6 +5286,48 @@ HTML_TEMPLATE = '''
             return srRow + dataRow.repeat(rowCount);
         }
 
+        // Today's Schedule — today's appointments, time-ascending, derived client-side
+        // from the existing /api/appointments list (no new endpoint). Reuses the P2
+        // skeleton loader; empty/error states reuse renderStateRow.
+        function isSameLocalDay(date, ref) {
+            return date.getFullYear() === ref.getFullYear()
+                && date.getMonth() === ref.getMonth()
+                && date.getDate() === ref.getDate();
+        }
+
+        async function loadTodaySchedule() {
+            const body = document.getElementById('today-schedule-body');
+            if (!body) return;
+            body.innerHTML = renderSkeletonRows(4, { rows: 4, announce: t('loading_today', "Loading today's schedule...") });
+            try {
+                const appointments = await fetch('/api/appointments').then(r => r.json());
+                const now = new Date();
+                const todays = (Array.isArray(appointments) ? appointments : [])
+                    .map(apt => ({ apt, d: parseAppointmentDate(getAppointmentDateValue(apt)) }))
+                    .filter(x => x.d && isSameLocalDay(x.d, now))
+                    .sort((a, b) => a.d.getTime() - b.d.getTime());
+                if (!todays.length) {
+                    body.innerHTML = renderStateRow(t('no_appointments_today', 'No appointments scheduled today.'), {
+                        icon: '📭', title: t('no_appointments_today', 'No appointments scheduled today.'), colSpan: 4, kind: 'empty'
+                    });
+                    return;
+                }
+                body.innerHTML = todays.map(({ apt }) => `
+                    <tr>
+                        <td>${formatApptDate(getAppointmentDateValue(apt)) || t('no_data', 'No data')}</td>
+                        <td>${safeDisplayText(apt.patient_name, t('no_data', 'No data'))}</td>
+                        <td>${safeDisplayText(apt.treatment_type, t('no_data', 'No data'))}</td>
+                        <td class="center-cell">${renderStatusBadge(apt.status, safeDisplayText(apt.status, 'scheduled'))}</td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                body.innerHTML = renderStateRow(t('schedule_load_failed', "Couldn't load today's schedule."), {
+                    icon: '⚠️', title: t('schedule_load_failed', "Couldn't load today's schedule."), colSpan: 4, kind: 'error',
+                    buttonHtml: `<button class="btn btn-primary" type="button" onclick="loadTodaySchedule()">${t('refresh', 'Refresh')}</button>`
+                });
+            }
+        }
+
         // Patient-profile skeleton — a decorative shape placeholder shown while the
         // full-profile fetch resolves, then replaced by the real profile markup.
         // aria-hidden because it carries no information (solid bars, never glass).
@@ -5249,6 +5356,7 @@ HTML_TEMPLATE = '''
         // Dashboard
         async function loadDashboard() {
             refreshCloudBadge();
+            loadTodaySchedule();
             const tbody = document.getElementById('recent-appointments-body');
             const statsGrid = document.getElementById('stats-grid');
             if (statsGrid) statsGrid.classList.add('is-loading');
