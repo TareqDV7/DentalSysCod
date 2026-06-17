@@ -1112,6 +1112,29 @@ HTML_TEMPLATE = '''
             color: #e6effb;
         }
 
+        /* ── Confirm / typed-confirm modal (reuses .modal/.modal-content) ── */
+        .modal--confirm .modal-content { max-width: 400px; text-align: start; }
+        .confirm-modal__icon {
+            width: 44px; height: 44px; border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 22px; margin-bottom: 12px;
+        }
+        .confirm-modal--danger .confirm-modal__icon { background: rgba(217,67,78,.12); color: var(--danger); }
+        .confirm-modal--neutral .confirm-modal__icon { background: var(--accent-soft); color: var(--accent-strong); }
+        .confirm-modal__msg { font-size: 0.95rem; line-height: 1.55; color: var(--text-muted, #5b6675); margin: 0 0 16px; }
+        .confirm-modal__typed { margin: 0 0 14px; }
+        .confirm-modal__input {
+            width: 100%; box-sizing: border-box; border: 1.5px solid var(--surface-border);
+            border-radius: 10px; padding: 9px 11px; font-size: 0.95rem;
+            background: var(--card, #fff); color: var(--text);
+        }
+        .confirm-modal__hint { font-size: 0.8rem; color: var(--text-muted, #5b6675); margin-top: 6px; }
+        .confirm-modal__actions { display: flex; gap: 10px; justify-content: flex-end; }
+        .confirm-modal__cancel { background: transparent; border: 1px solid var(--surface-border); color: var(--text); }
+        .confirm-modal--danger .confirm-modal__ok { background: var(--danger); color: #fff; border: none; }
+        .confirm-modal--neutral .confirm-modal__ok { background: var(--accent-gradient); color: #fff; border: none; }
+        .confirm-modal__ok:disabled { background: #e6e9ee; color: #aeb4bd; cursor: not-allowed; }
+
         .close-modal {
             float: right;
             font-size: 1.3rem;
@@ -1626,6 +1649,62 @@ HTML_TEMPLATE = '''
             font-size: 0.92rem;
         }
         .state-actions { margin-top: 14px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+        /* ── Skeleton loading (shape-mimicking; solid data surface, never glass) ── */
+        .sr-only {
+            position: absolute !important;
+            width: 1px; height: 1px;
+            padding: 0; margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap; border: 0;
+        }
+        .skeleton {
+            position: relative;
+            overflow: hidden;
+            background: var(--line);
+            border-radius: var(--radius-sm);
+        }
+        .skeleton::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            transform: translateX(-100%);
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+            animation: skeletonShimmer 1.25s var(--ease) infinite;
+        }
+        body[data-theme="dark"] .skeleton { background: rgba(255, 255, 255, 0.08); }
+        body[data-theme="dark"] .skeleton::after {
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.10), transparent);
+        }
+        .skeleton-cell { padding: 14px 12px; }
+        .skeleton-bar { display: block; height: 12px; width: 70%; }
+        .skeleton-sr td { padding: 0; border: 0; }
+        /* patient-profile skeleton: avatar + lines + summary tiles (solid surface) */
+        .profile-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 8px 4px; }
+        .profile-skeleton__head { display: flex; align-items: center; gap: 14px; }
+        .profile-skeleton__lines { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+        .profile-skeleton__tiles { display: flex; gap: 12px; }
+        .skeleton-avatar { width: 54px; height: 54px; border-radius: 50%; flex-shrink: 0; }
+        .skeleton-tile { flex: 1; height: 56px; border-radius: var(--radius-sm); }
+        @keyframes skeletonShimmer { 100% { transform: translateX(100%); } }
+        /* dashboard stat tiles: reversible shimmer via a class toggle (non-destructive) */
+        .stats-grid.is-loading .stat-card h3 {
+            color: transparent;
+            min-width: 72px;
+            border-radius: var(--radius-sm);
+            position: relative;
+            overflow: hidden;
+            background: var(--line);
+        }
+        .stats-grid.is-loading .stat-card h3::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            transform: translateX(-100%);
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+            animation: skeletonShimmer 1.25s var(--ease) infinite;
+        }
+        body[data-theme="dark"] .stats-grid.is-loading .stat-card h3 { background: rgba(255, 255, 255, 0.10); }
         .badge-neutral { background: #eef4fb; color: #33536d; }
         .badge-active { background: #e0f4e8; color: #166942; }
         .badge-pending { background: #fff1d4; color: #8b5e00; }
@@ -1969,6 +2048,8 @@ HTML_TEMPLATE = '''
         @media (prefers-reduced-motion: reduce) {
             .toast { transition: opacity 0.01s linear; transform: none; }
             .toast--in, .toast--leaving { transform: none; }
+            .skeleton::after,
+            .stats-grid.is-loading .stat-card h3::after { animation: none; }
         }
 
         /* ── Duplicate-patient review ──────────────────────────────────────── */
@@ -3116,6 +3197,22 @@ HTML_TEMPLATE = '''
       </div>
     </div>
 
+    <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-desc">
+        <div class="modal-content">
+            <div class="confirm-modal__icon" aria-hidden="true">⚠</div>
+            <div class="modal-header"><h2 id="confirm-modal-title"></h2></div>
+            <p class="confirm-modal__msg" id="confirm-modal-desc"></p>
+            <div class="confirm-modal__typed" hidden>
+                <input class="confirm-modal__input" type="text" autocomplete="off" spellcheck="false" aria-describedby="confirm-modal-hint">
+                <div class="confirm-modal__hint" id="confirm-modal-hint"></div>
+            </div>
+            <div class="confirm-modal__actions">
+                <button type="button" class="btn confirm-modal__cancel"></button>
+                <button type="button" class="btn confirm-modal__ok"></button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let patientsCache = [];
         let appointmentsCache = [];
@@ -3396,6 +3493,11 @@ HTML_TEMPLATE = '''
                 refresh_help: 'Refresh Help',
                 patient_profile: 'Patient Profile',
                 cancel: 'Cancel',
+                please_confirm: 'Please confirm',
+                confirm: 'Confirm',
+                type_to_confirm: 'Type {word} to confirm.',
+                replace_data: 'Replace data',
+                merge_data: 'Merge data',
                 other: 'Other',
                 no_data: 'No data',
                 yes: 'Yes',
@@ -3806,6 +3908,11 @@ HTML_TEMPLATE = '''
                 refresh_help: 'تحديث المساعدة',
                 patient_profile: 'ملف المريض',
                 cancel: 'إلغاء',
+                please_confirm: 'يرجى التأكيد',
+                confirm: 'تأكيد',
+                type_to_confirm: 'اكتب {word} للتأكيد.',
+                replace_data: 'استبدال البيانات',
+                merge_data: 'دمج البيانات',
                 other: 'أخرى',
                 no_data: 'لا توجد بيانات',
                 yes: 'نعم',
@@ -3971,9 +4078,9 @@ HTML_TEMPLATE = '''
         }
 
         // ── Toast notifications ──────────────────────────────────────────────
-        // Transient, non-blocking messages. New code should call showToast()
-        // instead of native alert(); blocking confirm()/prompt() stay until the
-        // modal sweep. type is one of success|error|warning|info.
+        // Transient, non-blocking messages. Use showToast() for info/errors and
+        // showConfirm()/showTypedConfirm() for blocking decisions — no native dialogs.
+        // type is one of success|error|warning|info.
         // opts: { duration (ms), sticky (bool), action: { label, onClick } }.
         // Returns { dismiss } so callers can close it programmatically.
         const TOAST_MAX = 4;
@@ -4141,12 +4248,12 @@ HTML_TEMPLATE = '''
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({doctor_name: nameEn, doctor_name_ar: nameAr})
                 });
-                if (!resp.ok) { alert(t('save_failed','Save failed')); return; }
+                if (!resp.ok) { showToast(t('save_failed', 'Save failed'), 'error'); return; }
                 if (nameEn) translations.en.doctor_name = nameEn;
                 if (nameAr) translations.ar.doctor_name = nameAr;
                 refreshDoctorBadge();
                 document.getElementById('doctor-edit-popover')?.classList.remove('open');
-            } catch(_) { alert(t('save_failed','Save failed')); }
+            } catch(_) { showToast(t('save_failed', 'Save failed'), 'error'); }
         }
 
         document.addEventListener('click', (e) => {
@@ -4818,6 +4925,108 @@ HTML_TEMPLATE = '''
             }
         });
 
+        // ── Confirm / typed-confirm modal controller ─────────────────────────
+        // Promise-based replacements for the native blocking dialogs. Reuse the
+        // existing .modal/.modal-content classes (theme parity). Single instance,
+        // injected once as #confirm-modal. Esc / backdrop / Cancel resolve(false);
+        // Enter (outside the input) / OK resolve(true). The keydown listener is
+        // registered in CAPTURE phase so it resolves the promise and stops the
+        // event before the global Escape handler merely hides the node.
+        let _confirmResolver = null;
+        let _confirmLastFocus = null;
+        let _confirmKeydownHandler = null;
+
+        function _confirmModalEl() { return document.getElementById('confirm-modal'); }
+
+        function _closeConfirm(result) {
+            const m = _confirmModalEl();
+            if (m) m.classList.remove('active');
+            if (_confirmKeydownHandler) {
+                document.removeEventListener('keydown', _confirmKeydownHandler, true);
+                _confirmKeydownHandler = null;
+            }
+            const resolve = _confirmResolver;
+            _confirmResolver = null;
+            const last = _confirmLastFocus;
+            _confirmLastFocus = null;
+            if (last && typeof last.focus === 'function') last.focus();
+            if (resolve) resolve(result);
+        }
+
+        function showConfirm(opts) {
+            const o = opts || {};
+            const danger = o.danger !== false;
+            const m = _confirmModalEl();
+            if (!m) return Promise.resolve(false);
+            if (_confirmResolver) _closeConfirm(false);
+            m.classList.toggle('confirm-modal--danger', danger);
+            m.classList.toggle('confirm-modal--neutral', !danger);
+            m.querySelector('#confirm-modal-title').textContent = o.title || t('please_confirm', 'Please confirm');
+            m.querySelector('.confirm-modal__msg').textContent = o.message || '';
+            m.querySelector('.confirm-modal__icon').textContent = danger ? '⚠' : 'ℹ';
+            m.querySelector('.confirm-modal__typed').hidden = true;
+            const okBtn = m.querySelector('.confirm-modal__ok');
+            okBtn.disabled = false;
+            okBtn.textContent = o.confirmLabel || (danger ? t('delete', 'Delete') : t('confirm', 'Confirm'));
+            m.querySelector('.confirm-modal__cancel').textContent = o.cancelLabel || t('cancel', 'Cancel');
+            return _openConfirm(m.querySelector('.confirm-modal__cancel'));
+        }
+
+        function showTypedConfirm(opts) {
+            const o = opts || {};
+            const word = String(o.word || '');
+            const m = _confirmModalEl();
+            if (!m) return Promise.resolve(false);
+            if (_confirmResolver) _closeConfirm(false);
+            m.classList.add('confirm-modal--danger');
+            m.classList.remove('confirm-modal--neutral');
+            m.querySelector('#confirm-modal-title').textContent = o.title || t('please_confirm', 'Please confirm');
+            m.querySelector('.confirm-modal__msg').textContent = o.message || '';
+            m.querySelector('.confirm-modal__icon').textContent = '⚠';
+            m.querySelector('.confirm-modal__typed').hidden = false;
+            const input = m.querySelector('.confirm-modal__input');
+            input.value = '';
+            m.querySelector('.confirm-modal__hint').textContent =
+                t('type_to_confirm', 'Type {word} to confirm.').replace('{word}', word);
+            const okBtn = m.querySelector('.confirm-modal__ok');
+            okBtn.textContent = o.confirmLabel || t('confirm', 'Confirm');
+            okBtn.disabled = true;
+            input.oninput = function () { okBtn.disabled = input.value.trim() !== word; };
+            m.querySelector('.confirm-modal__cancel').textContent = t('cancel', 'Cancel');
+            return _openConfirm(input);
+        }
+
+        function _openConfirm(focusEl) {
+            const m = _confirmModalEl();
+            return new Promise(function (resolve) {
+                _confirmResolver = resolve;
+                _confirmLastFocus = document.activeElement;
+                const okBtn = m.querySelector('.confirm-modal__ok');
+                const cancelBtn = m.querySelector('.confirm-modal__cancel');
+                okBtn.onclick = function () { _closeConfirm(true); };
+                cancelBtn.onclick = function () { _closeConfirm(false); };
+                m.onclick = function (e) { if (e.target === m) _closeConfirm(false); };
+                _confirmKeydownHandler = function (e) {
+                    if (e.key === 'Escape') {
+                        e.preventDefault(); e.stopPropagation(); _closeConfirm(false);
+                    } else if (e.key === 'Enter') {
+                        if (document.activeElement === cancelBtn) return;
+                        if (!okBtn.disabled) { e.preventDefault(); _closeConfirm(true); }
+                    } else if (e.key === 'Tab') {
+                        const f = Array.prototype.slice.call(m.querySelectorAll('button, input'))
+                            .filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+                        if (!f.length) return;
+                        const first = f[0], lastEl = f[f.length - 1];
+                        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); lastEl.focus(); }
+                        else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); first.focus(); }
+                    }
+                };
+                document.addEventListener('keydown', _confirmKeydownHandler, true);
+                m.classList.add('active');
+                requestAnimationFrame(function () { (focusEl || okBtn).focus(); });
+            });
+        }
+
         // Load patients into select dropdown
         async function loadPatientsSelect(selectId) {
             const response = await fetch('/api/patients');
@@ -4994,18 +5203,59 @@ HTML_TEMPLATE = '''
             const label = safeDisplayText(status, fallback || t('unknown', 'Unknown'));
             return `<span class="badge ${getStatusBadgeClass(status)}">${label}</span>`;
         }
-        
+
+        // Skeleton table rows — shape-mimicking placeholders shown while data
+        // loads (replaces the old centered text spinner). The shimmer bars are
+        // decorative, so the rows are aria-hidden; one sr-only status row keeps
+        // the load announced for assistive tech. Bars sit on a solid data
+        // surface (the "solid for data" rule), never frosted glass.
+        function renderSkeletonRows(colSpan, opts = {}) {
+            const rowCount = opts.rows || 5;
+            const announce = opts.announce || t('loading', 'Loading...');
+            const widths = ['72%', '54%', '84%', '46%', '63%', '77%', '50%', '67%', '42%'];
+            const cells = Array.from({ length: colSpan }, (_, i) =>
+                `<td class="skeleton-cell"><span class="skeleton skeleton-bar" style="width:${widths[i % widths.length]}"></span></td>`
+            ).join('');
+            const dataRow = `<tr class="skeleton-row" aria-hidden="true">${cells}</tr>`;
+            const srRow = `<tr class="skeleton-sr"><td colspan="${colSpan}"><span class="sr-only" role="status">${announce}</span></td></tr>`;
+            return srRow + dataRow.repeat(rowCount);
+        }
+
+        // Patient-profile skeleton — a decorative shape placeholder shown while the
+        // full-profile fetch resolves, then replaced by the real profile markup.
+        // aria-hidden because it carries no information (solid bars, never glass).
+        function renderProfileSkeleton() {
+            return `
+                <div class="profile-skeleton" aria-hidden="true">
+                    <div class="profile-skeleton__head">
+                        <span class="skeleton skeleton-avatar"></span>
+                        <div class="profile-skeleton__lines">
+                            <span class="skeleton skeleton-bar" style="width:58%;height:16px"></span>
+                            <span class="skeleton skeleton-bar" style="width:36%"></span>
+                        </div>
+                    </div>
+                    <div class="profile-skeleton__tiles">
+                        <span class="skeleton skeleton-tile"></span>
+                        <span class="skeleton skeleton-tile"></span>
+                        <span class="skeleton skeleton-tile"></span>
+                    </div>
+                    <span class="skeleton skeleton-bar" style="width:90%"></span>
+                    <span class="skeleton skeleton-bar" style="width:82%"></span>
+                    <span class="skeleton skeleton-bar" style="width:86%"></span>
+                </div>
+            `;
+        }
+
         // Dashboard
         async function loadDashboard() {
             refreshCloudBadge();
             const tbody = document.getElementById('recent-appointments-body');
+            const statsGrid = document.getElementById('stats-grid');
+            if (statsGrid) statsGrid.classList.add('is-loading');
             if (tbody) {
-                tbody.innerHTML = renderStateRow(t('loading', 'Loading...'), {
-                    icon: '⏳',
-                    title: t('loading_dashboard', 'Loading dashboard data...'),
-                    text: t('loading_dashboard_hint', 'Refreshing totals and recent appointments.'),
-                    colSpan: 4,
-                    kind: 'loading'
+                tbody.innerHTML = renderSkeletonRows(4, {
+                    rows: 4,
+                    announce: t('loading_dashboard', 'Loading dashboard data...')
                 });
             }
 
@@ -5017,6 +5267,7 @@ HTML_TEMPLATE = '''
                 if (visitsEl) visitsEl.textContent = stats.total_visits || 0;
                 const revenueEl = document.getElementById('total-revenue');
                 if (revenueEl) revenueEl.textContent = '₪ ' + (parseFloat(stats.total_revenue) || 0).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+                if (statsGrid) statsGrid.classList.remove('is-loading');
 
                 const appointments = await fetch('/api/appointments/recent').then(r => r.json());
                 if (!tbody) return;
@@ -5039,6 +5290,7 @@ HTML_TEMPLATE = '''
                     </tr>
                 `).join('');
             } catch (error) {
+                if (statsGrid) statsGrid.classList.remove('is-loading');
                 if (tbody) {
                     tbody.innerHTML = renderStateRow(t('save_failed', 'Save failed'), {
                         icon: '⚠️',
@@ -5056,12 +5308,9 @@ HTML_TEMPLATE = '''
         async function loadPatients() {
             const tbody = document.getElementById('patients-body');
             if (tbody) {
-                tbody.innerHTML = renderStateRow(t('loading', 'Loading...'), {
-                    icon: '⏳',
-                    title: t('loading_patients', 'Loading patients...'),
-                    text: t('loading_patients_hint', 'Fetching the patient list.'),
-                    colSpan: 9,
-                    kind: 'loading'
+                tbody.innerHTML = renderSkeletonRows(9, {
+                    rows: 6,
+                    announce: t('loading_patients', 'Loading patients...')
                 });
             }
             try {
@@ -5142,7 +5391,7 @@ HTML_TEMPLATE = '''
         function openFirstPatientMatch() {
             const query = (document.getElementById('patient-search-input')?.value || '').trim().toLowerCase();
             if (!query) {
-                alert(t('select_patient_first', 'Please type a patient name first.'));
+                showToast(t('select_patient_first', 'Please type a patient name first.'), 'warning');
                 return;
             }
 
@@ -5154,7 +5403,7 @@ HTML_TEMPLATE = '''
             });
 
             if (!match) {
-                alert(t('no_patient_match', 'No patient matched your search.'));
+                showToast(t('no_patient_match', 'No patient matched your search.'), 'info');
                 return;
             }
 
@@ -5202,12 +5451,9 @@ HTML_TEMPLATE = '''
         async function loadAppointments() {
             const tbody = document.getElementById('appointments-body');
             if (tbody) {
-                tbody.innerHTML = renderStateRow(t('loading', 'Loading...'), {
-                    icon: '⏳',
-                    title: t('loading_appointments', 'Loading appointments...'),
-                    text: t('loading_appointments_hint', 'Refreshing the appointment list and calendar.'),
-                    colSpan: 6,
-                    kind: 'loading'
+                tbody.innerHTML = renderSkeletonRows(6, {
+                    rows: 6,
+                    announce: t('loading_appointments', 'Loading appointments...')
                 });
             }
             try {
@@ -5366,7 +5612,7 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteHoliday(id) {
-            if (!confirm(t('delete_holiday_confirm', 'Delete this holiday?'))) return;
+            if (!(await showConfirm({ message: t('delete_holiday_confirm', 'Delete this holiday?'), confirmLabel: t('delete', 'Delete') }))) return;
             await fetch(`/api/holidays/${id}`, { method: 'DELETE' });
             await loadAppointments();
         }
@@ -5643,7 +5889,7 @@ HTML_TEMPLATE = '''
             const foot = document.getElementById('billing-history-foot');
             const title = document.getElementById('billing-history-title');
             if (!body) return;
-            body.innerHTML = `<tr><td colspan="5">${t('loading', 'Loading…')}</td></tr>`;
+            body.innerHTML = renderSkeletonRows(5, { rows: 6, announce: t('loading', 'Loading…') });
             if (foot) foot.innerHTML = '';
 
             let payload;
@@ -5705,9 +5951,9 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteBillingRecord(id) {
-            if (!confirm(t('confirm_delete', 'Are you sure you want to delete?'))) return;
+            if (!(await showConfirm({ message: t('confirm_delete', 'Are you sure you want to delete?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/billing/${id}`, { method: 'DELETE' });
-            if (!resp.ok) { alert('Delete failed'); return; }
+            if (!resp.ok) { showToast('Delete failed', 'error'); return; }
             loadBilling();
             loadAuditLogs();
         }
@@ -5842,7 +6088,7 @@ HTML_TEMPLATE = '''
 
         function printInvoicePayload(payload) {
             if (!payload || !Array.isArray(payload.items)) {
-                alert(t('invoice_preview_unavailable', 'No invoice data to print yet.'));
+                showToast(t('invoice_preview_unavailable', 'No invoice data to print yet.'), 'warning');
                 return;
             }
 
@@ -6030,7 +6276,7 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteExpense(id) {
-            if (!confirm(t('delete_expense_confirm', 'Delete this expense?'))) return;
+            if (!(await showConfirm({ message: t('delete_expense_confirm', 'Delete this expense?'), confirmLabel: t('delete', 'Delete') }))) return;
             await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
             loadExpenses();
             loadReports();
@@ -6077,8 +6323,8 @@ HTML_TEMPLATE = '''
             const warn = mode === 'replace'
                 ? 'This REPLACES all current data with the imported file. A safety backup is taken first.'
                 : "This MERGES the imported clinic's records into your current data. Existing data is kept.";
-            const typed = prompt(warn + '\\n\\nType ' + verb + ' to confirm:');
-            if (typed !== verb) return;
+            const okTyped = await showTypedConfirm({ message: warn, word: verb, confirmLabel: verb === 'REPLACE' ? t('replace_data', 'Replace data') : t('merge_data', 'Merge data') });
+            if (!okTyped) return;
             const result = document.getElementById('data-tools-result');
             result.textContent = 'Working… do not close this window.';
             const fd = new FormData();
@@ -6103,7 +6349,7 @@ HTML_TEMPLATE = '''
           const msg = (currentLanguage === 'ar')
             ? 'سيتم إفراغ كل الإجراءات وحالات الأسنان من القوائم (تبقى بيانات المرضى كما هي). متابعة؟'
             : 'This empties every procedure and tooth condition from the catalogs (patient data is kept). Continue?';
-          if (!confirm(msg)) return;
+          if (!(await showConfirm({ message: msg, confirmLabel: t('delete', 'Delete') }))) return;
           const out = document.getElementById('data-tools-result');
           if (out) out.textContent = (currentLanguage === 'ar') ? 'جارٍ الإفراغ…' : 'Clearing…';
           try {
@@ -6233,9 +6479,9 @@ HTML_TEMPLATE = '''
             const current = document.getElementById('acct-current-password')?.value || '';
             const next = document.getElementById('acct-new-password')?.value || '';
             const confirm = document.getElementById('acct-confirm-password')?.value || '';
-            if (!current || !next) { alert(t('fill_all_fields', 'Please fill in all fields.')); return; }
-            if (next.length < 4) { alert(t('password_too_short', 'New password must be at least 4 characters.')); return; }
-            if (next !== confirm) { alert(t('passwords_do_not_match', 'New passwords do not match.')); return; }
+            if (!current || !next) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
+            if (next.length < 4) { showToast(t('password_too_short', 'New password must be at least 4 characters.'), 'warning'); return; }
+            if (next !== confirm) { showToast(t('passwords_do_not_match', 'New passwords do not match.'), 'warning'); return; }
             try {
                 const resp = await fetch('/api/auth/change-password', {
                     method: 'POST',
@@ -6243,13 +6489,13 @@ HTML_TEMPLATE = '''
                     body: JSON.stringify({ current_password: current, new_password: next })
                 });
                 const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) { alert(payload.error || t('save_failed', 'Save failed')); return; }
+                if (!resp.ok) { showToast(payload.error || t('save_failed', 'Save failed'), 'error'); return; }
                 document.getElementById('acct-current-password').value = '';
                 document.getElementById('acct-new-password').value = '';
                 document.getElementById('acct-confirm-password').value = '';
-                alert(t('password_changed', 'Password changed successfully.'));
+                showToast(t('password_changed', 'Password changed successfully.'), 'success');
             } catch (_) {
-                alert(t('save_failed', 'Save failed'));
+                showToast(t('save_failed', 'Save failed'), 'error');
             }
         }
 
@@ -6343,22 +6589,22 @@ HTML_TEMPLATE = '''
             try {
                 const st = await fetchCloudStatus();
                 if (st && st.activated === false) {
-                    alert(_ar() ? 'فعّل الترخيص أولاً.' : 'Activate a license first.');
+                    showToast(_ar() ? 'فعّل الترخيص أولاً.' : 'Activate a license first.', 'warning');
                     return;
                 }
                 const endpoint = (st && st.configured) ? '/api/cloud/sync-now' : '/api/cloud/enable';
                 const resp = await fetch(endpoint, { method: 'POST' });
                 const payload = await resp.json().catch(() => ({}));
                 if (!resp.ok) {
-                    alert(payload.error || (_ar() ? 'فشل المزامنة' : 'Sync failed'));
+                    showToast(payload.error || (_ar() ? 'فشل المزامنة' : 'Sync failed'), 'error');
                 } else if (payload.ok || payload.success) {
                     const fs = payload.first_sync || payload;
-                    alert((_ar() ? 'تمت المزامنة. ' : 'Synced. ') + `↓${fs.pulled || 0} ↑${fs.pushed || 0}`);
+                    showToast((_ar() ? 'تمت المزامنة. ' : 'Synced. ') + `↓${fs.pulled || 0} ↑${fs.pushed || 0}`, 'success');
                 } else {
-                    alert((_ar() ? 'لم تكتمل المزامنة: ' : 'Sync did not complete: ') + (payload.error || ''));
+                    showToast((_ar() ? 'لم تكتمل المزامنة: ' : 'Sync did not complete: ') + (payload.error || ''), 'warning');
                 }
             } catch (_) {
-                alert(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.');
+                showToast(_ar() ? 'تعذّر الوصول إلى الخادم.' : 'Could not reach the server.', 'error');
             } finally { if (btn) btn.disabled = false; await loadCloudSyncSettings(); }
         }
 
@@ -6456,7 +6702,7 @@ HTML_TEMPLATE = '''
           try {
             const res = await _btConfigure(!!enabled);
             if (!res) {
-              alert(_ar() ? 'فشل الحفظ' : 'Save failed');
+              showToast(_ar() ? 'فشل الحفظ' : 'Save failed', 'error');
             }
             await loadBluetoothSyncSettings();
           } finally {
@@ -6480,6 +6726,13 @@ HTML_TEMPLATE = '''
         }
 
         async function viewPatientProfile(patientId) {
+            // Show the profile skeleton immediately and open the modal so the user
+            // sees structure while the full-profile fetch resolves; the real markup
+            // replaces it below (the later .classList.add('active') is then a no-op).
+            const _profileContent = document.getElementById('patient-profile-content');
+            const _profileModal = document.getElementById('patient-profile-modal');
+            if (_profileContent) _profileContent.innerHTML = renderProfileSkeleton();
+            if (_profileModal) _profileModal.classList.add('active');
             if (!treatmentProceduresCache.length) {
                 await loadTreatmentProcedures();
             }
@@ -6693,11 +6946,11 @@ HTML_TEMPLATE = '''
                 data.lab_expense_expr = calcExprOf(document.getElementById('followup-lab-expense'));
                 data.payment_expr = calcExprOf(document.getElementById('followup-payment'));
                 if (!data.followup_date) {
-                    alert(t('date_required', 'Please pick a date (day, month, and year).'));
+                    showToast(t('date_required', 'Please pick a date (day, month, and year).'), 'warning');
                     return;
                 }
                 if (!data.procedure_id && !String(data.treatment_procedure || '').trim()) {
-                    alert(t('procedure_required', 'Please select a procedure or enter a custom procedure name.'));
+                    showToast(t('procedure_required', 'Please select a procedure or enter a custom procedure name.'), 'warning');
                     return;
                 }
                 const response = await fetch(`/api/patients/${patient.id}/followups`, {
@@ -6707,7 +6960,7 @@ HTML_TEMPLATE = '''
                 });
                 if (!response.ok) {
                     const payload = await response.json().catch(() => ({}));
-                    alert(payload.error || t('unable_save_followup', 'Unable to save follow-up.'));
+                    showToast(payload.error || t('unable_save_followup', 'Unable to save follow-up.'), 'error');
                     return;
                 }
                 await viewPatientProfile(patientId);
@@ -7042,10 +7295,10 @@ HTML_TEMPLATE = '''
         }
 
         async function deleteFollowup(patientId, followupId) {
-            if (!confirm(t('confirm_delete', 'Are you sure you want to delete?'))) return;
+            if (!(await showConfirm({ message: t('confirm_delete', 'Are you sure you want to delete?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/patients/${patientId}/followups/${followupId}`, {method:'DELETE'});
             if (!resp.ok) {
-                alert('Delete failed');
+                showToast('Delete failed', 'error');
                 return;
             }
             viewPatientProfile(patientId);
@@ -7081,7 +7334,7 @@ HTML_TEMPLATE = '''
         function editFollowupById(patientId, followupId) {
             const list = followupsCache[patientId] || [];
             const item = list.find(f => Number(f.id) === Number(followupId));
-            if (!item) { alert(t('no_entry_found', 'Entry not found')); return; }
+            if (!item) { showToast(t('no_entry_found', 'Entry not found'), 'error'); return; }
             editFollowup(item);
         }
 
@@ -7122,7 +7375,7 @@ HTML_TEMPLATE = '''
 
         function showEditPatientModalById(patientId) {
             const patient = patientProfileCache[patientId];
-            if (!patient) { alert('Patient data not loaded'); return; }
+            if (!patient) { showToast('Patient data not loaded', 'error'); return; }
             showEditPatientModal(patientId, patient);
         }
 
@@ -7144,7 +7397,7 @@ HTML_TEMPLATE = '''
                         viewPatientProfile(parseInt(patientId));
                         loadPatients();
                     } else {
-                        alert(t('save_failed', 'Save failed'));
+                        showToast(t('save_failed', 'Save failed'), 'error');
                     }
                 });
             }
@@ -7178,7 +7431,7 @@ HTML_TEMPLATE = '''
                         closeModal('edit-followup-modal');
                         viewPatientProfile(parseInt(patientId));
                     } else {
-                        alert(t('save_failed', 'Save failed'));
+                        showToast(t('save_failed', 'Save failed'), 'error');
                     }
                 });
             }
@@ -7236,7 +7489,7 @@ HTML_TEMPLATE = '''
             });
             if (!resp.ok) {
                 const err = await resp.json().catch(() => ({}));
-                alert(err.error || t('save_failed', 'Save failed'));
+                showToast(err.error || t('save_failed', 'Save failed'), 'error');
                 return;
             }
             closeModal('add-patient-modal');
@@ -7346,7 +7599,7 @@ HTML_TEMPLATE = '''
                 body: JSON.stringify(data)
             });
             if (!response.ok) {
-                alert(t('unable_add_expense', 'Unable to add expense.'));
+                showToast(t('unable_add_expense', 'Unable to add expense.'), 'error');
                 return;
             }
             e.target.reset();
@@ -7384,7 +7637,7 @@ HTML_TEMPLATE = '''
 
                 if (!response.ok) {
                     const payload = await response.json().catch(() => ({}));
-                    alert(payload.error || t('unable_add_billing', 'Unable to create invoice.'));
+                    showToast(payload.error || t('unable_add_billing', 'Unable to create invoice.'), 'error');
                     return;
                 }
 
@@ -7427,14 +7680,14 @@ HTML_TEMPLATE = '''
 
                 if (!response.ok) {
                     const payloadError = await response.json().catch(() => ({}));
-                    alert(payloadError.error || t('unable_save_procedure', 'Unable to save procedure.'));
+                    showToast(payloadError.error || t('unable_save_procedure', 'Unable to save procedure.'), 'error');
                     return;
                 }
 
                 resetProcedureForm();
                 await loadProcedureCatalog();
                 await loadTreatmentProcedures();
-                alert(t('procedure_saved', 'Procedure saved successfully.'));
+                showToast(t('procedure_saved', 'Procedure saved successfully.'), 'success');
             });
         }
 
@@ -7449,7 +7702,7 @@ HTML_TEMPLATE = '''
                     body: JSON.stringify(data)
                 });
                 if (!response.ok) {
-                    alert(t('unable_add_holiday', 'Unable to add holiday.'));
+                    showToast(t('unable_add_holiday', 'Unable to add holiday.'), 'error');
                     return;
                 }
                 e.target.reset();
@@ -7469,11 +7722,11 @@ HTML_TEMPLATE = '''
 
         // Delete functions
         async function deletePatient(id) {
-            if (!confirm(t('confirm_delete_patient', 'Are you sure you want to delete this patient?'))) return;
+            if (!(await showConfirm({ message: t('confirm_delete_patient', 'Are you sure you want to delete this patient?'), confirmLabel: t('delete', 'Delete') }))) return;
             const resp = await fetch(`/api/patients/${id}`, {method: 'DELETE'});
             if (!resp.ok) {
                 const p = await resp.json().catch(() => ({}));
-                alert(p.error || 'Delete failed');
+                showToast(p.error || 'Delete failed', 'error');
                 return;
             }
             loadPatients();
@@ -7495,10 +7748,10 @@ HTML_TEMPLATE = '''
             });
             if (!response.ok) {
                 const payload = await response.json().catch(() => ({}));
-                alert(payload.message || payload.error || t('unable_start_visit', 'Unable to start visit.'));
+                showToast(payload.message || payload.error || t('unable_start_visit', 'Unable to start visit.'), 'error');
                 return;
             }
-            alert(t('visit_started', 'Visit started from appointment successfully.'));
+            showToast(t('visit_started', 'Visit started from appointment successfully.'), 'success');
             loadAppointments();
             loadDashboard();
         }
