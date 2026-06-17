@@ -1338,7 +1338,7 @@ HTML_TEMPLATE = '''
             border: 1px solid var(--surface-border); border-radius: var(--radius-lg); padding: 14px; }
         .quick-actions__title { font-size: .8rem; font-weight: 700; text-transform: uppercase;
             letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
-        .quick-actions__btn { width: 100%; justify-content: flex-start; }
+        .quick-actions__btn { width: 100%; display: flex; align-items: center; justify-content: flex-start; }
         .today-panel .today-empty { padding: 18px 14px; color: var(--muted); font-size: .92rem; }
         @media (max-width: 720px) {
             .dash-grid { grid-template-columns: 1fr; }

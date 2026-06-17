@@ -54,6 +54,16 @@ def test_dashboard_rail_uses_logical_props_for_rtl():
     assert "grid-template-columns" in HTML_TEMPLATE[HTML_TEMPLATE.find(".dash-grid"):HTML_TEMPLATE.find(".dash-grid") + 400]
 
 
+def test_quick_action_buttons_left_align():
+    # buttons reuse .btn (inline-block) so justify-content alone is a no-op;
+    # the rule must set display:flex for the left-aligned editorial rail look
+    idx = HTML_TEMPLATE.find(".quick-actions__btn")
+    assert idx != -1
+    rule = HTML_TEMPLATE[idx:idx + 120]
+    assert "display: flex" in rule
+    assert "justify-content: flex-start" in rule
+
+
 def test_dashboard_markup_two_column_and_schedule():
     assert 'class="dash-grid"' in HTML_TEMPLATE
     assert 'class="dash-rail"' in HTML_TEMPLATE
