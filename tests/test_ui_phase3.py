@@ -66,3 +66,14 @@ def test_dashboard_markup_two_column_and_schedule():
         assert f'id="{el_id}"' in HTML_TEMPLATE
     # KPI grid keeps its id + gains the rail modifier
     assert 'class="stats-grid stats-grid--rail" id="stats-grid"' in HTML_TEMPLATE
+
+
+def test_load_today_schedule_present_and_wired():
+    assert "function loadTodaySchedule(" in HTML_TEMPLATE
+    # reuses the P2 skeleton loader and the existing endpoint, no new API
+    assert "renderSkeletonRows(4" in HTML_TEMPLATE
+    assert "fetch('/api/appointments')" in HTML_TEMPLATE
+    # called from loadDashboard
+    idx = HTML_TEMPLATE.find("async function loadDashboard()")
+    assert idx != -1
+    assert "loadTodaySchedule()" in HTML_TEMPLATE[idx:idx + 900]

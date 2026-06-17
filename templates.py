@@ -5286,6 +5286,48 @@ HTML_TEMPLATE = '''
             return srRow + dataRow.repeat(rowCount);
         }
 
+        // Today's Schedule — today's appointments, time-ascending, derived client-side
+        // from the existing /api/appointments list (no new endpoint). Reuses the P2
+        // skeleton loader; empty/error states reuse renderStateRow.
+        function isSameLocalDay(date, ref) {
+            return date.getFullYear() === ref.getFullYear()
+                && date.getMonth() === ref.getMonth()
+                && date.getDate() === ref.getDate();
+        }
+
+        async function loadTodaySchedule() {
+            const body = document.getElementById('today-schedule-body');
+            if (!body) return;
+            body.innerHTML = renderSkeletonRows(4, { rows: 4, announce: t('loading_today', "Loading today's schedule...") });
+            try {
+                const appointments = await fetch('/api/appointments').then(r => r.json());
+                const now = new Date();
+                const todays = (Array.isArray(appointments) ? appointments : [])
+                    .map(apt => ({ apt, d: parseAppointmentDate(getAppointmentDateValue(apt)) }))
+                    .filter(x => x.d && isSameLocalDay(x.d, now))
+                    .sort((a, b) => a.d.getTime() - b.d.getTime());
+                if (!todays.length) {
+                    body.innerHTML = renderStateRow(t('no_appointments_today', 'No appointments scheduled today.'), {
+                        icon: '📭', title: t('no_appointments_today', 'No appointments scheduled today.'), colSpan: 4, kind: 'empty'
+                    });
+                    return;
+                }
+                body.innerHTML = todays.map(({ apt }) => `
+                    <tr>
+                        <td>${formatApptDate(getAppointmentDateValue(apt)) || t('no_data', 'No data')}</td>
+                        <td>${safeDisplayText(apt.patient_name, t('no_data', 'No data'))}</td>
+                        <td>${safeDisplayText(apt.treatment_type, t('no_data', 'No data'))}</td>
+                        <td class="center-cell">${renderStatusBadge(apt.status, safeDisplayText(apt.status, 'scheduled'))}</td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                body.innerHTML = renderStateRow(t('schedule_load_failed', "Couldn't load today's schedule."), {
+                    icon: '⚠️', title: t('schedule_load_failed', "Couldn't load today's schedule."), colSpan: 4, kind: 'error',
+                    buttonHtml: `<button class="btn btn-primary" type="button" onclick="loadTodaySchedule()">${t('refresh', 'Refresh')}</button>`
+                });
+            }
+        }
+
         // Patient-profile skeleton — a decorative shape placeholder shown while the
         // full-profile fetch resolves, then replaced by the real profile markup.
         // aria-hidden because it carries no information (solid bars, never glass).
@@ -5314,6 +5356,7 @@ HTML_TEMPLATE = '''
         // Dashboard
         async function loadDashboard() {
             refreshCloudBadge();
+            loadTodaySchedule();
             const tbody = document.getElementById('recent-appointments-body');
             const statsGrid = document.getElementById('stats-grid');
             if (statsGrid) statsGrid.classList.add('is-loading');
