@@ -1649,6 +1649,62 @@ HTML_TEMPLATE = '''
             font-size: 0.92rem;
         }
         .state-actions { margin-top: 14px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+        /* ── Skeleton loading (shape-mimicking; solid data surface, never glass) ── */
+        .sr-only {
+            position: absolute !important;
+            width: 1px; height: 1px;
+            padding: 0; margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap; border: 0;
+        }
+        .skeleton {
+            position: relative;
+            overflow: hidden;
+            background: var(--line);
+            border-radius: var(--radius-sm);
+        }
+        .skeleton::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            transform: translateX(-100%);
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+            animation: skeletonShimmer 1.25s var(--ease) infinite;
+        }
+        body[data-theme="dark"] .skeleton { background: rgba(255, 255, 255, 0.08); }
+        body[data-theme="dark"] .skeleton::after {
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.10), transparent);
+        }
+        .skeleton-cell { padding: 14px 12px; }
+        .skeleton-bar { display: block; height: 12px; width: 70%; }
+        .skeleton-sr td { padding: 0; border: 0; }
+        /* patient-profile skeleton: avatar + lines + summary tiles (solid surface) */
+        .profile-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 8px 4px; }
+        .profile-skeleton__head { display: flex; align-items: center; gap: 14px; }
+        .profile-skeleton__lines { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+        .profile-skeleton__tiles { display: flex; gap: 12px; }
+        .skeleton-avatar { width: 54px; height: 54px; border-radius: 50%; flex-shrink: 0; }
+        .skeleton-tile { flex: 1; height: 56px; border-radius: var(--radius-sm); }
+        @keyframes skeletonShimmer { 100% { transform: translateX(100%); } }
+        /* dashboard stat tiles: reversible shimmer via a class toggle (non-destructive) */
+        .stats-grid.is-loading .stat-card h3 {
+            color: transparent;
+            min-width: 72px;
+            border-radius: var(--radius-sm);
+            position: relative;
+            overflow: hidden;
+            background: var(--line);
+        }
+        .stats-grid.is-loading .stat-card h3::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            transform: translateX(-100%);
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+            animation: skeletonShimmer 1.25s var(--ease) infinite;
+        }
+        body[data-theme="dark"] .stats-grid.is-loading .stat-card h3 { background: rgba(255, 255, 255, 0.10); }
         .badge-neutral { background: #eef4fb; color: #33536d; }
         .badge-active { background: #e0f4e8; color: #166942; }
         .badge-pending { background: #fff1d4; color: #8b5e00; }
@@ -1992,6 +2048,8 @@ HTML_TEMPLATE = '''
         @media (prefers-reduced-motion: reduce) {
             .toast { transition: opacity 0.01s linear; transform: none; }
             .toast--in, .toast--leaving { transform: none; }
+            .skeleton::after,
+            .stats-grid.is-loading .stat-card h3::after { animation: none; }
         }
 
         /* ── Duplicate-patient review ──────────────────────────────────────── */
@@ -5145,18 +5203,59 @@ HTML_TEMPLATE = '''
             const label = safeDisplayText(status, fallback || t('unknown', 'Unknown'));
             return `<span class="badge ${getStatusBadgeClass(status)}">${label}</span>`;
         }
-        
+
+        // Skeleton table rows — shape-mimicking placeholders shown while data
+        // loads (replaces the old centered text spinner). The shimmer bars are
+        // decorative, so the rows are aria-hidden; one sr-only status row keeps
+        // the load announced for assistive tech. Bars sit on a solid data
+        // surface (the "solid for data" rule), never frosted glass.
+        function renderSkeletonRows(colSpan, opts = {}) {
+            const rowCount = opts.rows || 5;
+            const announce = opts.announce || t('loading', 'Loading...');
+            const widths = ['72%', '54%', '84%', '46%', '63%', '77%', '50%', '67%', '42%'];
+            const cells = Array.from({ length: colSpan }, (_, i) =>
+                `<td class="skeleton-cell"><span class="skeleton skeleton-bar" style="width:${widths[i % widths.length]}"></span></td>`
+            ).join('');
+            const dataRow = `<tr class="skeleton-row" aria-hidden="true">${cells}</tr>`;
+            const srRow = `<tr class="skeleton-sr"><td colspan="${colSpan}"><span class="sr-only" role="status">${announce}</span></td></tr>`;
+            return srRow + dataRow.repeat(rowCount);
+        }
+
+        // Patient-profile skeleton — a decorative shape placeholder shown while the
+        // full-profile fetch resolves, then replaced by the real profile markup.
+        // aria-hidden because it carries no information (solid bars, never glass).
+        function renderProfileSkeleton() {
+            return `
+                <div class="profile-skeleton" aria-hidden="true">
+                    <div class="profile-skeleton__head">
+                        <span class="skeleton skeleton-avatar"></span>
+                        <div class="profile-skeleton__lines">
+                            <span class="skeleton skeleton-bar" style="width:58%;height:16px"></span>
+                            <span class="skeleton skeleton-bar" style="width:36%"></span>
+                        </div>
+                    </div>
+                    <div class="profile-skeleton__tiles">
+                        <span class="skeleton skeleton-tile"></span>
+                        <span class="skeleton skeleton-tile"></span>
+                        <span class="skeleton skeleton-tile"></span>
+                    </div>
+                    <span class="skeleton skeleton-bar" style="width:90%"></span>
+                    <span class="skeleton skeleton-bar" style="width:82%"></span>
+                    <span class="skeleton skeleton-bar" style="width:86%"></span>
+                </div>
+            `;
+        }
+
         // Dashboard
         async function loadDashboard() {
             refreshCloudBadge();
             const tbody = document.getElementById('recent-appointments-body');
+            const statsGrid = document.getElementById('stats-grid');
+            if (statsGrid) statsGrid.classList.add('is-loading');
             if (tbody) {
-                tbody.innerHTML = renderStateRow(t('loading', 'Loading...'), {
-                    icon: '⏳',
-                    title: t('loading_dashboard', 'Loading dashboard data...'),
-                    text: t('loading_dashboard_hint', 'Refreshing totals and recent appointments.'),
-                    colSpan: 4,
-                    kind: 'loading'
+                tbody.innerHTML = renderSkeletonRows(4, {
+                    rows: 4,
+                    announce: t('loading_dashboard', 'Loading dashboard data...')
                 });
             }
 
@@ -5168,6 +5267,7 @@ HTML_TEMPLATE = '''
                 if (visitsEl) visitsEl.textContent = stats.total_visits || 0;
                 const revenueEl = document.getElementById('total-revenue');
                 if (revenueEl) revenueEl.textContent = '₪ ' + (parseFloat(stats.total_revenue) || 0).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+                if (statsGrid) statsGrid.classList.remove('is-loading');
 
                 const appointments = await fetch('/api/appointments/recent').then(r => r.json());
                 if (!tbody) return;
@@ -5190,6 +5290,7 @@ HTML_TEMPLATE = '''
                     </tr>
                 `).join('');
             } catch (error) {
+                if (statsGrid) statsGrid.classList.remove('is-loading');
                 if (tbody) {
                     tbody.innerHTML = renderStateRow(t('save_failed', 'Save failed'), {
                         icon: '⚠️',
@@ -5207,12 +5308,9 @@ HTML_TEMPLATE = '''
         async function loadPatients() {
             const tbody = document.getElementById('patients-body');
             if (tbody) {
-                tbody.innerHTML = renderStateRow(t('loading', 'Loading...'), {
-                    icon: '⏳',
-                    title: t('loading_patients', 'Loading patients...'),
-                    text: t('loading_patients_hint', 'Fetching the patient list.'),
-                    colSpan: 9,
-                    kind: 'loading'
+                tbody.innerHTML = renderSkeletonRows(9, {
+                    rows: 6,
+                    announce: t('loading_patients', 'Loading patients...')
                 });
             }
             try {
@@ -5353,12 +5451,9 @@ HTML_TEMPLATE = '''
         async function loadAppointments() {
             const tbody = document.getElementById('appointments-body');
             if (tbody) {
-                tbody.innerHTML = renderStateRow(t('loading', 'Loading...'), {
-                    icon: '⏳',
-                    title: t('loading_appointments', 'Loading appointments...'),
-                    text: t('loading_appointments_hint', 'Refreshing the appointment list and calendar.'),
-                    colSpan: 6,
-                    kind: 'loading'
+                tbody.innerHTML = renderSkeletonRows(6, {
+                    rows: 6,
+                    announce: t('loading_appointments', 'Loading appointments...')
                 });
             }
             try {
@@ -5794,7 +5889,7 @@ HTML_TEMPLATE = '''
             const foot = document.getElementById('billing-history-foot');
             const title = document.getElementById('billing-history-title');
             if (!body) return;
-            body.innerHTML = `<tr><td colspan="5">${t('loading', 'Loading…')}</td></tr>`;
+            body.innerHTML = renderSkeletonRows(5, { rows: 6, announce: t('loading', 'Loading…') });
             if (foot) foot.innerHTML = '';
 
             let payload;
@@ -6631,6 +6726,13 @@ HTML_TEMPLATE = '''
         }
 
         async function viewPatientProfile(patientId) {
+            // Show the profile skeleton immediately and open the modal so the user
+            // sees structure while the full-profile fetch resolves; the real markup
+            // replaces it below (the later .classList.add('active') is then a no-op).
+            const _profileContent = document.getElementById('patient-profile-content');
+            const _profileModal = document.getElementById('patient-profile-modal');
+            if (_profileContent) _profileContent.innerHTML = renderProfileSkeleton();
+            if (_profileModal) _profileModal.classList.add('active');
             if (!treatmentProceduresCache.length) {
                 await loadTreatmentProcedures();
             }
