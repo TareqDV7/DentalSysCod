@@ -2231,60 +2231,93 @@ HTML_TEMPLATE = '''
             <!-- Dashboard Tab -->
             <div id="dashboard" class="tab-content active">
                 <div class="screen-shell">
-                    <div class="section-card">
-                        <div class="section-card-header">
-                            <div>
-                                <h2 data-i18n="dashboard_overview">Dashboard Overview</h2>
-                                <p data-i18n="dashboard_summary">Snapshot of today's activity, totals, and recent appointments.</p>
-                            </div>
-                            <div class="section-card-actions">
-                                <span id="cloud-sync-badge" style="display:none;align-self:center;font-size:0.85em;color:var(--muted);"></span>
-                                <button class="btn btn-primary" onclick="downloadBackup()" data-i18n="download_backup">💾 Download Backup</button>
-                            </div>
+                    <div class="section-card-header">
+                        <div>
+                            <h2 data-i18n="dashboard_overview">Dashboard Overview</h2>
+                            <p data-i18n="dashboard_summary">Snapshot of today's activity, totals, and recent appointments.</p>
                         </div>
-                        <div class="stats-grid" id="stats-grid">
-                            <div class="stat-card stat-card-teal">
-                                <span class="stat-icon">👥</span>
-                                <h3 id="total-patients">0</h3>
-                                <p data-i18n="total_patients">Total Patients</p>
-                            </div>
-                            <div class="stat-card stat-card-blue">
-                                <span class="stat-icon">📅</span>
-                                <h3 id="today-appointments">0</h3>
-                                <p data-i18n="todays_appointments">Today's Appointments</p>
-                            </div>
-                            <div class="stat-card stat-card-green">
-                                <span class="stat-icon">🩺</span>
-                                <h3 id="total-visits">0</h3>
-                                <p data-i18n="todays_visits">Today's Visits</p>
-                            </div>
-                            <div class="stat-card stat-card-amber">
-                                <span class="stat-icon">💰</span>
-                                <h3 id="total-revenue">₪ 0</h3>
-                                <p data-i18n="todays_revenue">Today's Revenue</p>
-                            </div>
+                        <div class="section-card-actions">
+                            <span id="cloud-sync-badge" style="display:none;align-self:center;font-size:0.85em;color:var(--muted);"></span>
+                            <button class="btn btn-primary" onclick="downloadBackup()" data-i18n="download_backup">💾 Download Backup</button>
                         </div>
                     </div>
 
-                    <div class="section-card table-shell">
-                        <div class="table-meta">
-                            <div>
-                                <div class="section-card-title" data-i18n="recent_appointments">Recent Appointments</div>
-                                <div class="table-meta-text" data-i18n="recent_appointments_hint">Latest scheduled visits and their current status.</div>
+                    <div class="dash-grid">
+                        <aside class="dash-rail">
+                            <div class="stats-grid stats-grid--rail" id="stats-grid">
+                                <div class="stat-card stat-card-teal">
+                                    <span class="stat-icon">👥</span>
+                                    <h3 id="total-patients">0</h3>
+                                    <p data-i18n="total_patients">Total Patients</p>
+                                </div>
+                                <div class="stat-card stat-card-blue">
+                                    <span class="stat-icon">📅</span>
+                                    <h3 id="today-appointments">0</h3>
+                                    <p data-i18n="todays_appointments">Today's Appointments</p>
+                                </div>
+                                <div class="stat-card stat-card-green">
+                                    <span class="stat-icon">🩺</span>
+                                    <h3 id="total-visits">0</h3>
+                                    <p data-i18n="todays_visits">Today's Visits</p>
+                                </div>
+                                <div class="stat-card stat-card-amber">
+                                    <span class="stat-icon">💰</span>
+                                    <h3 id="total-revenue">₪ 0</h3>
+                                    <p data-i18n="todays_revenue">Today's Revenue</p>
+                                </div>
                             </div>
-                        </div>
-                        <div class="responsive-table-wrap">
-                            <table id="recent-appointments-table">
-                                <thead>
-                                    <tr>
-                                        <th data-i18n="patient">Patient</th>
-                                        <th data-i18n="date_time">Date & Time</th>
-                                        <th data-i18n="treatment_type">Treatment Type</th>
-                                        <th class="center-cell" data-i18n="status">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="recent-appointments-body"></tbody>
-                            </table>
+                            <div class="quick-actions">
+                                <div class="quick-actions__title" data-i18n="quick_actions">Quick Actions</div>
+                                <button class="btn btn-primary quick-actions__btn" onclick="showAddPatientModal()" data-i18n="add_new_patient">+ Add New Patient</button>
+                                <button class="btn btn-secondary quick-actions__btn" onclick="showAddAppointmentModal()" data-i18n="new_appointment">New Appointment</button>
+                                <button class="btn btn-secondary quick-actions__btn" onclick="downloadBackup()" data-i18n="download_backup">💾 Download Backup</button>
+                            </div>
+                        </aside>
+
+                        <div class="dash-main">
+                            <div class="section-card table-shell today-panel">
+                                <div class="table-meta">
+                                    <div>
+                                        <div class="section-card-title" data-i18n="today_schedule">Today's Schedule</div>
+                                        <div class="table-meta-text" data-i18n="todays_appointments">Today's Appointments</div>
+                                    </div>
+                                </div>
+                                <div class="responsive-table-wrap">
+                                    <table id="today-schedule-table">
+                                        <thead>
+                                            <tr>
+                                                <th data-i18n="date_time">Date &amp; Time</th>
+                                                <th data-i18n="patient">Patient</th>
+                                                <th data-i18n="treatment_type">Treatment Type</th>
+                                                <th class="center-cell" data-i18n="status">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="today-schedule-body"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="section-card table-shell">
+                                <div class="table-meta">
+                                    <div>
+                                        <div class="section-card-title" data-i18n="recent_appointments">Recent Appointments</div>
+                                        <div class="table-meta-text" data-i18n="recent_appointments_hint">Latest scheduled visits and their current status.</div>
+                                    </div>
+                                </div>
+                                <div class="responsive-table-wrap">
+                                    <table id="recent-appointments-table">
+                                        <thead>
+                                            <tr>
+                                                <th data-i18n="patient">Patient</th>
+                                                <th data-i18n="date_time">Date &amp; Time</th>
+                                                <th data-i18n="treatment_type">Treatment Type</th>
+                                                <th class="center-cell" data-i18n="status">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="recent-appointments-body"></tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

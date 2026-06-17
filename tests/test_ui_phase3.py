@@ -52,3 +52,17 @@ def test_dashboard_two_column_css_present():
 def test_dashboard_rail_uses_logical_props_for_rtl():
     # the grid is defined with a logical column order so RTL mirrors for free
     assert "grid-template-columns" in HTML_TEMPLATE[HTML_TEMPLATE.find(".dash-grid"):HTML_TEMPLATE.find(".dash-grid") + 400]
+
+
+def test_dashboard_markup_two_column_and_schedule():
+    assert 'class="dash-grid"' in HTML_TEMPLATE
+    assert 'class="dash-rail"' in HTML_TEMPLATE
+    assert 'id="today-schedule-body"' in HTML_TEMPLATE
+    # quick actions wired to real, existing handlers
+    assert 'onclick="showAddPatientModal()"' in HTML_TEMPLATE
+    assert 'onclick="showAddAppointmentModal()"' in HTML_TEMPLATE
+    # KPI ids preserved so loadDashboard keeps populating them
+    for el_id in ('total-patients', 'today-appointments', 'total-visits', 'total-revenue', 'recent-appointments-body'):
+        assert f'id="{el_id}"' in HTML_TEMPLATE
+    # KPI grid keeps its id + gains the rail modifier
+    assert 'class="stats-grid stats-grid--rail" id="stats-grid"' in HTML_TEMPLATE
