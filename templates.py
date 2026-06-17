@@ -942,10 +942,19 @@ HTML_TEMPLATE = '''
             letter-spacing: 0.04em;
         }
 
-        .badge-success { background: #e0f4e8; color: #166942; }
-        .badge-warning { background: #fff1d4; color: #8b5e00; }
-        .badge-danger { background: #ffe2e5; color: #8d1f33; }
-        .badge-info { background: #e3f1ff; color: #1f5d9e; }
+        /* ── Status badges — ONE semantic palette (P3). Each rule pairs the semantic
+           name with its legacy alias so existing call sites keep working untouched. ── */
+        .badge-success, .badge-active { background: #e0f4e8; color: #166942; }
+        .badge-warning, .badge-pending { background: #fbeaca; color: #875600; }
+        .badge-danger, .badge-blocked { background: #fbdfe2; color: #a11f2e; }
+        .badge-info, .badge-secondary { background: var(--accent-soft); color: var(--accent-strong); }
+        .badge-neutral, .badge-muted { background: #eef2f8; color: #4a5a6e; }
+        /* dark variants — translucent fills + lightened ink (verify >= 4.5:1 on the slate card) */
+        body[data-theme="dark"] .badge-success, body[data-theme="dark"] .badge-active { background: rgba(34,197,94,.16); color: #7ee2a8; }
+        body[data-theme="dark"] .badge-warning, body[data-theme="dark"] .badge-pending { background: rgba(251,191,36,.18); color: #f3ca63; }
+        body[data-theme="dark"] .badge-danger, body[data-theme="dark"] .badge-blocked { background: rgba(239,68,68,.20); color: #ff9aa6; }
+        body[data-theme="dark"] .badge-info, body[data-theme="dark"] .badge-secondary { background: rgba(56,189,248,.16); color: #8fd3f7; }
+        body[data-theme="dark"] .badge-neutral, body[data-theme="dark"] .badge-muted { background: rgba(148,163,184,.18); color: #c3cdda; }
 
         .expense-status-select { padding: 4px 6px; font-size: 0.85rem; border-radius: 6px; border: 1px solid #cdd9e6; }
         .expense-status-select[data-status="paid"] { background: #e0f4e8; color: #166942; }
@@ -1705,12 +1714,6 @@ HTML_TEMPLATE = '''
             animation: skeletonShimmer 1.25s var(--ease) infinite;
         }
         body[data-theme="dark"] .stats-grid.is-loading .stat-card h3 { background: rgba(255, 255, 255, 0.10); }
-        .badge-neutral { background: #eef4fb; color: #33536d; }
-        .badge-active { background: #e0f4e8; color: #166942; }
-        .badge-pending { background: #fff1d4; color: #8b5e00; }
-        .badge-muted { background: #e9eef5; color: #596a7c; }
-        .badge-secondary { background: #e3f1ff; color: #1f5d9e; }
-        .badge-blocked { background: #ffe2e5; color: #8d1f33; }
         .section-card-title {
             font-family: 'Space Grotesk', 'Manrope', sans-serif;
             font-size: 0.9rem;
