@@ -32,3 +32,9 @@ def test_status_mapping_uses_semantic_names():
     assert "normalized === 'scheduled' || normalized === 'confirmed') return 'badge-info'" in HTML_TEMPLATE
     assert "normalized === 'pending' || normalized === 'postponed') return 'badge-warning'" in HTML_TEMPLATE
     assert "normalized === 'completed' || normalized === 'paid' || normalized === 'active') return 'badge-success'" in HTML_TEMPLATE
+
+
+def test_phase3_i18n_keys_present_both_langs():
+    for key in ("today_schedule", "quick_actions", "new_appointment",
+                "no_appointments_today", "loading_today", "schedule_load_failed"):
+        assert HTML_TEMPLATE.count(key + ":") >= 2, f"{key} missing from a language dict"
