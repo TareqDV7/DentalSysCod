@@ -5176,10 +5176,11 @@ HTML_TEMPLATE = '''
 
         function getStatusBadgeClass(status) {
             const normalized = String(status || '').toLowerCase();
-            if (normalized === 'completed' || normalized === 'paid' || normalized === 'active') return 'badge-active';
-            if (normalized === 'confirmed' || normalized === 'scheduled' || normalized === 'pending') return 'badge-secondary';
-            if (normalized === 'cancelled' || normalized === 'postponed' || normalized === 'inactive') return 'badge-pending';
-            if (normalized === 'error' || normalized === 'failed') return 'badge-blocked';
+            if (normalized === 'completed' || normalized === 'paid' || normalized === 'active') return 'badge-success';
+            if (normalized === 'scheduled' || normalized === 'confirmed') return 'badge-info';
+            if (normalized === 'pending' || normalized === 'postponed') return 'badge-warning';
+            if (normalized === 'cancelled' || normalized === 'no_show' || normalized === 'no-show') return 'badge-danger';
+            if (normalized === 'error' || normalized === 'failed') return 'badge-danger';
             return 'badge-neutral';
         }
 

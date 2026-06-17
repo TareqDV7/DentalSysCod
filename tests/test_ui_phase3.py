@@ -19,3 +19,16 @@ def test_old_duplicate_badge_block_removed():
     # the redundant hardcoded status-set definitions are gone
     assert ".badge-neutral { background: #eef4fb; color: #33536d; }" not in HTML_TEMPLATE
     assert ".badge-secondary { background: #e3f1ff; color: #1f5d9e; }" not in HTML_TEMPLATE
+
+
+def test_status_mapping_cancelled_is_danger_not_amber():
+    # cancelled / no-show are terminal -> danger (red), no longer amber
+    assert "normalized === 'cancelled' || normalized === 'no_show' || normalized === 'no-show') return 'badge-danger'" in HTML_TEMPLATE
+    # the old muddled mapping is gone
+    assert "normalized === 'cancelled' || normalized === 'postponed' || normalized === 'inactive') return 'badge-pending'" not in HTML_TEMPLATE
+
+
+def test_status_mapping_uses_semantic_names():
+    assert "normalized === 'scheduled' || normalized === 'confirmed') return 'badge-info'" in HTML_TEMPLATE
+    assert "normalized === 'pending' || normalized === 'postponed') return 'badge-warning'" in HTML_TEMPLATE
+    assert "normalized === 'completed' || normalized === 'paid' || normalized === 'active') return 'badge-success'" in HTML_TEMPLATE
