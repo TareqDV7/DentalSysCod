@@ -8856,6 +8856,7 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
     </div>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
     <input type="hidden" name="next" value="{{ next_url }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="username">Username</label>
     <input type="text" id="username" name="username" autocomplete="username" autofocus required>
     <label for="password">Password</label>
@@ -8937,6 +8938,7 @@ FORCE_CHANGE_TEMPLATE = '''<!DOCTYPE html>
     </div>
     <div class="note">This account still uses the default password. Set a new one before you start — it only takes a moment.</div>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="current_password">Current password</label>
     <input type="password" id="current_password" name="current_password" autocomplete="current-password" autofocus required>
     <label for="new_password">New password</label>

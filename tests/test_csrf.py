@@ -97,3 +97,28 @@ def test_index_html_contains_csrf_meta_and_interceptor(client):
     html = resp.get_data(as_text=True)
     assert 'name="csrf-token"' in html
     assert 'X-CSRFToken' in html  # the fetch interceptor is present
+
+
+def test_login_without_csrf_field_is_rejected(client):
+    resp = client.post('/login', data={'username': 'admin', 'password': 'admin'},
+                       csrf=False)
+    assert resp.status_code == 400
+    assert b'reload' in resp.data.lower() or b'security' in resp.data.lower()
+
+
+def test_login_with_csrf_field_succeeds_and_rotates_token(client):
+    with client.session_transaction() as sess:
+        sess['csrf_token'] = 'pre-login-token'
+    resp = client.post('/login',
+                       data={'username': 'admin', 'password': 'admin',
+                             'csrf_token': 'pre-login-token'},
+                       csrf=False, follow_redirects=False)
+    assert resp.status_code in (301, 302)  # redirect on success
+    with client.session_transaction() as sess:
+        assert sess.get('uid')
+        assert sess.get('csrf_token') and sess['csrf_token'] != 'pre-login-token'
+
+
+def test_login_page_get_contains_csrf_field(client):
+    resp = client.get('/login')
+    assert b'name="csrf_token"' in resp.data

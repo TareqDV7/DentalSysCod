@@ -2102,14 +2102,19 @@ def change_password_page():
     if request.method == 'GET':
         if not _user_must_change_password(session['uid']):
             return redirect(url_for('index'))
-        return render_template_string(FORCE_CHANGE_TEMPLATE, error=None)
+        return render_template_string(FORCE_CHANGE_TEMPLATE, error=None,
+                                      csrf_token=_get_or_create_csrf_token())
+
+    def _fail(msg):
+        return render_template_string(FORCE_CHANGE_TEMPLATE, error=msg,
+                                      csrf_token=_get_or_create_csrf_token()), 400
+
+    if not _form_csrf_ok():
+        return _fail('Security check failed — please reload and try again.')
 
     current = request.form.get('current_password') or ''
     new = request.form.get('new_password') or ''
     confirm = request.form.get('confirm_password') or ''
-
-    def _fail(msg):
-        return render_template_string(FORCE_CHANGE_TEMPLATE, error=msg), 400
 
     if len(new) < 4:
         return _fail('New password must be at least 4 characters.')
@@ -2139,6 +2144,11 @@ def change_password_page():
 def login_page():
     next_url = _safe_next_url(request.values.get('next', ''))
     if request.method == 'POST':
+        if not _form_csrf_ok():
+            return render_template_string(
+                LOGIN_TEMPLATE,
+                error='Security check failed — please reload and try again.',
+                next_url=next_url, csrf_token=_get_or_create_csrf_token()), 400
         username = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
         conn = sqlite3.connect(DB_NAME)
@@ -2153,12 +2163,16 @@ def login_page():
             session.clear()
             session['uid'] = user['id']
             session['uname'] = user['username']
+            session['csrf_token'] = _new_csrf_token()  # rotate on privilege change
             return redirect(next_url or url_for('index'))
         conn.close()
-        return render_template_string(LOGIN_TEMPLATE, error='Invalid username or password.', next_url=next_url), 401
+        return render_template_string(LOGIN_TEMPLATE, error='Invalid username or password.',
+                                      next_url=next_url,
+                                      csrf_token=_get_or_create_csrf_token()), 401
     if session.get('uid'):
         return redirect(next_url or url_for('index'))
-    return render_template_string(LOGIN_TEMPLATE, error=None, next_url=next_url)
+    return render_template_string(LOGIN_TEMPLATE, error=None, next_url=next_url,
+                                  csrf_token=_get_or_create_csrf_token())
 
 
 @app.route('/logout')
