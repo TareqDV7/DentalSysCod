@@ -2049,6 +2049,49 @@ def _require_password_change():
     return None
 
 
+_CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
+_CSRF_FORM_ROUTES = {'/login', '/change-password'}
+_CSRF_ENABLED = os.environ.get('CLINIC_DISABLE_CSRF', '0').strip().lower() \
+    not in ('1', 'true', 'yes', 'on')
+if not _CSRF_ENABLED:
+    logging.getLogger(__name__).warning(
+        'CSRF protection is DISABLED via CLINIC_DISABLE_CSRF — re-enable for production.')
+
+
+def _request_is_csrf_exempt():
+    # A classic CSRF vector (an HTML form, or a "simple" cross-origin fetch) cannot
+    # set custom request headers without a CORS preflight this server never approves.
+    # So the presence of X-Clinic-Token / Authorization proves the request is not a
+    # forged cross-site one. Mobile + cloud-sync use the X-Clinic-Token header.
+    return bool(request.headers.get('X-Clinic-Token') or request.headers.get('Authorization'))
+
+
+def _form_csrf_ok():
+    """Validate the hidden csrf_token field for the no-JS HTML form POSTs."""
+    submitted = request.form.get('csrf_token') or ''
+    expected = session.get('csrf_token') or ''
+    return bool(expected and submitted and secrets.compare_digest(str(submitted), str(expected)))
+
+
+@app.before_request
+def _csrf_protect():
+    if not _CSRF_ENABLED:
+        return None
+    if request.method in _CSRF_SAFE_METHODS:
+        return None
+    # The two no-JS form routes self-validate + re-render in their own handlers.
+    if (request.path or '') in _CSRF_FORM_ROUTES:
+        return None
+    if _request_is_csrf_exempt():
+        return None
+    submitted = request.headers.get('X-CSRFToken') or request.form.get('csrf_token') or ''
+    expected = session.get('csrf_token') or ''
+    if expected and submitted and secrets.compare_digest(str(submitted), str(expected)):
+        return None
+    return jsonify({'error': 'Security check failed — please reload the page.',
+                    'reason': 'csrf'}), 403
+
+
 @app.route('/change-password', methods=['GET', 'POST'])
 def change_password_page():
     """First-run forced password change (browser form, same-origin POST). Reached
@@ -2059,14 +2102,19 @@ def change_password_page():
     if request.method == 'GET':
         if not _user_must_change_password(session['uid']):
             return redirect(url_for('index'))
-        return render_template_string(FORCE_CHANGE_TEMPLATE, error=None)
+        return render_template_string(FORCE_CHANGE_TEMPLATE, error=None,
+                                      csrf_token=_get_or_create_csrf_token())
+
+    def _fail(msg):
+        return render_template_string(FORCE_CHANGE_TEMPLATE, error=msg,
+                                      csrf_token=_get_or_create_csrf_token()), 400
+
+    if not _form_csrf_ok():
+        return _fail('Security check failed — please reload and try again.')
 
     current = request.form.get('current_password') or ''
     new = request.form.get('new_password') or ''
     confirm = request.form.get('confirm_password') or ''
-
-    def _fail(msg):
-        return render_template_string(FORCE_CHANGE_TEMPLATE, error=msg), 400
 
     if len(new) < 4:
         return _fail('New password must be at least 4 characters.')
@@ -2096,6 +2144,11 @@ def change_password_page():
 def login_page():
     next_url = _safe_next_url(request.values.get('next', ''))
     if request.method == 'POST':
+        if not _form_csrf_ok():
+            return render_template_string(
+                LOGIN_TEMPLATE,
+                error='Security check failed — please reload and try again.',
+                next_url=next_url, csrf_token=_get_or_create_csrf_token()), 400
         username = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
         conn = sqlite3.connect(DB_NAME)
@@ -2110,12 +2163,16 @@ def login_page():
             session.clear()
             session['uid'] = user['id']
             session['uname'] = user['username']
+            session['csrf_token'] = _new_csrf_token()  # rotate on privilege change
             return redirect(next_url or url_for('index'))
         conn.close()
-        return render_template_string(LOGIN_TEMPLATE, error='Invalid username or password.', next_url=next_url), 401
+        return render_template_string(LOGIN_TEMPLATE, error='Invalid username or password.',
+                                      next_url=next_url,
+                                      csrf_token=_get_or_create_csrf_token()), 401
     if session.get('uid'):
         return redirect(next_url or url_for('index'))
-    return render_template_string(LOGIN_TEMPLATE, error=None, next_url=next_url)
+    return render_template_string(LOGIN_TEMPLATE, error=None, next_url=next_url,
+                                  csrf_token=_get_or_create_csrf_token())
 
 
 @app.route('/logout')
@@ -2153,10 +2210,26 @@ def auth_change_password():
     return jsonify({'success': True})
 
 
+def _new_csrf_token():
+    """A fresh, URL-safe CSRF token."""
+    return secrets.token_urlsafe(32)
+
+
+def _get_or_create_csrf_token():
+    """Return the session's CSRF token, minting one on first use. Flask's
+    signed-cookie session is the synchronizer store."""
+    token = session.get('csrf_token')
+    if not token:
+        token = _new_csrf_token()
+        session['csrf_token'] = token
+    return token
+
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE, **CLINIC_CONFIG,
-                                  ALLOW_OFFLINE_ACTIVATION=ALLOW_OFFLINE_ACTIVATION)
+                                  ALLOW_OFFLINE_ACTIVATION=ALLOW_OFFLINE_ACTIVATION,
+                                  csrf_token=_get_or_create_csrf_token())
 
 
 @app.route('/logo')

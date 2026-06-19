@@ -13,6 +13,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>{{ CLINIC_NAME }} — {{ SYSTEM_NAME }}</title>
     <style>
         /*__FONT_FACE__*/
@@ -3266,6 +3267,31 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
+        // CSRF: attach the per-session token to same-origin unsafe requests.
+        // One interceptor covers every fetch() call site (incl. FormData uploads).
+        (function () {
+            const _csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+            const _origFetch = window.fetch.bind(window);
+            const _unsafe = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
+            window.fetch = function (input, init) {
+                init = init || {};
+                const method = (init.method
+                    || (input && typeof input === 'object' && input.method)
+                    || 'GET').toUpperCase();
+                const url = (typeof input === 'string') ? input
+                    : ((input && input.url) || '');
+                const sameOrigin = url.startsWith('/')
+                    || url.startsWith(window.location.origin);
+                if (_unsafe[method] && sameOrigin && _csrfToken) {
+                    const headers = new Headers(init.headers
+                        || (input && typeof input === 'object' ? input.headers : null)
+                        || {});
+                    if (!headers.has('X-CSRFToken')) headers.set('X-CSRFToken', _csrfToken);
+                    init.headers = headers;
+                }
+                return _origFetch(input, init);
+            };
+        })();
         let patientsCache = [];
         let appointmentsCache = [];
         let holidaysCache = [];
@@ -8830,6 +8856,7 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
     </div>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
     <input type="hidden" name="next" value="{{ next_url }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="username">Username</label>
     <input type="text" id="username" name="username" autocomplete="username" autofocus required>
     <label for="password">Password</label>
@@ -8911,6 +8938,7 @@ FORCE_CHANGE_TEMPLATE = '''<!DOCTYPE html>
     </div>
     <div class="note">This account still uses the default password. Set a new one before you start — it only takes a moment.</div>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="current_password">Current password</label>
     <input type="password" id="current_password" name="current_password" autocomplete="current-password" autofocus required>
     <label for="new_password">New password</label>

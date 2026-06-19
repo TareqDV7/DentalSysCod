@@ -90,7 +90,7 @@
 ## CROSS-CUTTING — Security & compliance
 
 ### Security hardening
-- [ ] **Add CSRF protection** to the session-authenticated Flask portal (currently none; matters most for the exposed cloud node). 🔴 · M
+- [x] **Add CSRF protection** to the session-authenticated Flask portal. Hand-rolled synchronizer token (`X-CSRFToken` header / hidden `csrf_token` field) validated by an `_csrf_protect` before_request hook; **broad scope** (all unsafe-method requests) exempting `X-Clinic-Token`/`Authorization` header clients (mobile/sync/vendor — header-only, never the query arg). SPA delivers the token via a `<meta>` tag + a single `window.fetch` interceptor; login + change-password forms self-validate and rotate the token on login. `CLINIC_DISABLE_CSRF` kill-switch (default enforced). See `docs/superpowers/specs/2026-06-19-csrf-protection-design.md`. 🔴 · M
 - [x] **Force admin password change on first run** — the seeded `admin/admin` default is flagged (`must_change_password`) and the local/LAN portal redirects to a one-time `/change-password` screen before the SPA loads; `CLINIC_ADMIN_PASSWORD` seeds a real password and skips it. Cloud node relies on `CLINIC_ADMIN_PASSWORD` at deploy. + regression tests. 🟠 · S
 - [x] **Security headers** added (`_add_security_headers` after_request: nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy; HSTS over HTTPS only). **CSP still deferred** until `templates.py` is split (everything is inline `<script>`/`<style>`). 🟡 · S
 - [x] **Closed an unauthenticated destructive endpoint:** `/api/data/clear-billing` was missing from the login gate — any LAN client could wipe all billing rows. Now in `_AUTH_REQUIRED_EXACT` + regression test. 🔴 · S
