@@ -28,8 +28,8 @@
 - [ ] **Non-engineer license admin console** so sales/support can issue/revoke/extend without the loopback GUI. 🟡 · M
 
 ### Distribution friction
-- [ ] **Code-sign the Windows binaries** (`DentaCare.spec` `codesign_identity` is currently `None`). Buy OV/EV cert; removes SmartScreen "unknown publisher". 🔴 · S (+ cert procurement)
-- [ ] **Sign the installer** (`DentaCare-Setup.exe`) and verify clean SmartScreen pass. 🔴 · S
+- [~] **Code-sign the Windows binaries** — build is **wired & ready** (gated, opt-in): `rebuild.bat` signs both binaries via `signtool` when `DENTACARE_SIGN=1` + `DENTACARE_SIGNTOOL_ARGS=...` are set (auto-discovers signtool, runs `verify /pa`), else builds unsigned. Removes SmartScreen "unknown publisher". **Remaining: buy an EV cert (cloud signing).** See `docs/SIGNING.md`. 🔴 · S (+ cert procurement). _(Note: the spec's `codesign_identity` is macOS-only and not used on Windows.)_
+- [~] **Sign the installer** (`DentaCare-Setup.exe`) — wired: `ISCC /DSIGN "/Ssigntool=..." installer\DentaCare.iss` signs it (gated `#ifdef SIGN` block + `SignedUninstaller=yes`); unsigned compile is the default. Verify clean SmartScreen pass after the cert lands. 🔴 · S
 - [ ] **iOS build** for the Flutter app (currently `ios/` is scaffolding only; `flutter_bluetooth_serial` is Android-only — gate BT behind a platform check, ship Wi-Fi/cloud sync on iOS). 🟠 · L
 - [ ] **Apple Developer enrollment + App Store / TestFlight pipeline.** 🟠 · M
 
