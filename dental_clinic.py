@@ -2049,6 +2049,49 @@ def _require_password_change():
     return None
 
 
+_CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
+_CSRF_FORM_ROUTES = {'/login', '/change-password'}
+_CSRF_ENABLED = os.environ.get('CLINIC_DISABLE_CSRF', '0').strip().lower() \
+    not in ('1', 'true', 'yes', 'on')
+if not _CSRF_ENABLED:
+    logging.getLogger(__name__).warning(
+        'CSRF protection is DISABLED via CLINIC_DISABLE_CSRF — re-enable for production.')
+
+
+def _request_is_csrf_exempt():
+    # A classic CSRF vector (an HTML form, or a "simple" cross-origin fetch) cannot
+    # set custom request headers without a CORS preflight this server never approves.
+    # So the presence of X-Clinic-Token / Authorization proves the request is not a
+    # forged cross-site one. Mobile + cloud-sync use the X-Clinic-Token header.
+    return bool(request.headers.get('X-Clinic-Token') or request.headers.get('Authorization'))
+
+
+def _form_csrf_ok():
+    """Validate the hidden csrf_token field for the no-JS HTML form POSTs."""
+    submitted = request.form.get('csrf_token') or ''
+    expected = session.get('csrf_token') or ''
+    return bool(expected and submitted and secrets.compare_digest(str(submitted), str(expected)))
+
+
+@app.before_request
+def _csrf_protect():
+    if not _CSRF_ENABLED:
+        return None
+    if request.method in _CSRF_SAFE_METHODS:
+        return None
+    # The two no-JS form routes self-validate + re-render in their own handlers.
+    if (request.path or '') in _CSRF_FORM_ROUTES:
+        return None
+    if _request_is_csrf_exempt():
+        return None
+    submitted = request.headers.get('X-CSRFToken') or request.form.get('csrf_token') or ''
+    expected = session.get('csrf_token') or ''
+    if expected and submitted and secrets.compare_digest(str(submitted), str(expected)):
+        return None
+    return jsonify({'error': 'Security check failed — please reload the page.',
+                    'reason': 'csrf'}), 403
+
+
 @app.route('/change-password', methods=['GET', 'POST'])
 def change_password_page():
     """First-run forced password change (browser form, same-origin POST). Reached
