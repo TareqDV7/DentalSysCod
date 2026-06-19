@@ -63,3 +63,22 @@ def test_kill_switch_disables_enforcement(client, monkeypatch):
     monkeypatch.setattr(dental_clinic, '_CSRF_ENABLED', False)
     resp = client.post('/api/appointments', json={'patient_id': 999999}, csrf=False)
     assert resp.status_code != 403
+
+
+def test_x_clinic_token_header_exempts(client):
+    resp = client.post('/api/appointments', json={'patient_id': 999999},
+                       headers={'X-Clinic-Token': 'whatever'}, csrf=False)
+    assert resp.status_code != 403  # exempt: handler ran (mobile/sync path)
+
+
+def test_authorization_header_exempts(client):
+    resp = client.post('/api/appointments', json={'patient_id': 999999},
+                       headers={'Authorization': 'Bearer x'}, csrf=False)
+    assert resp.status_code != 403
+
+
+def test_query_arg_clinic_token_does_not_exempt(client):
+    resp = client.post('/api/appointments?clinic_token=whatever',
+                       json={'patient_id': 999999}, csrf=False)
+    assert resp.status_code == 403
+    assert resp.get_json().get('reason') == 'csrf'
