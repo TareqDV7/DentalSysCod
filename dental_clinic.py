@@ -2153,6 +2153,21 @@ def auth_change_password():
     return jsonify({'success': True})
 
 
+def _new_csrf_token():
+    """A fresh, URL-safe CSRF token."""
+    return secrets.token_urlsafe(32)
+
+
+def _get_or_create_csrf_token():
+    """Return the session's CSRF token, minting one on first use. Flask's
+    signed-cookie session is the synchronizer store."""
+    token = session.get('csrf_token')
+    if not token:
+        token = _new_csrf_token()
+        session['csrf_token'] = token
+    return token
+
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE, **CLINIC_CONFIG,
