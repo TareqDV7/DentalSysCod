@@ -1,5 +1,3 @@
-import secrets
-
 import pytest
 
 import dental_clinic
