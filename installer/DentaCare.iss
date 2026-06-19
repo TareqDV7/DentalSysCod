@@ -32,6 +32,16 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
 LicenseFile=..\LICENSE
 
+; Code-signing (optional). Compile a SIGNED installer with:
+;   ISCC /DSIGN "/Ssigntool=signtool.exe sign <your CA args> $f" installer\DentaCare.iss
+; The named "signtool" command is supplied via the /Ssigntool=... switch; $f is the
+; file Inno asks to sign. Without /DSIGN the installer compiles UNSIGNED (the default),
+; so existing dev builds work unchanged. See docs/SIGNING.md.
+#ifdef SIGN
+SignTool=signtool
+SignedUninstaller=yes
+#endif
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 

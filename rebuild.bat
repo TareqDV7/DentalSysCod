@@ -38,6 +38,35 @@ if not exist dist\DentaCareService.exe (
     exit /b 1
 )
 
+echo === Code-signing (optional) ===
+REM Gated: signing only runs when DENTACARE_SIGN is set, so unsigned dev builds
+REM keep working unchanged. DENTACARE_SIGNTOOL_ARGS holds your CA-specific args
+REM (everything after "signtool sign", excluding the file). See docs/SIGNING.md.
+if not defined DENTACARE_SIGN (
+    echo   Skipping: DENTACARE_SIGN not set. Binaries will be UNSIGNED.
+    goto :after_sign
+)
+if not defined DENTACARE_SIGNTOOL_ARGS (
+    echo ERROR: DENTACARE_SIGN is set but DENTACARE_SIGNTOOL_ARGS is empty.
+    echo   Example: set DENTACARE_SIGNTOOL_ARGS=/fd sha256 /a /tr http://timestamp.example /td sha256
+    exit /b 1
+)
+set "SIGNTOOL="
+where signtool.exe >nul 2>&1 && set "SIGNTOOL=signtool.exe"
+if not defined SIGNTOOL (
+    for /f "delims=" %%I in ('dir /b /s "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" 2^>nul') do set "SIGNTOOL=%%I"
+)
+if not defined SIGNTOOL (
+    echo ERROR: signtool.exe not found. Install the Windows SDK "Signing Tools for Desktop Apps".
+    exit /b 1
+)
+echo   Using signtool: %SIGNTOOL%
+"%SIGNTOOL%" sign %DENTACARE_SIGNTOOL_ARGS% "dist\DentaCare.exe" || (echo ERROR: signing DentaCare.exe failed & exit /b 1)
+"%SIGNTOOL%" sign %DENTACARE_SIGNTOOL_ARGS% "dist\DentaCareService.exe" || (echo ERROR: signing DentaCareService.exe failed & exit /b 1)
+"%SIGNTOOL%" verify /pa "dist\DentaCare.exe" || (echo ERROR: signature verify failed & exit /b 1)
+echo   Signed + verified dist\DentaCare.exe and dist\DentaCareService.exe
+:after_sign
+
 echo === Staging installer payload ===
 mkdir dist\staging
 copy /y dist\DentaCare.exe          dist\staging\
