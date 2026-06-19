@@ -2214,7 +2214,8 @@ def _get_or_create_csrf_token():
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE, **CLINIC_CONFIG,
-                                  ALLOW_OFFLINE_ACTIVATION=ALLOW_OFFLINE_ACTIVATION)
+                                  ALLOW_OFFLINE_ACTIVATION=ALLOW_OFFLINE_ACTIVATION,
+                                  csrf_token=_get_or_create_csrf_token())
 
 
 @app.route('/logo')

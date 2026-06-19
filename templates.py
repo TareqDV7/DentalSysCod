@@ -13,6 +13,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>{{ CLINIC_NAME }} — {{ SYSTEM_NAME }}</title>
     <style>
         /*__FONT_FACE__*/
@@ -3266,6 +3267,31 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
+        // CSRF: attach the per-session token to same-origin unsafe requests.
+        // One interceptor covers every fetch() call site (incl. FormData uploads).
+        (function () {
+            const _csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+            const _origFetch = window.fetch.bind(window);
+            const _unsafe = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
+            window.fetch = function (input, init) {
+                init = init || {};
+                const method = (init.method
+                    || (input && typeof input === 'object' && input.method)
+                    || 'GET').toUpperCase();
+                const url = (typeof input === 'string') ? input
+                    : ((input && input.url) || '');
+                const sameOrigin = url.startsWith('/')
+                    || url.startsWith(window.location.origin);
+                if (_unsafe[method] && sameOrigin && _csrfToken) {
+                    const headers = new Headers(init.headers
+                        || (input && typeof input === 'object' ? input.headers : null)
+                        || {});
+                    if (!headers.has('X-CSRFToken')) headers.set('X-CSRFToken', _csrfToken);
+                    init.headers = headers;
+                }
+                return _origFetch(input, init);
+            };
+        })();
         let patientsCache = [];
         let appointmentsCache = [];
         let holidaysCache = [];

@@ -82,3 +82,18 @@ def test_query_arg_clinic_token_does_not_exempt(client):
                        json={'patient_id': 999999}, csrf=False)
     assert resp.status_code == 403
     assert resp.get_json().get('reason') == 'csrf'
+
+
+def test_index_html_contains_csrf_meta_and_interceptor(client):
+    import sqlite3
+    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn.execute('UPDATE users SET must_change_password = 0')
+    conn.commit()
+    conn.close()
+    with client.session_transaction() as sess:
+        sess['uid'] = 1
+        sess['uname'] = 'admin'
+    resp = client.get('/')
+    html = resp.get_data(as_text=True)
+    assert 'name="csrf-token"' in html
+    assert 'X-CSRFToken' in html  # the fetch interceptor is present
