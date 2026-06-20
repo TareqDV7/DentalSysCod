@@ -1,6 +1,5 @@
 import io
 
-import openpyxl
 import pytest
 
 import dental_clinic
@@ -115,3 +114,21 @@ def test_commit_writes_audit_log(client):
     n = conn.execute("SELECT COUNT(*) FROM audit_logs WHERE action_type='import'").fetchone()[0]
     conn.close()
     assert n == 1
+
+
+def test_preview_rejects_oversized_file(client, monkeypatch):
+    _login(client)
+    monkeypatch.setattr(dental_clinic, '_IMPORT_MAX_BYTES', 5)
+    r = client.post('/api/data/import-patients/preview',
+                    data=_csv_upload('First Name,Last Name\nAli,Hassan\n'),
+                    content_type='multipart/form-data')
+    assert r.status_code == 400
+
+
+def test_commit_rejects_bad_mapping_json(client):
+    _login(client)
+    data = {'file': (io.BytesIO(b'First Name,Last Name\nAli,Hassan\n'), 'p.csv'),
+            'date_format': 'DD/MM/YYYY', 'mapping': '{not valid json'}
+    r = client.post('/api/data/import-patients/commit', data=data,
+                    content_type='multipart/form-data')
+    assert r.status_code == 400

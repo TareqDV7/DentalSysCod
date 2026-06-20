@@ -4356,7 +4356,8 @@ def data_import_patients_commit():
                  row['medical_history']))
             imported += 1
         append_audit_log(cursor, 'import', 'patient', None,
-                         {'imported': imported, 'skipped': len(skipped_report)})
+                         {'imported': imported, 'skipped': len(skipped_report),
+                          'source': 'csv/xlsx import'})
         conn.commit()
     except Exception as exc:  # noqa: BLE001 — any failure must roll back the whole import
         conn.rollback()
