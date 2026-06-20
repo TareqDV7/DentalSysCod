@@ -114,3 +114,45 @@ def test_validate_rows_bad_date_becomes_problem():
     clean, problems = pi.validate_rows(rows, mapping, 'DD/MM/YYYY')
     assert clean == []
     assert 'date' in problems[0]['reason'].lower()
+
+
+def _clean(first, last, phone):
+    return {'first_name': first, 'last_name': last, 'phone': phone, 'row_number': 1}
+
+
+def test_flag_duplicates_within_file():
+    rows = [_clean('Ali', 'Hassan', '0501'), _clean('ali', 'hassan', '0501')]
+    out = pi.flag_duplicates(rows, set())
+    assert out[0]['is_duplicate'] is False
+    assert out[1]['is_duplicate'] is True
+
+
+def test_flag_duplicates_vs_existing():
+    idx = {pi._dup_key('Ali', 'Hassan', '0501')}
+    out = pi.flag_duplicates([_clean('Ali', 'Hassan', '0501')], idx)
+    assert out[0]['is_duplicate'] is True
+
+
+def test_flag_duplicates_name_match_different_phone_is_not_dup():
+    idx = {pi._dup_key('Ali', 'Hassan', '0501')}
+    out = pi.flag_duplicates([_clean('Ali', 'Hassan', '9999')], idx)
+    assert out[0]['is_duplicate'] is False
+
+
+def test_flag_duplicates_same_name_both_blank_phone_is_dup():
+    rows = [_clean('Ali', 'Hassan', ''), _clean('Ali', 'Hassan', '')]
+    out = pi.flag_duplicates(rows, set())
+    assert out[1]['is_duplicate'] is True
+
+
+def test_build_existing_index(tmp_path):
+    import sqlite3
+    db = tmp_path / 'x.db'
+    conn = sqlite3.connect(db)
+    conn.execute('CREATE TABLE patients (id INTEGER PRIMARY KEY, first_name TEXT, '
+                 'last_name TEXT, phone TEXT)')
+    conn.execute("INSERT INTO patients (first_name, last_name, phone) VALUES ('Ali','Hassan','050-1')")
+    conn.commit()
+    idx = pi.build_existing_index(conn.cursor())
+    assert pi._dup_key('Ali', 'Hassan', '0501') in idx   # phone digits-only
+    conn.close()

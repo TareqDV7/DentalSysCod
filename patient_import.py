@@ -184,3 +184,29 @@ def validate_rows(rows, mapping, date_format):
             record['row_number'] = i
             clean.append(record)
     return clean, problems
+
+
+def _digits(value: str) -> str:
+    return ''.join(ch for ch in (value or '') if ch.isdigit())
+
+
+def _dup_key(first: str, last: str, phone: str) -> tuple[str, str]:
+    return (patient_dedupe.normalize_name(first, last), _digits(phone))
+
+
+def build_existing_index(cursor) -> set[tuple[str, str]]:
+    cursor.execute('SELECT first_name, last_name, phone FROM patients')
+    return {_dup_key(r[0], r[1], r[2]) for r in cursor.fetchall()}
+
+
+def flag_duplicates(clean: list[dict], existing_index: set) -> list[dict]:
+    seen = set(existing_index)
+    out = []
+    for row in clean:
+        key = _dup_key(row.get('first_name', ''), row.get('last_name', ''), row.get('phone', ''))
+        is_dup = key in seen
+        marked = dict(row)
+        marked['is_duplicate'] = is_dup
+        out.append(marked)
+        seen.add(key)
+    return out
