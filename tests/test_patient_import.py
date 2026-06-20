@@ -46,3 +46,28 @@ def test_read_xlsx_coerces_numeric_and_dates_to_strings():
 def test_read_empty_file_raises():
     with pytest.raises(ValueError):
         pi.read_table('p.csv', b'')
+
+
+def test_guess_mapping_english():
+    m = pi.guess_mapping(['First Name', 'Last Name', 'Mobile No', 'DOB', 'E-mail'])
+    assert m['first_name'] == 'First Name'
+    assert m['last_name'] == 'Last Name'
+    assert m['phone'] == 'Mobile No'
+    assert m['date_of_birth'] == 'DOB'
+    assert m['email'] == 'E-mail'
+    assert m['address'] is None
+
+
+def test_guess_mapping_arabic():
+    m = pi.guess_mapping(['الاسم الأول', 'اسم العائلة', 'الجوال', 'العنوان'])
+    assert m['first_name'] == 'الاسم الأول'
+    assert m['last_name'] == 'اسم العائلة'
+    assert m['phone'] == 'الجوال'
+    assert m['address'] == 'العنوان'
+
+
+def test_guess_mapping_no_double_assign():
+    # Only one header; it should bind to first_name, not also last_name.
+    m = pi.guess_mapping(['Name'])
+    bound = [k for k, v in m.items() if v == 'Name']
+    assert len(bound) == 1

@@ -87,6 +87,58 @@ def _read_xlsx(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
     return headers, rows
 
 
+# Header synonyms per field (normalized: lowercased, non-alphanumeric stripped).
+# Arabic kept as-is (normalization only lowercases/space-collapses for it).
+_SYNONYMS = {
+    'first_name': ['first name', 'firstname', 'fname', 'given name', 'first',
+                   'name', 'patient name', 'full name',
+                   'الاسم الاول', 'الاسم الأول', 'الاسم', 'اسم المريض', 'الاسم الكامل'],
+    'last_name': ['last name', 'lastname', 'lname', 'surname', 'family name', 'last',
+                  'اسم العائلة', 'العائلة', 'اللقب', 'الكنية'],
+    'date_of_birth': ['date of birth', 'dob', 'birth date', 'birthdate', 'birthday',
+                      'تاريخ الميلاد', 'الميلاد', 'تاريخ الولادة'],
+    'phone': ['phone', 'phone number', 'mobile', 'mobile no', 'mobile number',
+              'tel', 'telephone', 'cell', 'contact', 'contact number',
+              'الهاتف', 'الجوال', 'الموبايل', 'رقم الهاتف', 'رقم الجوال', 'تليفون'],
+    'email': ['email', 'e-mail', 'email address', 'mail',
+              'البريد', 'البريد الالكتروني', 'الايميل', 'بريد الكتروني'],
+    'address': ['address', 'addr', 'location', 'home address', 'residence',
+                'العنوان', 'السكن', 'الموقع'],
+    'gender': ['gender', 'sex', 'الجنس', 'النوع'],
+    'medical_history': ['medical history', 'history', 'notes', 'medical notes',
+                        'remarks', 'comments', 'medical',
+                        'التاريخ الطبي', 'ملاحظات', 'الملاحظات', 'تاريخ مرضي', 'ملاحظات طبية'],
+}
+
+
+def _norm_header(h: str) -> str:
+    h = (h or '').strip().lower()
+    return ''.join(ch for ch in h if ch.isalnum() or ch.isspace() or '؀' <= ch <= 'ۿ')
+
+
+def guess_mapping(headers: list[str]) -> dict[str, str | None]:
+    norm = {h: ' '.join(_norm_header(h).split()) for h in headers}
+    used: set[str] = set()
+    mapping: dict[str, str | None] = {}
+    for field in IMPORT_FIELDS:
+        key = field['key']
+        chosen = None
+        for syn in _SYNONYMS[key]:
+            syn_n = ' '.join(_norm_header(syn).split())
+            for h in headers:
+                if h in used:
+                    continue
+                if norm[h] == syn_n:
+                    chosen = h
+                    break
+            if chosen:
+                break
+        if chosen:
+            used.add(chosen)
+        mapping[key] = chosen
+    return mapping
+
+
 def read_table(filename: str, data: bytes) -> tuple[list[str], list[dict[str, str]]]:
     if not data:
         raise ValueError('file is empty')
