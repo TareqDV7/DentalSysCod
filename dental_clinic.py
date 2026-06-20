@@ -4311,6 +4311,65 @@ def data_import_patients_preview():
     })
 
 
+@app.route('/api/data/import-patients/commit', methods=['POST'])
+def data_import_patients_commit():
+    """Re-parse + re-validate the file with the finalized mapping, then insert the
+    valid (non-skipped) rows in one transaction. Backup-first; full rollback on
+    unexpected failure. Desktop-only."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    headers, rows, err = _read_import_file()
+    if err:
+        return err
+    date_format = request.form.get('date_format') or 'DD/MM/YYYY'
+    import_duplicates = (request.form.get('import_duplicates') or '').lower() in ('1', 'true', 'yes', 'on')
+    supplied = request.form.get('mapping')
+    if supplied:
+        try:
+            mapping = json.loads(supplied)
+        except ValueError:
+            return jsonify({'error': 'Invalid mapping'}), 400
+    else:
+        mapping = patient_import.guess_mapping(headers)
+
+    clean, problems = patient_import.validate_rows(rows, mapping, date_format)
+    skipped_report = list(problems)
+
+    backups = run_database_backup()
+    backup_path = backups[0] if backups else None
+    conn = sqlite3.connect(str(DB_NAME))
+    cursor = conn.cursor()
+    try:
+        index = patient_import.build_existing_index(cursor)
+        flagged = patient_import.flag_duplicates(clean, index)
+        imported = 0
+        for row in flagged:
+            if row['is_duplicate'] and not import_duplicates:
+                skipped_report.append({'row_number': row['row_number'], 'reason': 'duplicate'})
+                continue
+            cursor.execute(
+                '''INSERT INTO patients (first_name, last_name, date_of_birth, phone,
+                                         email, address, gender, medical_history)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (row['first_name'], row['last_name'], row['date_of_birth'] or None,
+                 row['phone'], row['email'], row['address'], row['gender'],
+                 row['medical_history']))
+            imported += 1
+        append_audit_log(cursor, 'import', 'patient', None,
+                         {'imported': imported, 'skipped': len(skipped_report)})
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — any failure must roll back the whole import
+        conn.rollback()
+        app.logger.exception('Patient import failed')
+        return jsonify({'error': f'Import failed and was rolled back: {type(exc).__name__}: {exc}',
+                        'backup_path': backup_path}), 500
+    finally:
+        conn.close()
+    skipped_report.sort(key=lambda p: p['row_number'])
+    return jsonify({'success': True, 'imported': imported, 'skipped': len(skipped_report),
+                    'skipped_report': skipped_report, 'backup_path': backup_path})
+
+
 @app.route('/api/medical-images', methods=['GET', 'POST'])
 def medical_images():
     conn = sqlite3.connect(DB_NAME)
