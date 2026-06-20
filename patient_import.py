@@ -1,0 +1,96 @@
+"""Pure helpers for the bulk patient-import surface: parse CSV/.xlsx, auto-map
+columns to patient fields, validate rows, and flag duplicates. No Flask — every
+function takes bytes/rows and returns plain data; the caller owns the DB
+transaction. Mirrors db_import.py / patient_dedupe.py."""
+from __future__ import annotations
+
+import csv
+import datetime
+import io
+
+import patient_dedupe
+
+# Display order; required fields gate a row.
+IMPORT_FIELDS = [
+    {'key': 'first_name', 'required': True},
+    {'key': 'last_name', 'required': True},
+    {'key': 'date_of_birth', 'required': False},
+    {'key': 'phone', 'required': False},
+    {'key': 'email', 'required': False},
+    {'key': 'address', 'required': False},
+    {'key': 'gender', 'required': False},
+    {'key': 'medical_history', 'required': False},
+]
+
+DATE_FORMATS = {
+    'DD/MM/YYYY': '%d/%m/%Y',
+    'MM/DD/YYYY': '%m/%d/%Y',
+    'YYYY-MM-DD': '%Y-%m-%d',
+}
+
+
+def _cell_to_str(value) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.strftime('%Y-%m-%d')
+    return str(value).strip()
+
+
+def _read_csv(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
+    try:
+        text = data.decode('utf-8-sig')      # strips BOM if present
+    except UnicodeDecodeError:
+        text = data.decode('latin-1')
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=',\t;')
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(text), dialect)
+    all_rows = [r for r in reader if any((c or '').strip() for c in r)]
+    if not all_rows:
+        raise ValueError('file is empty')
+    headers = [(h or '').strip() for h in all_rows[0]]
+    rows = []
+    for raw in all_rows[1:]:
+        row = {}
+        for i, header in enumerate(headers):
+            row[header] = (raw[i] if i < len(raw) else '').strip()
+        rows.append(row)
+    return headers, rows
+
+
+def _read_xlsx(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
+        raise ValueError('file is empty')
+    headers = [_cell_to_str(c) for c in header_row]
+    rows = []
+    for raw in rows_iter:
+        if not any(_cell_to_str(c) for c in raw):
+            continue
+        row = {}
+        for i, header in enumerate(headers):
+            row[header] = _cell_to_str(raw[i]) if i < len(raw) else ''
+        rows.append(row)
+    wb.close()
+    return headers, rows
+
+
+def read_table(filename: str, data: bytes) -> tuple[list[str], list[dict[str, str]]]:
+    if not data:
+        raise ValueError('file is empty')
+    name = (filename or '').lower()
+    if name.endswith('.xlsx') or data[:4] == b'PK\x03\x04':
+        return _read_xlsx(data)
+    return _read_csv(data)
