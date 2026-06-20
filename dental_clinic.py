@@ -70,6 +70,22 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from markupsafe import escape
 
+# Werkzeug 3's default generate_password_hash method is scrypt
+# (scrypt:32768:8:1$...). scrypt needs OpenSSL scrypt support plus a ~32 MB
+# memory budget that PyInstaller-frozen binaries frequently can't satisfy, so a
+# scrypt-hashed admin account can silently fail to seed/verify in the packaged
+# .exe — surfacing as "admin/admin rejected on a brand-new install" while dev
+# and CI (full OpenSSL) stay green. Pin to pbkdf2:sha256: pure-hashlib, always
+# available, identical in dev and frozen builds. check_password_hash still
+# auto-detects the method from the stored prefix, so legacy scrypt hashes keep
+# verifying anywhere scrypt is available.
+PASSWORD_HASH_METHOD = 'pbkdf2:sha256'
+
+
+def hash_password(password):
+    """Hash a password with a frozen-safe method (see PASSWORD_HASH_METHOD)."""
+    return generate_password_hash(password, method=PASSWORD_HASH_METHOD)
+
 
 app = Flask(__name__)
 
@@ -1299,7 +1315,7 @@ def init_database():
             cursor.execute(
                 'INSERT INTO users (username, password_hash, display_name, must_change_password) '
                 'VALUES (?, ?, ?, ?)',
-                ('admin', generate_password_hash(default_pw), 'Administrator', must_change)
+                ('admin', hash_password(default_pw), 'Administrator', must_change)
             )
 
     conn.commit()
@@ -2136,7 +2152,7 @@ def change_password_page():
         return _fail('Choose a password different from the current one.')
     cursor.execute(
         'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
-        (generate_password_hash(new), user['id'])
+        (hash_password(new), user['id'])
     )
     conn.commit()
     conn.close()
@@ -2207,7 +2223,7 @@ def auth_change_password():
         conn.close()
         return jsonify({'error': 'Current password is incorrect.'}), 400
     cursor.execute('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
-                   (generate_password_hash(new), user['id']))
+                   (hash_password(new), user['id']))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
