@@ -434,13 +434,19 @@ def _resolve_offline_token(request_body=None):
     the cloud's /api/clinics/register gate, in precedence order:
       1. the /api/cloud/pair request body  (operator pasting it once)
       2. app_settings['cloud_offline_token']  (persisted from a prior pair)
-      3. env CLINIC_OFFLINE_TOKEN
+      3. app_settings['active_serial_token']  (the signed token stored at activation)
+      4. env CLINIC_OFFLINE_TOKEN
     Returns '' when none is configured. The cloud now requires a signed serial by
     default (CLINIC_REQUIRE_SIGNED_SERIAL=1), so an unsigned pairing request is
-    rejected unless the cloud operator has explicitly turned enforcement off.
-    This is the token issued by serial_generator.py (signed with the vendor's
-    Ed25519 private seed; the cloud verifies it with CLINIC_SERIAL_PUBLIC_KEY),
-    not the locally-signed offline license token."""
+    rejected with HTTP 403 unless the cloud operator has explicitly turned
+    enforcement off. This is the token issued by serial_generator.py (signed with
+    the vendor's Ed25519 private seed; the cloud verifies it with
+    CLINIC_SERIAL_PUBLIC_KEY), not the locally-signed offline license token.
+
+    Tier 3 (active_serial_token) is what makes the post-activation 'Enable cloud
+    backup' popup work: after an ONLINE activation only that key is set (no prior
+    pair, so no cloud_offline_token), and /api/cloud/pair must reuse it — matching
+    what /api/cloud/enable and the auto-pair worker already do."""
     body = request_body if isinstance(request_body, dict) else {}
     token = str(body.get('offline_token') or '').strip()
     if token:
@@ -449,6 +455,8 @@ def _resolve_offline_token(request_body=None):
         conn = sqlite3.connect(DB_NAME)
         cur = conn.cursor()
         token = str(read_app_setting(cur, 'cloud_offline_token', '') or '').strip()
+        if not token:
+            token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
         conn.close()
     except sqlite3.Error:
         token = ''
@@ -4104,6 +4112,52 @@ def data_merge():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# app_settings keys that identify THIS workstation/install rather than the
+# clinic's data: the device fingerprint, the activation (serial + signed token),
+# and the cloud pairing. A data replace overwrites the whole DB, so these are
+# snapshotted from the live DB and restored into the incoming one — otherwise
+# replacing data would silently de-activate the machine (the license gate would
+# re-show the activation popup) and drop the cloud link.
+_DEVICE_LOCAL_SETTINGS = (
+    'device_fingerprint',
+    'active_serial_number',
+    'active_serial_token',
+    'cloud_url',
+    'cloud_clinic_token',
+    'cloud_clinic_id',
+    'cloud_offline_token',
+)
+
+
+def _snapshot_device_settings(db_path):
+    """Read the device-local app_settings from db_path. Best-effort: returns the
+    non-empty ones as a dict, or {} on any error."""
+    out = {}
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        for key in _DEVICE_LOCAL_SETTINGS:
+            val = read_app_setting(cur, key, None)
+            if val is not None and str(val).strip() != '':
+                out[key] = val
+        conn.close()
+    except sqlite3.Error:
+        pass
+    return out
+
+
+def _restore_device_settings(db_path, snapshot):
+    """Write snapshotted device-local settings back into db_path's app_settings."""
+    if not snapshot:
+        return
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    for key, val in snapshot.items():
+        write_app_setting(cur, key, val)
+    conn.commit()
+    conn.close()
+
+
 @app.route('/api/data/replace', methods=['POST'])
 def data_replace():
     global _MAINTENANCE
@@ -4123,6 +4177,10 @@ def data_replace():
         _MAINTENANCE = True
         try:
             target = str(DB_NAME)
+            # This install's activation + cloud link belong to the workstation,
+            # not the data — capture them before the swap so replacing data never
+            # de-activates the machine.
+            preserved_settings = _snapshot_device_settings(target)
             # Release WAL sidecars on the live DB before overwriting.
             try:
                 c = sqlite3.connect(target)
@@ -4143,6 +4201,9 @@ def data_replace():
                 shutil.copytree(uploads_dir, str(UPLOAD_FOLDER))
             # Migrate the incoming DB forward to the current schema.
             init_database()
+            # Re-stamp this workstation's activation + pairing onto the new DB,
+            # overwriting whatever (blank) values the incoming DB carried.
+            _restore_device_settings(target, preserved_settings)
         except Exception as exc:  # noqa: BLE001
             app.logger.exception('Data replace failed')
             return jsonify({'error': f'Replace failed: {type(exc).__name__}: {exc}',
