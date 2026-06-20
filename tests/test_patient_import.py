@@ -71,3 +71,46 @@ def test_guess_mapping_no_double_assign():
     m = pi.guess_mapping(['Name'])
     bound = [k for k, v in m.items() if v == 'Name']
     assert len(bound) == 1
+
+
+_FIELDS_ALL = {f['key'] for f in pi.IMPORT_FIELDS}
+
+
+def test_parse_date_formats():
+    assert pi.parse_date('04/03/2020', 'DD/MM/YYYY') == '2020-03-04'
+    assert pi.parse_date('03/04/2020', 'MM/DD/YYYY') == '2020-03-04'
+    assert pi.parse_date('2020-03-04', 'YYYY-MM-DD') == '2020-03-04'
+    assert pi.parse_date('', 'DD/MM/YYYY') == ''
+    assert pi.parse_date('32/13/2020', 'DD/MM/YYYY') is None
+
+
+def test_validate_rows_clean():
+    rows = [{'F': 'Ali', 'L': 'Hassan', 'D': '04/03/2020', 'P': '0501'}]
+    mapping = {'first_name': 'F', 'last_name': 'L', 'date_of_birth': 'D', 'phone': 'P',
+               'email': None, 'address': None, 'gender': None, 'medical_history': None}
+    clean, problems = pi.validate_rows(rows, mapping, 'DD/MM/YYYY')
+    assert problems == []
+    assert clean[0]['first_name'] == 'Ali'
+    assert clean[0]['date_of_birth'] == '2020-03-04'
+    assert clean[0]['email'] == ''
+    assert clean[0]['row_number'] == 1
+    assert _FIELDS_ALL.issubset(clean[0].keys())
+
+
+def test_validate_rows_missing_required_becomes_problem():
+    rows = [{'F': '', 'L': 'Hassan'}]
+    mapping = {'first_name': 'F', 'last_name': 'L', 'date_of_birth': None, 'phone': None,
+               'email': None, 'address': None, 'gender': None, 'medical_history': None}
+    clean, problems = pi.validate_rows(rows, mapping, 'DD/MM/YYYY')
+    assert clean == []
+    assert problems[0]['row_number'] == 1
+    assert 'first name' in problems[0]['reason'].lower()
+
+
+def test_validate_rows_bad_date_becomes_problem():
+    rows = [{'F': 'Ali', 'L': 'Hassan', 'D': '99/99/9999'}]
+    mapping = {'first_name': 'F', 'last_name': 'L', 'date_of_birth': 'D', 'phone': None,
+               'email': None, 'address': None, 'gender': None, 'medical_history': None}
+    clean, problems = pi.validate_rows(rows, mapping, 'DD/MM/YYYY')
+    assert clean == []
+    assert 'date' in problems[0]['reason'].lower()

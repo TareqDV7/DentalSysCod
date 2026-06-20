@@ -146,3 +146,41 @@ def read_table(filename: str, data: bytes) -> tuple[list[str], list[dict[str, st
     if name.endswith('.xlsx') or data[:4] == b'PK\x03\x04':
         return _read_xlsx(data)
     return _read_csv(data)
+
+
+def parse_date(value: str, date_format: str) -> str | None:
+    value = (value or '').strip()
+    if not value:
+        return ''
+    fmt = DATE_FORMATS.get(date_format, DATE_FORMATS['DD/MM/YYYY'])
+    try:
+        return datetime.datetime.strptime(value[:10], fmt).strftime('%Y-%m-%d')
+    except ValueError:
+        return None
+
+
+def validate_rows(rows, mapping, date_format):
+    clean, problems = [], []
+    for i, raw in enumerate(rows, start=1):
+        record = {}
+        for field in IMPORT_FIELDS:
+            key = field['key']
+            header = mapping.get(key)
+            record[key] = (raw.get(header) or '').strip() if header else ''
+        reason = None
+        if not record['first_name']:
+            reason = 'missing first name'
+        elif not record['last_name']:
+            reason = 'missing last name'
+        else:
+            dob = parse_date(record['date_of_birth'], date_format)
+            if dob is None:
+                reason = f"unparseable date of birth: {record['date_of_birth']!r}"
+            else:
+                record['date_of_birth'] = dob
+        if reason:
+            problems.append({'row_number': i, 'reason': reason})
+        else:
+            record['row_number'] = i
+            clean.append(record)
+    return clean, problems
