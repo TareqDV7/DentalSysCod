@@ -1935,6 +1935,7 @@ from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE, FOR
 import db_import
 import db_merge
 import patient_dedupe
+import patient_import
 
 
 def _safe_next_url(target):
@@ -1954,7 +1955,9 @@ _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure
                         '/api/data/export-bundle', '/api/data/export-bundle-file',
                         '/api/data/merge', '/api/data/replace',
                         '/api/data/clear-catalogs',
-                        '/api/data/duplicate-patients', '/api/data/merge-patients'}
+                        '/api/data/duplicate-patients', '/api/data/merge-patients',
+                        '/api/data/import-patients/preview',
+                        '/api/data/import-patients/commit'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/',)
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
@@ -4233,6 +4236,79 @@ def data_merge_patients():
     finally:
         conn.close()
     return jsonify({'success': True, 'summary': summary, 'backup_path': backup_path})
+
+
+# Caps that bound import memory/time. See docs/superpowers/specs/2026-06-20-bulk-patient-csv-import-design.md.
+_IMPORT_MAX_BYTES = 10 * 1024 * 1024
+_IMPORT_MAX_ROWS = 20_000
+
+
+def _read_import_file():
+    """Resolve the uploaded import file to (headers, rows) or (None, None, error_response)."""
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return None, None, (jsonify({'error': 'No file uploaded'}), 400)
+    data = file.read()
+    if len(data) > _IMPORT_MAX_BYTES:
+        return None, None, (jsonify({'error': 'File too large (max 10 MB)'}), 400)
+    try:
+        headers, rows = patient_import.read_table(file.filename, data)
+    except ValueError as exc:
+        return None, None, (jsonify({'error': f'Could not read file: {exc}'}), 400)
+    if len(rows) > _IMPORT_MAX_ROWS:
+        return None, None, (jsonify({'error': 'Too many rows (max 20,000)'}), 400)
+    return headers, rows, None
+
+
+@app.route('/api/data/import-patients/preview', methods=['POST'])
+def data_import_patients_preview():
+    """Dry-run: parse + auto-map + validate + flag duplicates, no DB writes.
+    Desktop-only. The client re-sends the file (with finalized mapping) to commit."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    headers, rows, err = _read_import_file()
+    if err:
+        return err
+    date_format = request.form.get('date_format') or 'DD/MM/YYYY'
+    supplied = request.form.get('mapping')
+    if supplied:
+        try:
+            mapping = json.loads(supplied)
+        except ValueError:
+            return jsonify({'error': 'Invalid mapping'}), 400
+    else:
+        mapping = patient_import.guess_mapping(headers)
+
+    clean, problems = patient_import.validate_rows(rows, mapping, date_format)
+    conn = sqlite3.connect(str(DB_NAME))
+    try:
+        index = patient_import.build_existing_index(conn.cursor())
+    finally:
+        conn.close()
+    flagged = patient_import.flag_duplicates(clean, index)
+
+    preview = []
+    for row in flagged:
+        status = 'duplicate' if row['is_duplicate'] else 'valid'
+        values = {f['key']: row.get(f['key'], '') for f in patient_import.IMPORT_FIELDS}
+        preview.append({'row_number': row['row_number'], 'values': values, 'status': status})
+    for prob in problems:
+        preview.append({'row_number': prob['row_number'], 'values': {},
+                        'status': 'problem', 'reason': prob['reason']})
+    preview.sort(key=lambda p: p['row_number'])
+
+    dup_count = sum(1 for r in flagged if r['is_duplicate'])
+    return jsonify({
+        'headers': headers,
+        'fields': patient_import.IMPORT_FIELDS,
+        'date_formats': list(patient_import.DATE_FORMATS.keys()),
+        'suggested_mapping': mapping,
+        'date_format': date_format,
+        'rows_total': len(rows),
+        'counts': {'valid': len(flagged) - dup_count, 'duplicates': dup_count,
+                   'problems': len(problems)},
+        'preview': preview,
+    })
 
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])
