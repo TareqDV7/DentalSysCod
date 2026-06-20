@@ -48,6 +48,10 @@ COMMON_HIDDEN = [
     're',
     'os',
     'sys',
+    # Bulk patient import (.xlsx parsing). 'openpyxl.cell._writer' is a known
+    # PyInstaller miss that openpyxl imports lazily.
+    'openpyxl',
+    'openpyxl.cell._writer',
 ]
 
 # Data files bundled into both exes.
