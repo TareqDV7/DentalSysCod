@@ -6623,6 +6623,7 @@ HTML_TEMPLATE = '''
 
         // ── Bulk patient import ──────────────────────────────────────────────
         let _importFile = null;
+        let _importCounts = null;
 
         async function startPatientImport(input) {
           _importFile = input.files && input.files[0];
@@ -6646,6 +6647,7 @@ HTML_TEMPLATE = '''
             renderImportPreview(b);
           } catch (e) {
             panel.innerHTML = '';
+            panel.style.display = 'none';
             showToast((currentLanguage === 'ar' ? 'تعذّر قراءة الملف: ' : 'Could not read file: ') + (e.message || e), 'error');
           }
         }
@@ -6660,6 +6662,7 @@ HTML_TEMPLATE = '''
 
         function renderImportPreview(b) {
           const panel = document.getElementById('import-review-panel');
+          _importCounts = b.counts;
           const ar = currentLanguage === 'ar';
           const fieldLabel = (k) => ({
             first_name: ar ? 'الاسم الأول' : 'First name', last_name: ar ? 'اسم العائلة' : 'Last name',
@@ -6693,7 +6696,7 @@ HTML_TEMPLATE = '''
             <div class="import-controls">
               <label>${ar ? 'صيغة التاريخ' : 'Date format'}
                 <select id="import-date-format" onchange="onImportMappingChange()">${dfOpts}</select></label>
-              <label><input type="checkbox" id="import-dups" onchange="onImportMappingChange()">
+              <label><input type="checkbox" id="import-dups" onchange="onImportDupsToggle()">
                 ${ar ? 'استيراد المكرر أيضًا' : 'Import duplicates anyway'}</label>
             </div>
             <div class="import-summary">${ar
@@ -6703,15 +6706,23 @@ HTML_TEMPLATE = '''
               <table><thead><tr><th>#</th><th>${ar ? 'الاسم' : 'Name'}</th><th>${ar ? 'تفاصيل' : 'Detail'}</th><th></th></tr></thead>
               <tbody>${previewRows}</tbody></table></div>
             <div class="import-actions" style="margin-top:10px;display:flex;gap:8px;">
-              <button class="btn btn-primary" onclick="commitPatientImport()">${ar ? `استيراد ${c.valid} مريض` : `Import ${c.valid} patients`}</button>
+              <button class="btn btn-primary" id="import-commit-btn" onclick="commitPatientImport()">${ar ? `استيراد ${c.valid} مريض` : `Import ${c.valid} patients`}</button>
               <button class="btn" onclick="cancelPatientImport()">${ar ? 'إلغاء' : 'Cancel'}</button>
             </div>`;
-          panel.dataset.importDups = '';
         }
 
         function onImportMappingChange() {
           const dateFormat = document.getElementById('import-date-format').value;
           refreshImportPreview(_currentMappingFromUI(), dateFormat);
+        }
+
+        function onImportDupsToggle() {
+          if (!_importCounts) return;
+          const checked = document.getElementById('import-dups').checked;
+          const ar = currentLanguage === 'ar';
+          const n = checked ? (_importCounts.valid + _importCounts.duplicates) : _importCounts.valid;
+          const btn = document.getElementById('import-commit-btn');
+          if (btn) btn.textContent = ar ? `استيراد ${n} مريض` : `Import ${n} patients`;
         }
 
         function cancelPatientImport() {
