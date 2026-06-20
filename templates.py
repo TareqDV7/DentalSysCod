@@ -2098,6 +2098,15 @@ HTML_TEMPLATE = '''
             padding: 3px 9px; border-radius: 7px; cursor: pointer; transition: background 0.15s, color 0.15s;
         }
         .dup-patient__del:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+        .import-map-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; margin:8px 0; }
+        .import-map-row { display:flex; flex-direction:column; font-size:0.85em; }
+        .import-map-row select { padding:4px; }
+        .import-controls { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin:8px 0; font-size:0.88em; }
+        .import-summary { font-weight:600; margin:6px 0; }
+        .import-badge { padding:1px 7px; border-radius:10px; font-size:0.75em; }
+        .import-badge--valid { background:#dcfce7; color:#166534; }
+        .import-badge--duplicate { background:#fef9c3; color:#854d0e; }
+        .import-badge--problem { background:#fee2e2; color:#991b1b; }
     </style>
 </head>
 <body>
@@ -2964,9 +2973,12 @@ HTML_TEMPLATE = '''
                     <input type="file" id="replace-file" accept=".zip,.db" style="display:none" onchange="startDataImport('replace', this)">
                     <button class="btn btn-danger" type="button" onclick="clearCatalogs()" data-en="🧹 Clear catalogs" data-ar="🧹 إفراغ القوائم">🧹 Clear catalogs</button>
                     <button class="btn" type="button" onclick="findDuplicatePatients()" data-en="👥 Find duplicate patients" data-ar="👥 البحث عن مكرر">👥 Find duplicate patients</button>
+                    <label class="btn" for="import-patients-file" style="cursor:pointer;" data-en="📥 Import patients" data-ar="📥 استيراد المرضى">📥 Import patients</label>
+                    <input type="file" id="import-patients-file" accept=".csv,.xlsx" style="display:none" onchange="startPatientImport(this)">
                   </div>
                   <div id="data-tools-result" class="muted" style="font-size:0.88em;min-height:1.2em;"></div>
                   <div id="dup-review-panel" class="dup-review" style="display:none;"></div>
+                  <div id="import-review-panel" class="dup-review" style="display:none;"></div>
                 </div>
                 <details class="form-panel" id="audit-log-panel" style="margin-bottom:18px;">
                   <summary>🧾 <span data-i18n="audit_log">Audit Log</span></summary>
@@ -6606,6 +6618,137 @@ HTML_TEMPLATE = '''
             if (typeof loadPatients === 'function') loadPatients();
           } catch (e) {
             showToast(t('dup_delete_failed', 'Delete failed: ') + (e.message || e), 'error');
+          }
+        }
+
+        // ── Bulk patient import ──────────────────────────────────────────────
+        let _importFile = null;
+
+        async function startPatientImport(input) {
+          _importFile = input.files && input.files[0];
+          input.value = '';
+          if (!_importFile) return;
+          await refreshImportPreview(null, 'DD/MM/YYYY');
+        }
+
+        async function refreshImportPreview(mapping, dateFormat) {
+          const panel = document.getElementById('import-review-panel');
+          panel.style.display = '';
+          panel.innerHTML = `<div class="muted">${t('importing_preview', 'Reading file…')}</div>`;
+          const fd = new FormData();
+          fd.append('file', _importFile);
+          fd.append('date_format', dateFormat);
+          if (mapping) fd.append('mapping', JSON.stringify(mapping));
+          try {
+            const r = await fetch('/api/data/import-patients/preview', { method: 'POST', body: fd });
+            const b = await r.json();
+            if (!r.ok) throw new Error(b.error || 'failed');
+            renderImportPreview(b);
+          } catch (e) {
+            panel.innerHTML = '';
+            showToast((currentLanguage === 'ar' ? 'تعذّر قراءة الملف: ' : 'Could not read file: ') + (e.message || e), 'error');
+          }
+        }
+
+        function _currentMappingFromUI() {
+          const mapping = {};
+          document.querySelectorAll('.import-map-select').forEach(sel => {
+            mapping[sel.dataset.field] = sel.value || null;
+          });
+          return mapping;
+        }
+
+        function renderImportPreview(b) {
+          const panel = document.getElementById('import-review-panel');
+          const ar = currentLanguage === 'ar';
+          const fieldLabel = (k) => ({
+            first_name: ar ? 'الاسم الأول' : 'First name', last_name: ar ? 'اسم العائلة' : 'Last name',
+            date_of_birth: ar ? 'تاريخ الميلاد' : 'Date of birth', phone: ar ? 'الهاتف' : 'Phone',
+            email: ar ? 'البريد' : 'Email', address: ar ? 'العنوان' : 'Address',
+            gender: ar ? 'الجنس' : 'Gender', medical_history: ar ? 'التاريخ الطبي' : 'Medical history'
+          }[k] || k);
+          const opt = (h, sel) => `<option value="${escapeHtml(h)}" ${h === sel ? 'selected' : ''}>${escapeHtml(h)}</option>`;
+          const noneLbl = ar ? '— لا يُستورد —' : '— not imported —';
+
+          const mapRows = b.fields.map(f => {
+            const sel = b.suggested_mapping[f.key] || '';
+            const opts = `<option value="">${noneLbl}</option>` + b.headers.map(h => opt(h, sel)).join('');
+            const req = f.required ? ' *' : '';
+            return `<div class="import-map-row"><label>${fieldLabel(f.key)}${req}</label>
+              <select class="import-map-select" data-field="${f.key}" onchange="onImportMappingChange()">${opts}</select></div>`;
+          }).join('');
+
+          const dfOpts = b.date_formats.map(d => `<option value="${d}" ${d === b.date_format ? 'selected' : ''}>${d}</option>`).join('');
+          const c = b.counts;
+          const badge = (s) => `<span class="import-badge import-badge--${s}">${s === 'valid' ? (ar ? 'صالح' : 'valid') : s === 'duplicate' ? (ar ? 'مكرر' : 'duplicate') : (ar ? 'مشكلة' : 'problem')}</span>`;
+          const previewRows = b.preview.slice(0, 200).map(p => {
+            const name = `${escapeHtml(p.values.first_name || '')} ${escapeHtml(p.values.last_name || '')}`.trim();
+            const detail = p.status === 'problem' ? escapeHtml(p.reason || '') : escapeHtml(p.values.phone || '');
+            return `<tr><td>${p.row_number}</td><td>${name || '—'}</td><td>${detail}</td><td>${badge(p.status)}</td></tr>`;
+          }).join('');
+
+          panel.innerHTML = `
+            <h4>${ar ? 'مطابقة الأعمدة' : 'Match columns'}</h4>
+            <div class="import-map-grid">${mapRows}</div>
+            <div class="import-controls">
+              <label>${ar ? 'صيغة التاريخ' : 'Date format'}
+                <select id="import-date-format" onchange="onImportMappingChange()">${dfOpts}</select></label>
+              <label><input type="checkbox" id="import-dups" onchange="onImportMappingChange()">
+                ${ar ? 'استيراد المكرر أيضًا' : 'Import duplicates anyway'}</label>
+            </div>
+            <div class="import-summary">${ar
+              ? `${c.valid} للاستيراد · ${c.problems} مشكلة · ${c.duplicates} مكرر`
+              : `${c.valid} to import · ${c.problems} problems · ${c.duplicates} duplicates`}</div>
+            <div class="table-container" style="max-height:280px;overflow:auto;">
+              <table><thead><tr><th>#</th><th>${ar ? 'الاسم' : 'Name'}</th><th>${ar ? 'تفاصيل' : 'Detail'}</th><th></th></tr></thead>
+              <tbody>${previewRows}</tbody></table></div>
+            <div class="import-actions" style="margin-top:10px;display:flex;gap:8px;">
+              <button class="btn btn-primary" onclick="commitPatientImport()">${ar ? `استيراد ${c.valid} مريض` : `Import ${c.valid} patients`}</button>
+              <button class="btn" onclick="cancelPatientImport()">${ar ? 'إلغاء' : 'Cancel'}</button>
+            </div>`;
+          panel.dataset.importDups = '';
+        }
+
+        function onImportMappingChange() {
+          const dateFormat = document.getElementById('import-date-format').value;
+          refreshImportPreview(_currentMappingFromUI(), dateFormat);
+        }
+
+        function cancelPatientImport() {
+          _importFile = null;
+          const panel = document.getElementById('import-review-panel');
+          panel.style.display = 'none';
+          panel.innerHTML = '';
+        }
+
+        async function commitPatientImport() {
+          if (!_importFile) return;
+          const ar = currentLanguage === 'ar';
+          const fd = new FormData();
+          fd.append('file', _importFile);
+          fd.append('date_format', document.getElementById('import-date-format').value);
+          fd.append('mapping', JSON.stringify(_currentMappingFromUI()));
+          fd.append('import_duplicates', document.getElementById('import-dups').checked ? 'true' : 'false');
+          try {
+            const r = await fetch('/api/data/import-patients/commit', { method: 'POST', body: fd });
+            const b = await r.json();
+            if (!r.ok) throw new Error(b.error || 'failed');
+            showToast(ar ? `تم استيراد ${b.imported} مريض، وتخطّي ${b.skipped}` : `Imported ${b.imported} patients, skipped ${b.skipped}`, 'success');
+            const panel = document.getElementById('import-review-panel');
+            if (b.skipped_report && b.skipped_report.length) {
+              panel.innerHTML = `<h4>${ar ? 'صفوف تم تخطّيها' : 'Skipped rows'}</h4>
+                <div class="table-container" style="max-height:240px;overflow:auto;">
+                <table><thead><tr><th>#</th><th>${ar ? 'السبب' : 'Reason'}</th></tr></thead><tbody>
+                ${b.skipped_report.map(s => `<tr><td>${s.row_number}</td><td>${escapeHtml(s.reason)}</td></tr>`).join('')}
+                </tbody></table></div>
+                <button class="btn" onclick="cancelPatientImport()" style="margin-top:8px;">${ar ? 'إغلاق' : 'Close'}</button>`;
+            } else {
+              cancelPatientImport();
+            }
+            _importFile = null;
+            if (typeof loadAuditLogs === 'function') loadAuditLogs();
+          } catch (e) {
+            showToast((ar ? 'فشل الاستيراد: ' : 'Import failed: ') + (e.message || e), 'error');
           }
         }
 
