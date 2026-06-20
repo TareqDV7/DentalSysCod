@@ -69,6 +69,41 @@ def test_enable_uses_active_serial_and_baked_url(local, monkeypatch):
     conn.close()
 
 
+def test_pair_falls_back_to_active_serial_token(local, monkeypatch):
+    """Regression for the post-activation 'Enable secure cloud backup' popup.
+
+    That popup calls /api/cloud/pair with only {serial_number} — no offline_token.
+    After an ONLINE activation only `active_serial_token` is stored (never
+    `cloud_offline_token`), so the pair must fall back to it. Otherwise the request
+    reaches the cloud's signed-serial gate unsigned and is rejected with HTTP 403
+    (surfaced to the user as 'Cloud registration failed (HTTP 403)')."""
+    sink = {}
+    _stub_cloud_ok(monkeypatch, sink)
+    monkeypatch.delenv('CLINIC_OFFLINE_TOKEN', raising=False)
+    _set_setting('active_serial_number', 'DENTAL-C-PAIR2')
+    _set_setting('active_serial_token', 'signed.activation.token')
+    r = local.post('/api/cloud/pair',
+                   json={'cloud_url': 'https://c.example.test',
+                         'serial_number': 'DENTAL-C-PAIR2'})
+    assert r.status_code == 200
+    assert sink['body']['offline_token'] == 'signed.activation.token'
+
+
+def test_resolve_offline_token_precedence(local, monkeypatch):
+    """body > cloud_offline_token > active_serial_token > env."""
+    monkeypatch.delenv('CLINIC_OFFLINE_TOKEN', raising=False)
+    # Nothing configured anywhere → empty.
+    assert dental_clinic._resolve_offline_token({}) == ''
+    # active_serial_token is the lowest DB tier.
+    _set_setting('active_serial_token', 'from-activation')
+    assert dental_clinic._resolve_offline_token({}) == 'from-activation'
+    # A prior pair's cloud_offline_token wins over the activation token.
+    _set_setting('cloud_offline_token', 'from-prior-pair')
+    assert dental_clinic._resolve_offline_token({}) == 'from-prior-pair'
+    # An explicit body token wins over everything.
+    assert dental_clinic._resolve_offline_token({'offline_token': 'from-body'}) == 'from-body'
+
+
 def _license_count():
     conn = sqlite3.connect(dental_clinic.DB_NAME)
     n = conn.execute("SELECT COUNT(*) FROM licenses").fetchone()[0]

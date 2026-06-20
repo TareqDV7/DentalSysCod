@@ -192,6 +192,52 @@ def test_replace_swaps_database(client, tmp_path):
     assert names == {'Imported'}              # local data replaced, not merged
 
 
+def test_replace_preserves_device_activation(client, tmp_path):
+    """Replacing the clinic's *data* must not de-activate this *workstation*.
+
+    The device identity (serial + token + fingerprint) and cloud pairing live in
+    app_settings. The swap overwrites the whole DB, so without preservation the
+    incoming DB's blank activation rows would land here and the license gate would
+    re-show the activation popup. Regression for that report.
+    """
+    _login(client)
+    # This install is activated + paired to the cloud.
+    preserved = {
+        'active_serial_number': 'DENTAL-MINE-0001',
+        'active_serial_token': 'signed.mine.token',
+        'device_fingerprint': 'fp-mine-123',
+        'cloud_url': 'https://cloud.example.test',
+        'cloud_clinic_token': 'clinic-tok-mine',
+        'cloud_clinic_id': '7',
+    }
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    for k, v in preserved.items():
+        conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
+    conn.commit()
+    conn.close()
+
+    src = tmp_path / 'replacement.db'
+    _make_source_db(src)   # a different clinic's DB; its activation rows are blank
+    with open(src, 'rb') as fh:
+        data = {'file': (io.BytesIO(fh.read()), 'replacement.db')}
+        resp = client.post('/api/data/replace', data=data, content_type='multipart/form-data')
+    assert resp.status_code == 200
+
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    names = {r[0] for r in conn.execute('SELECT first_name FROM patients').fetchall()}
+
+    def _get(key):
+        row = conn.execute('SELECT value FROM app_settings WHERE key=?', (key,)).fetchone()
+        return row[0] if row else None
+
+    survived = {k: _get(k) for k in preserved}
+    conn.close()
+
+    assert names == {'Imported'}        # the data really was replaced...
+    assert survived == preserved        # ...but this install's activation + pairing stayed
+
+
 def test_replace_disabled_on_cloud(client, monkeypatch):
     _login(client)
     monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)

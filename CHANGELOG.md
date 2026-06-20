@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-20
+
+- **Two post-activation cloud/licensing fixes (desktop).** Both surfaced right after a fresh online activation; cloud node and mobile are unaffected. Full pytest suite green (+3 regression tests).
+  - **"Enable secure cloud backup" popup failed with a 403.** The post-activation popup calls `POST /api/cloud/pair` with only `{serial_number}` (no `offline_token`). `_resolve_offline_token()` looked in the request body → `app_settings['cloud_offline_token']` → env, but never `active_serial_token`. After an *online* activation only `active_serial_token` is stored (no prior pair, so `cloud_offline_token` is empty), so the pair reached the cloud's mandatory Ed25519 signed-serial gate (`CLINIC_REQUIRE_SIGNED_SERIAL=1`) unsigned and was rejected — surfaced as *"Cloud registration failed (HTTP 403)"*. `_resolve_offline_token()` now falls back to `active_serial_token` (new tier 3, before the env var), matching what `/api/cloud/enable` and the auto-pair worker already do.
+  - **Replacing the database re-showed the activation popup.** `POST /api/data/replace` overwrites the whole DB with `shutil.copy2`, including the `app_settings` table where this workstation's activation (`active_serial_number` / `active_serial_token` / `device_fingerprint`) and cloud pairing live — so the swap silently de-activated the machine and the license gate re-prompted. Activation belongs to the *install*, not the *data*: replace now snapshots the device-local settings before the swap and restores them after `init_database()`, so importing/restoring data leaves the activation and cloud link intact.
+
 ## 2026-06-14 — v1.1.1
 
 - **Desktop UX fixes + data-tools / merge robustness (`DentaCare-Setup.exe` v1.1.1).** A maintenance release on top of v1.1.0 that fixes four issues clinic operators hit in the desktop window, tidies the Reports tab, and removes a dangerous bulk action. Cloud and mobile are unaffected. Shipped via PR #5; 556 tests / 59 suites passing.
