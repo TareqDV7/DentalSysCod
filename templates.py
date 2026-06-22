@@ -3053,9 +3053,19 @@ HTML_TEMPLATE = '''
                         <input type="tel" name="phone" id="ap-phone">
                     </div>
                 </div>
-                <div class="form-group">
-                    <label data-i18n="email">Email</label>
-                    <input type="email" name="email">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="gender">Gender</label>
+                        <select name="gender" id="ap-gender">
+                            <option value="">--</option>
+                            <option value="male" data-i18n="male">Male</option>
+                            <option value="female" data-i18n="female">Female</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="email">Email</label>
+                        <input type="email" name="email">
+                    </div>
                 </div>
                 <div class="form-group">
                     <label data-i18n="address">Address</label>
@@ -7144,7 +7154,7 @@ HTML_TEMPLATE = '''
                             <div class="info-field"><label>${t('patient_name','Name')}</label><span>${patient.first_name} ${patient.last_name}</span></div>
                             <div class="info-field"><label>${t('phone','Phone')}</label><span>${patient.phone || '—'}</span></div>
                             ${profile.birth_date_display ? `<div class="info-field"><label>${t('date_of_birth','Date of Birth')}</label><span>${profile.birth_date_display}</span></div>` : ''}
-                            ${patient.gender ? `<div class="info-field"><label>${t('gender','Gender')}</label><span>${patient.gender}</span></div>` : ''}
+                            ${patient.gender ? `<div class="info-field"><label>${t('gender','Gender')}</label><span>${t(patient.gender, patient.gender)}</span></div>` : ''}
                             ${patient.address ? `<div class="info-field"><label>${t('address','Address')}</label><span>${patient.address}</span></div>` : ''}
                         </div>
                         ${patient.medical_history ? `<div style="margin-top:14px;"><div class="info-field"><label>${t('medical_history','Medical History')}</label><span style="display:block;white-space:pre-wrap;font-weight:400;line-height:1.6;">${patient.medical_history}</span></div></div>` : ''}

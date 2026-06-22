@@ -2404,10 +2404,11 @@ def patients():
                 return jsonify({'error': 'Invalid date of birth format. Use DD/MM/YYYY.'}), 400
             birth_date = parsed_date
         cursor.execute('''
-            INSERT INTO patients (first_name, last_name, date_of_birth, phone, email, address, medical_history)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO patients (first_name, last_name, date_of_birth, phone, email, address, gender, medical_history)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (data['first_name'], data['last_name'], birth_date,
-              data.get('phone'), data.get('email'), data.get('address'), data.get('medical_history')))
+              data.get('phone'), data.get('email'), data.get('address'),
+              data.get('gender') or '', data.get('medical_history')))
         conn.commit()
         new_id = cursor.lastrowid
         cursor.execute('SELECT * FROM patients WHERE id = ?', (new_id,))
