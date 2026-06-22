@@ -86,6 +86,10 @@ backend_ed25519_key.json
 # Cloud deploy secrets (host-only, never committed)
 cloud/.env
 
+# Runtime handshake file — the service publishes its bound port here for the
+# desktop window to read. Regenerated on every launch; never source.
+service.port
+
 # Logs
 *.log
 

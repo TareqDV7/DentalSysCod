@@ -26,7 +26,7 @@ from PIL import Image
 import pystray
 
 from window.data_dir import resolve_data_dir
-from window.health_check import wait_for_service
+from window.service_port import service_url as _published_service_url
 from window.single_instance import SingleInstanceGuard
 from window.window_state import (
     WindowState,
@@ -37,8 +37,17 @@ from window.window_state import (
 )
 
 
-SERVICE_URL = 'http://127.0.0.1:5000'
-HEALTHZ_URL = f'{SERVICE_URL}/healthz'
+def _service_url() -> str:
+    """Base URL of the local service, re-read from the published port file on
+    each call so the window follows the service even when it had to bind a
+    non-default port (e.g. 5000 was already taken by another local app)."""
+    return _published_service_url()
+
+
+def _healthz_url() -> str:
+    return f'{_service_url()}/healthz'
+
+
 BOOT_GRACE_SECONDS = 10.0
 ASSETS_DIR = Path(__file__).resolve().parent / 'window' / 'assets'
 WINDOW_STATE_PATH = (
@@ -109,16 +118,20 @@ class WindowApi:
 
 def _resolve_initial_url() -> tuple[str, bool]:
     """Return (url, booted_on_offline). booted_on_offline=True means the
-    caller should spawn a background poll to swap to SERVICE_URL once the
-    service comes up."""
-    if wait_for_service(HEALTHZ_URL, timeout=BOOT_GRACE_SECONDS):
-        return SERVICE_URL, False
+    caller should spawn a background poll to swap to the service once it comes
+    up. The port is re-read each attempt so a service that publishes its port a
+    moment after the window starts is still picked up within the grace window."""
+    deadline = time.monotonic() + BOOT_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        if _service_is_healthy():
+            return _service_url(), False
+        time.sleep(0.25)
     return (ASSETS_DIR / 'offline.html').as_uri(), True
 
 
 def _service_is_healthy() -> bool:
     try:
-        with urllib.request.urlopen(HEALTHZ_URL, timeout=1.0) as r:
+        with urllib.request.urlopen(_healthz_url(), timeout=1.0) as r:
             return r.status == 200
     except (urllib.error.URLError, ConnectionError, OSError, TimeoutError):
         return False
@@ -200,7 +213,7 @@ class App:
         while not self._quit_requested:
             if _service_is_healthy():
                 try:
-                    self.window.load_url(SERVICE_URL)
+                    self.window.load_url(_service_url())
                 except Exception:
                     pass
                 return

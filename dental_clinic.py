@@ -122,6 +122,13 @@ if not os.environ.get('CLINIC_CLOUD_MODE', '0').strip().lower() in ('1', 'true',
 # - Set send-file cache age to 0 to avoid stale static assets.
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+# Give the session cookie a product-specific name so the local clinic server
+# never shares its login cookie with another Flask app on the same machine.
+# Browser cookies are NOT scoped by port, so two localhost apps both using the
+# Flask default name ('session') would clobber each other's sessions — opening
+# one could appear to land you in the other. A distinct name keeps DentaCare's
+# session isolated from any other local tool.
+app.config['SESSION_COOKIE_NAME'] = 'dentacare_session'
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('CLINIC_MAX_UPLOAD_MB', '1024')) * 1024 * 1024
 
 
@@ -197,6 +204,7 @@ def _add_no_cache_headers(response):
 # Where the database / uploads / backups live. See window/data_dir.py for the
 # resolution rules (env var > frozen-exe ProgramData > source script dir).
 from window.data_dir import resolve_data_dir
+from window.service_port import SERVICE_PORT_FILENAME
 _DATA_DIR = resolve_data_dir()
 _BUNDLE_DIR = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -4158,6 +4166,97 @@ def _restore_device_settings(db_path, snapshot):
     conn.close()
 
 
+def _snapshot_device_license(db_path):
+    """Snapshot THIS install's *activation* rows — the cached `licenses` record
+    and its `license_devices` rows for the active serial.
+
+    The license gate (`_license_gate_state`) reads the cached row in the
+    `licenses` table, not just the serial in app_settings. A data replace
+    overwrites that whole table, so preserving only the app_settings serial is
+    not enough: the gate would find no record and re-show the activation popup,
+    and re-activating then trips the cloud device cap. Best-effort: returns {}
+    when not activated, the tables are absent (older DB), or on any error."""
+    out = {}
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        serial = read_app_setting(cur, 'active_serial_number', None)
+        if not serial or not str(serial).strip():
+            conn.close()
+            return {}
+        serial = str(serial).strip()
+        lic = None
+        try:
+            lic = cur.execute(
+                'SELECT clinic_name, plan_name, status, max_devices, expires_at, '
+                'grace_until, activated_at, created_at, updated_at '
+                'FROM licenses WHERE serial_number = ?', (serial,)).fetchone()
+        except sqlite3.Error:
+            lic = None
+        devices = []
+        try:
+            devices = cur.execute(
+                'SELECT device_id, device_name, first_seen_at, last_seen_at, is_active '
+                'FROM license_devices WHERE serial_number = ?', (serial,)).fetchall()
+        except sqlite3.Error:
+            devices = []
+        conn.close()
+        if lic is None and not devices:
+            return {}
+        out = {
+            'serial': serial,
+            'license': dict(lic) if lic is not None else None,
+            'devices': [dict(d) for d in devices],
+        }
+    except sqlite3.Error:
+        return {}
+    return out
+
+
+def _restore_device_license(db_path, snapshot):
+    """Re-stamp the snapshotted activation rows onto db_path so a data replace
+    never de-activates this workstation. Idempotent (upsert on the same keys)."""
+    if not snapshot or not snapshot.get('serial'):
+        return
+    serial = snapshot['serial']
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    lic = snapshot.get('license')
+    if lic:
+        cur.execute('''
+            INSERT INTO licenses (
+                serial_number, clinic_name, plan_name, status, max_devices,
+                expires_at, grace_until, activated_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(serial_number) DO UPDATE SET
+                clinic_name = excluded.clinic_name,
+                plan_name   = excluded.plan_name,
+                status      = excluded.status,
+                max_devices = excluded.max_devices,
+                expires_at  = excluded.expires_at,
+                grace_until = excluded.grace_until,
+                activated_at = excluded.activated_at,
+                updated_at  = excluded.updated_at
+        ''', (serial, lic.get('clinic_name'), lic.get('plan_name'), lic.get('status'),
+              lic.get('max_devices'), lic.get('expires_at'), lic.get('grace_until'),
+              lic.get('activated_at'), lic.get('created_at'), lic.get('updated_at')))
+    for d in snapshot.get('devices', []):
+        cur.execute('''
+            INSERT INTO license_devices (
+                serial_number, device_id, device_name,
+                first_seen_at, last_seen_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(serial_number, device_id) DO UPDATE SET
+                device_name = excluded.device_name,
+                last_seen_at = excluded.last_seen_at,
+                is_active = excluded.is_active
+        ''', (serial, d.get('device_id'), d.get('device_name'),
+              d.get('first_seen_at'), d.get('last_seen_at'), d.get('is_active')))
+    conn.commit()
+    conn.close()
+
+
 @app.route('/api/data/replace', methods=['POST'])
 def data_replace():
     global _MAINTENANCE
@@ -4179,8 +4278,11 @@ def data_replace():
             target = str(DB_NAME)
             # This install's activation + cloud link belong to the workstation,
             # not the data — capture them before the swap so replacing data never
-            # de-activates the machine.
+            # de-activates the machine. The serial + token live in app_settings;
+            # the cached license *record* the gate reads lives in the licenses /
+            # license_devices tables, so both are snapshotted.
             preserved_settings = _snapshot_device_settings(target)
+            preserved_license = _snapshot_device_license(target)
             # Release WAL sidecars on the live DB before overwriting.
             try:
                 c = sqlite3.connect(target)
@@ -4204,6 +4306,7 @@ def data_replace():
             # Re-stamp this workstation's activation + pairing onto the new DB,
             # overwriting whatever (blank) values the incoming DB carried.
             _restore_device_settings(target, preserved_settings)
+            _restore_device_license(target, preserved_license)
         except Exception as exc:  # noqa: BLE001
             app.logger.exception('Data replace failed')
             return jsonify({'error': f'Replace failed: {type(exc).__name__}: {exc}',
@@ -6557,6 +6660,61 @@ def patient_credit(patient_id):
     return jsonify({'balance': balance, 'transactions': []})
 
 
+# ── Service port handshake (service side) ───────────────────────────────────
+# The desktop window and this service are separate processes. A hard-coded 5000
+# collides when another local Flask app (or a second DentaCare copy) already
+# owns it — the service would crash on bind, or the window would point at 5000
+# and show the *other* app. So the service uses its preferred port when free,
+# falls back to any free port otherwise, and writes the chosen port to a small
+# file in the shared data dir for the window to read (see window/service_port.py).
+
+def _port_is_available(host, port):
+    """True if (host, port) can be bound right now. No SO_REUSEADDR, so a port
+    another process is already using is correctly reported as unavailable."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, int(port)))
+            return True
+        except OSError:
+            return False
+
+
+def _find_free_port(host):
+    """Ask the OS for an unused port on `host` (ephemeral bind to port 0)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+def _resolve_service_port(host, preferred):
+    """Return `preferred` when it is free on `host`, otherwise a free port. Lets
+    the app start cleanly next to another local server instead of crashing on a
+    bind conflict (or the window showing the other server's UI)."""
+    try:
+        preferred = int(preferred)
+    except (TypeError, ValueError):
+        preferred = 5000
+    if _port_is_available(host, preferred):
+        return preferred
+    return _find_free_port(host)
+
+
+def _service_port_file():
+    return _DATA_DIR / SERVICE_PORT_FILENAME
+
+
+def _write_service_port_file(port):
+    """Publish the bound port for the window launcher. Best-effort: a failure
+    here just means the window falls back to its default port."""
+    try:
+        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _service_port_file().write_text(str(int(port)), encoding='utf-8')
+    except (OSError, ValueError):
+        pass
+
+
 def open_browser(port=5000):
     """Open browser after a short delay"""
     import time
@@ -7614,10 +7772,21 @@ if __name__ == '__main__':
 
     host = os.environ.get('CLINIC_HOST', '127.0.0.1')
     port_raw = os.environ.get('CLINIC_PORT', '5000')
-    try:
-        port = int(port_raw)
-    except ValueError:
-        port = 5000
+    if CLOUD_MODE:
+        # The cloud node sits behind Caddy on a fixed port — keep the configured
+        # value exactly (a surprise port shift would break the reverse proxy).
+        try:
+            port = int(port_raw)
+        except ValueError:
+            port = 5000
+    else:
+        # Local clinic server: use the preferred port when it's free, otherwise
+        # fall back to a free one so we never collide with another local app, and
+        # publish the chosen port so the desktop window points at the right server.
+        port = _resolve_service_port(host, port_raw)
+        _write_service_port_file(port)
+        if str(port_raw).strip() not in ('', str(port)):
+            print(f'ℹ️  Port {port_raw} was busy — using {port} instead.')
 
     # Default to production mode when frozen (exe); debug mode in dev.
     _default_debug = '0' if getattr(sys, 'frozen', False) else '1'

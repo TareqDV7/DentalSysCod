@@ -238,6 +238,52 @@ def test_replace_preserves_device_activation(client, tmp_path):
     assert survived == preserved        # ...but this install's activation + pairing stayed
 
 
+def test_replace_preserves_cached_license_record(client, tmp_path):
+    """The license *gate* reads the cached row in the `licenses` table, not just
+    the serial in app_settings. A data replace overwrites that whole table, so
+    without preserving the active serial's license row (and its device) the gate
+    sees no record and re-shows the activation popup — and re-activating then
+    trips the cloud device cap ("max devices"). Regression for that report.
+    """
+    _login(client)
+    serial = 'DENTAL-MINE-0002'
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    for k, v in (('active_serial_number', serial),
+                 ('active_serial_token', 'signed.mine.token')):
+        conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
+    conn.execute(
+        "INSERT INTO licenses (serial_number, clinic_name, plan_name, status, "
+        "max_devices, expires_at, grace_until) "
+        "VALUES (?, 'My Clinic', 'pro', 'active', 3, '2999-01-01', '2999-02-01')",
+        (serial,))
+    conn.execute(
+        "INSERT INTO license_devices (serial_number, device_id, device_name, is_active) "
+        "VALUES (?, 'fp-mine-123', 'clinic-server', 1)", (serial,))
+    conn.commit()
+    conn.close()
+
+    src = tmp_path / 'replacement.db'
+    _make_source_db(src)   # a different clinic's DB; no licenses row for our serial
+    with open(src, 'rb') as fh:
+        data = {'file': (io.BytesIO(fh.read()), 'replacement.db')}
+        resp = client.post('/api/data/replace', data=data, content_type='multipart/form-data')
+    assert resp.status_code == 200
+
+    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    state = dental_clinic._license_gate_state(conn.cursor())
+    record = dental_clinic.fetch_license_record(conn.cursor(), serial)
+    device = conn.execute(
+        "SELECT device_name FROM license_devices "
+        "WHERE serial_number=? AND device_id='fp-mine-123'", (serial,)).fetchone()
+    conn.close()
+
+    assert state['state'] == 'active'        # gate still sees this install as activated
+    assert state['licensed'] is True
+    assert record is not None and record['status'] == 'active'
+    assert device is not None and device[0] == 'clinic-server'
+
+
 def test_replace_disabled_on_cloud(client, monkeypatch):
     _login(client)
     monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
