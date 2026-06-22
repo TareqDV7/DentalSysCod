@@ -6266,10 +6266,20 @@ HTML_TEMPLATE = '''
             `;
         }
 
-        function printBillingInvoice(billingId) {
+        async function printBillingInvoice(billingId) {
+            // Print through the same in-document iframe the statement uses. The
+            // packaged desktop app runs in WebView2, where window.open() is handed
+            // to the OS shell ("what app should open this?") instead of printing —
+            // so fetch the invoice HTML (embed=1 suppresses its own print call) and
+            // let openPrintWindow drive the dialog.
             const printLang = getInvoicePrintLanguage();
             const lang = printLang === 'ar' ? 'ar' : 'en';
-            window.open(`/invoice/${billingId}?lang=${lang}`, '_blank');
+            try {
+                const html = await fetch(`/invoice/${billingId}?lang=${lang}&embed=1`).then(r => r.text());
+                openPrintWindow(html);
+            } catch (e) {
+                showToast(t('invoice_preview_unavailable', 'No invoice data to print yet.'), 'warning');
+            }
         }
 
         function printInvoicePayload(payload) {
@@ -6314,6 +6324,17 @@ HTML_TEMPLATE = '''
 
         function printCurrentPatientInvoice() {
             printInvoicePayload(currentPatientInvoicePayload);
+        }
+
+        // Single-session invoice: print just one treatment-sheet row. Reuses the
+        // same WebView2-safe iframe print path as the full statement.
+        async function printSingleSession(patientId, sessionId) {
+            try {
+                const payload = await fetch(`/api/patients/${patientId}/invoice-summary?session_id=${sessionId}`).then(r => r.json());
+                printInvoicePayload(payload);
+            } catch (e) {
+                showToast(t('invoice_preview_unavailable', 'No invoice data to print yet.'), 'warning');
+            }
         }
 
         async function printPatientInvoiceById(patientId) {
@@ -7632,6 +7653,7 @@ HTML_TEMPLATE = '''
                     <td class="numeric-cell">₪${parseFloat(item.remaining_amount || 0).toFixed(2)}</td>
                     <td>${item.notes || ''}</td>
                     <td>
+                        <button class="btn btn-success btn-icon" onclick="printSingleSession(${item.patient_id},${item.id})" title="${t('print_invoice','Print Invoice')}">🖨</button>
                         <button class="btn btn-warning btn-icon" onclick="deleteFollowup(${item.patient_id},${item.id})">🗑</button>
                         <button class="btn btn-primary btn-icon" onclick="editFollowupById(${item.patient_id},${item.id})">✏</button>
                     </td>

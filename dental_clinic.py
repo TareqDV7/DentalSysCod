@@ -2801,6 +2801,11 @@ def patient_followups(patient_id):
     discount = as_float(data.get('discount'))
     payment = as_float(data.get('payment'))
     lab_expense = as_float(data.get('lab_expense'))
+    # A discount can never exceed the price it applies to (keeps the line's net
+    # charge non-negative; see the billing endpoint for the same guard).
+    if discount > price:
+        conn.close()
+        return jsonify({'error': 'Discount cannot exceed the price'}), 400
     # Clinic profit is the net the clinic actually earns: price minus the discount
     # given to the patient, minus the lab cost. (Payment only moves the balance.)
     clinic_profit = price - discount - lab_expense
@@ -3773,8 +3778,14 @@ def patient_invoice_summary(patient_id):
     _recompute_followup_balances(cursor, patient_id)
     conn.commit()
 
+    # session_id narrows the statement to ONE session (a single-session invoice);
+    # start_date/end_date give a date range; none of them gives the full history.
+    session_id = request.args.get('session_id')
     conditions = ['patient_id = ?', 'COALESCE(is_deleted, 0) = 0']
     params = [patient_id]
+    if session_id:
+        conditions.append('id = ?')
+        params.append(session_id)
     if start_date:
         conditions.append('date(followup_date) >= ?')
         params.append(start_date)
@@ -3801,6 +3812,10 @@ def patient_invoice_summary(patient_id):
         it['remaining_amount'] = float(it.get('remaining_amount') or 0)
         # Net amount the patient owes for this line (price minus the discount given).
         it['net_due'] = round(it['price'] - it['discount'], 2)
+        if session_id:
+            # A single-session invoice shows the session's OWN balance
+            # (price − discount − payment), not the cumulative running-ledger value.
+            it['remaining_amount'] = round(it['price'] - it['discount'] - it['payment'], 2)
         items.append(it)
 
     cursor.execute(f'''
@@ -4871,6 +4886,12 @@ def billing():
         if paid_amount < 0:
             conn.close()
             return jsonify({'error': 'Paid amount cannot be negative'}), 400
+        # A discount can never exceed the charge it applies to — allowing it would
+        # make the line's net charge negative, which the invoice clamps to 0 while
+        # the unified ledger subtracts the raw negative, manufacturing phantom credit.
+        if discount > subtotal:
+            conn.close()
+            return jsonify({'error': 'Discount cannot exceed the charge'}), 400
         # A billing entry must do something: a charge, a payment, or both. A
         # payment-only receipt (subtotal 0, paid > 0) draws down the patient's
         # balance; an all-zero entry is meaningless.
@@ -4994,6 +5015,13 @@ def billing_invoice(billing_id):
     }
     lbl = labels.get(lang, labels['en'])
     currency = '₪'
+    # When rendered inside the in-document print iframe (embed=1), the SPA drives
+    # the print dialog itself — emitting our own window.print() here would fire it
+    # twice. Standalone browser tabs (no embed) keep the self-print behavior.
+    # (Built as a separate string, not an inline f-string conditional, to avoid
+    # braces-in-string-in-replacement-field — a syntax error on Python < 3.12.)
+    embed = request.args.get('embed') == '1'
+    auto_print = '' if embed else '<script>window.onload = function() { window.print(); }</script>'
 
     logo_path = _BUNDLE_DIR / 'DentaCare.PNG'
     logo_src = '/logo'
@@ -5054,7 +5082,7 @@ def billing_invoice(billing_id):
   <tr><th>{lbl["paid"]}</th><td>{amt_cell(b.get("paid_amount"), b.get("paid_amount_expr"))}</td></tr>
   <tr class="total-row"><th>{lbl["balance"]}</th><td>{currency} {float(b.get("balance_due") or 0):.2f}</td></tr>
 </table>
-<script>window.onload = function() {{ window.print(); }}</script>
+{auto_print}
 </body>
 </html>'''
     return html
