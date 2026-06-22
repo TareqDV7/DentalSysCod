@@ -3093,7 +3093,7 @@ def appointments():
                    p.first_name || ' ' || p.last_name as patient_name
             FROM appointments a
             JOIN patients p ON a.patient_id = p.id
-            WHERE a.status = 'scheduled'
+            WHERE a.status IN ('scheduled', 'confirmed')
               AND datetime(?) < datetime(a.appointment_date, '+' || a.duration || ' minutes')
               AND datetime(?, '+' || ? || ' minutes') > datetime(a.appointment_date)
             ORDER BY a.appointment_date ASC
