@@ -2591,7 +2591,7 @@ HTML_TEMPLATE = '''
                 <div class="sub-tabs" id="reports-sub-tabs">
                     <button class="sub-tab active" onclick="switchReportsSubTab('weekly', this)" data-i18n="weekly_tab">Weekly</button>
                     <button class="sub-tab" onclick="switchReportsSubTab('monthly', this)" data-i18n="monthly_tab">Monthly</button>
-                    <button class="sub-tab" onclick="switchReportsSubTab('lab', this)" data-i18n="lab_tab">Lab</button>
+                    <button class="sub-tab" onclick="switchReportsSubTab('lab', this)" data-i18n="custom_range_tab">Custom Range</button>
                 </div>
 
                 <div id="reports-subtab-weekly" class="sub-tab-content active">
@@ -2630,7 +2630,7 @@ HTML_TEMPLATE = '''
                         </div>
                     </div>
                     <div class="toolbar-row" style="margin-top:0;">
-                        <button class="btn btn-primary" onclick="loadLabReport()" data-i18n="run_lab_report">Run Lab Report</button>
+                        <button class="btn btn-primary" onclick="loadLabReport()" data-i18n="run_custom_report">Run Report</button>
                     </div>
 
                     <!-- Procedure Catalog moved to Administration tab -->
@@ -3436,7 +3436,7 @@ HTML_TEMPLATE = '''
                 financial_management: 'Financial Management',
                 weekly_tab: 'Weekly',
                 monthly_tab: 'Monthly',
-                lab_tab: 'Lab',
+                custom_range_tab: 'Custom Range',
                 weekly_reports: 'Weekly',
                 monthly_reports: 'Monthly',
                 lab_reports: 'Lab',
@@ -3464,7 +3464,7 @@ HTML_TEMPLATE = '''
                 appointments_summary: 'Track upcoming, confirmed, and completed visits.',
                 month: 'Month',
                 run_monthly_report: 'Run Monthly Report',
-                run_lab_report: 'Run Lab Report',
+                run_custom_report: 'Run Report',
                 print_invoice: 'Print Invoice',
                 print_language: 'Print Language',
                 print_language_current: 'Current App Language',
@@ -3857,7 +3857,7 @@ HTML_TEMPLATE = '''
                 financial_management: 'الإدارة المالية',
                 weekly_tab: 'أسبوعي',
                 monthly_tab: 'شهري',
-                lab_tab: 'المعمل',
+                custom_range_tab: 'فترة مخصصة',
                 weekly_reports: 'أسبوعي',
                 monthly_reports: 'شهري',
                 lab_reports: 'المعمل',
@@ -3885,7 +3885,7 @@ HTML_TEMPLATE = '''
                 appointments_summary: 'تتبع المواعيد القادمة والمؤكدة والمكتملة.',
                 month: 'الشهر',
                 run_monthly_report: 'تشغيل التقرير الشهري',
-                run_lab_report: 'تشغيل تقرير المعمل',
+                run_custom_report: 'تشغيل التقرير',
                 print_invoice: 'طباعة فاتورة',
                 print_language: 'لغة الطباعة',
                 print_language_current: 'نفس لغة التطبيق',
@@ -6148,15 +6148,45 @@ HTML_TEMPLATE = '''
         }
 
         function openPrintWindow(html) {
-            const printWindow = window.open('', '_blank', 'width=900,height=700');
-            if (!printWindow) return;
-            printWindow.document.write(html);
-            printWindow.document.close();
-            printWindow.focus();
-            const imgs = Array.from(printWindow.document.images);
-            if (!imgs.length) { printWindow.print(); return; }
+            // Print via an in-document hidden iframe rather than window.open().
+            // The packaged desktop app runs inside WebView2, where window.open()
+            // is handed to the OS shell — Windows then asks "what app should open
+            // this file?" instead of opening a real popup, so printing appears
+            // broken. A same-document iframe stays in-process, so
+            // iframe.contentWindow.print() shows the print dialog reliably in
+            // both the embedded WebView and an ordinary browser tab. The frame is
+            // left in the DOM (hidden) until the next print so we never tear down
+            // its document while the print dialog is still open.
+            const existing = document.getElementById('__print_frame__');
+            if (existing) existing.remove();
+            const frame = document.createElement('iframe');
+            frame.id = '__print_frame__';
+            frame.setAttribute('aria-hidden', 'true');
+            frame.style.position = 'fixed';
+            frame.style.right = '0';
+            frame.style.bottom = '0';
+            frame.style.width = '0';
+            frame.style.height = '0';
+            frame.style.border = '0';
+            frame.style.visibility = 'hidden';
+            document.body.appendChild(frame);
+
+            const doc = frame.contentWindow.document;
+            doc.open();
+            doc.write(html);
+            doc.close();
+
+            const doPrint = () => {
+                try {
+                    frame.contentWindow.focus();
+                    frame.contentWindow.print();
+                } catch (e) { /* printing unavailable in this host; nothing to do */ }
+            };
+
+            const imgs = Array.from(doc.images);
+            if (!imgs.length) { setTimeout(doPrint, 50); return; }
             let pending = imgs.length;
-            const tryPrint = () => { if (--pending === 0) printWindow.print(); };
+            const tryPrint = () => { if (--pending === 0) setTimeout(doPrint, 50); };
             imgs.forEach(img => {
                 if (img.complete) tryPrint();
                 else { img.onload = tryPrint; img.onerror = tryPrint; }
