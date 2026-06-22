@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-22
+
+- **Four local-server fixes (desktop).** Surfaced after running a second local clinic system on the same machine. Cloud node and mobile are unaffected. Full pytest suite green (+10 tests); frozen-exe boot smoke verified. Shipped via PR #17; a fresh `DentaCare-Setup.exe` (v1.1.1) was rebuilt.
+  - **Replacing the database re-showed the activation popup, then re-activating hit "max devices".** The prior fix preserved the activation *settings* (`active_serial_number` / `active_serial_token` / cloud pairing) across `POST /api/data/replace`, but the license **gate** (`_license_gate_state`) decides "activated" by reading the cached row in the `licenses` table — which a replace overwrites along with the rest of the DB. With no record, the gate re-prompted, and re-activating counted a fresh device against the cloud cap. Replace now also snapshots/restores the active serial's `licenses` row and its `license_devices` rows (`_snapshot_device_license` / `_restore_device_license`), so the workstation stays activated across a data swap.
+  - **Opening DentaCare could show another local app.** The service hard-coded port 5000 and the desktop window hard-coded `http://127.0.0.1:5000`, so whichever local Flask app bound 5000 first owned it — opening DentaCare next to another local system showed the *other* app. The service now uses its preferred port when free, otherwise an OS-assigned free port, and publishes the chosen port to `<data dir>/service.port`; the window reads that file (`window/service_port.py`) and always points at the right server. The session cookie was also renamed to `dentacare_session` because localhost cookies are not port-scoped, so two local apps sharing Flask's default `session` name would otherwise clobber each other's logins. Cloud node keeps its fixed Caddy port.
+  - **Print Invoice failed with "you need another app to open this file".** `openPrintWindow()` used `window.open()`, which WebView2 (the packaged app) hands to the OS shell instead of opening a real popup. Reworked to print via an in-document hidden iframe (`iframe.contentWindow.print()`), which stays in-process and prints reliably in both WebView2 and a browser.
+  - **Reports: the mislabeled "Lab" sub-tab is now "Custom Range" (EN/AR).** It was never a lab feature — it is a generic from/to date-range report. No behaviour change; lab-expense data is unaffected (still in the Reports "Lab Expenses" card, the Procedure Catalog's Default Lab Expense / Requires Lab, and each treatment line).
+
 ## 2026-06-20
 
 - **Two post-activation cloud/licensing fixes (desktop).** Both surfaced right after a fresh online activation; cloud node and mobile are unaffected. Full pytest suite green (+3 regression tests).
