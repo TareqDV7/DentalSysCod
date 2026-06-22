@@ -1982,7 +1982,7 @@ def _safe_next_url(target):
 # Browser-facing endpoints that require a logged-in staff session. The data/sync
 # REST API and mobile/license/pairing endpoints are intentionally left open so the
 # offline-first mobile app keeps working unchanged.
-_AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure',
+_AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/backup-file', '/api/bt/status', '/api/bt/configure',
                         '/api/cloud/pairing-qr',
                         '/api/data/export-bundle', '/api/data/export-bundle-file',
                         '/api/data/merge', '/api/data/replace',
@@ -4003,6 +4003,21 @@ def delete_holiday(holiday_id):
 def backup_database():
     backup_name = f"dental_clinic_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     return send_file(DB_NAME, as_attachment=True, download_name=backup_name)
+
+
+@app.route('/api/backup-file', methods=['POST'])
+def backup_database_file():
+    """Desktop-shell backup. The embedded WebView2 window can't surface a browser
+    download — a navigation to GET /api/backup silently does nothing — so write a
+    consistent on-disk backup and hand the path back for the shell to reveal in
+    Explorer (mirrors /api/data/export-bundle-file). Plain browsers keep using
+    the streamed GET /api/backup attachment."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    backups = run_database_backup()
+    if not backups:
+        return jsonify({'error': 'Could not create the backup.'}), 500
+    return jsonify({'success': True, 'path': backups[0]})
 
 
 @app.route('/api/data/export-bundle')

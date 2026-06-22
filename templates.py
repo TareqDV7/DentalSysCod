@@ -6467,6 +6467,23 @@ HTML_TEMPLATE = '''
         }
 
         async function downloadBackup() {
+            // Desktop shell: WebView2 can't surface a browser download (a
+            // navigation to /api/backup silently does nothing), so the server
+            // writes the backup to disk and the shell reveals it in Explorer.
+            // Plain browsers stream the .db download straight to the client.
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.open_path) {
+                showToast((currentLanguage === 'ar') ? 'جارٍ إنشاء النسخة الاحتياطية…' : 'Creating backup…', 'info');
+                try {
+                    const r = await fetch('/api/backup-file', { method: 'POST' });
+                    const b = await r.json();
+                    if (!r.ok || !b.success) throw new Error(b.error || 'failed');
+                    showToast(((currentLanguage === 'ar') ? 'تم حفظ النسخة الاحتياطية: ' : 'Backup saved: ') + b.path, 'success');
+                    try { window.pywebview.api.open_path(b.path); } catch (_) {}
+                } catch (e) {
+                    showToast(((currentLanguage === 'ar') ? 'فشل النسخ الاحتياطي: ' : 'Backup failed: ') + (e.message || e), 'error');
+                }
+                return;
+            }
             window.location.href = '/api/backup';
         }
 
