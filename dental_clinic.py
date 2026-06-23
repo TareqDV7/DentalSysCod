@@ -531,6 +531,9 @@ SYNC_TABLES = [
     'treatments',
     'treatment_plans',
     'treatment_procedures',
+    'inventory_items',
+    'procedure_materials',
+    'stock_movements',
     'patient_followups',
     'expenses',
     'billing',
@@ -864,6 +867,57 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            name_ar TEXT,
+            category TEXT,
+            base_unit TEXT NOT NULL DEFAULT 'piece',
+            pack_unit TEXT,
+            pack_size REAL NOT NULL DEFAULT 1,
+            quantity REAL NOT NULL DEFAULT 0,
+            cost_per_unit REAL NOT NULL DEFAULT 0,
+            low_stock_threshold REAL NOT NULL DEFAULT 0,
+            reorder_qty REAL,
+            supplier TEXT,
+            location TEXT,
+            track_expiry INTEGER NOT NULL DEFAULT 0,
+            earliest_expiry TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS procedure_materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            procedure_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            default_qty REAL NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(procedure_id, item_id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            change_qty REAL NOT NULL,
+            reason TEXT NOT NULL,
+            unit_cost REAL,
+            source_type TEXT,
+            source_id INTEGER,
+            expiry_date TEXT,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_stock_mv_item ON stock_movements(item_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_stock_mv_source ON stock_movements(source_type, source_id)')
+    # Future column additions to these tables go through ensure_table_column(...).
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tooth_conditions (
