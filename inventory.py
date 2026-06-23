@@ -44,6 +44,7 @@ def post_movement(cursor, item_id: int, change_qty: float, reason: str, *,
     Atomically (within the caller's transaction): insert the ledger row, update
     the cached quantity, recompute weighted-average on restock, refresh
     earliest_expiry, and return low/negative-stock flags.
+    The cursor's connection must read its own uncommitted writes (true for sqlite3); the caller owns the transaction and commit.
     """
     if reason not in VALID_REASONS:
         raise ValueError(f'invalid reason: {reason!r}')

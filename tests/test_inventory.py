@@ -44,12 +44,14 @@ def _new_item(conn, **kw):
     qs = ','.join('?' for _ in cols)
     cur = conn.execute(f'INSERT INTO inventory_items ({keys}) VALUES ({qs})',
                        tuple(cols.values()))
+    conn.commit()
     return cur.lastrowid
 
 
 def test_post_movement_updates_cache_and_ledger_match(conn):
     item = _new_item(conn)
-    inventory.post_movement(conn.cursor(), item, 30, 'restock', unit_cost=2.0)
+    res = inventory.post_movement(conn.cursor(), item, 30, 'restock', unit_cost=2.0)
+    assert isinstance(res['movement_id'], int) and res['movement_id'] > 0
     inventory.post_movement(conn.cursor(), item, -4, 'consumption')
     row = conn.execute('SELECT quantity FROM inventory_items WHERE id=?', (item,)).fetchone()
     assert row['quantity'] == 26
