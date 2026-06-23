@@ -19,6 +19,7 @@ import threading
 import time
 import webbrowser
 import json
+import logging
 import re
 import secrets
 import uuid
@@ -1982,7 +1983,7 @@ def _safe_next_url(target):
 # Browser-facing endpoints that require a logged-in staff session. The data/sync
 # REST API and mobile/license/pairing endpoints are intentionally left open so the
 # offline-first mobile app keeps working unchanged.
-_AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/bt/status', '/api/bt/configure',
+_AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/backup-file', '/api/bt/status', '/api/bt/configure',
                         '/api/cloud/pairing-qr',
                         '/api/data/export-bundle', '/api/data/export-bundle-file',
                         '/api/data/merge', '/api/data/replace',
@@ -2404,10 +2405,11 @@ def patients():
                 return jsonify({'error': 'Invalid date of birth format. Use DD/MM/YYYY.'}), 400
             birth_date = parsed_date
         cursor.execute('''
-            INSERT INTO patients (first_name, last_name, date_of_birth, phone, email, address, medical_history)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO patients (first_name, last_name, date_of_birth, phone, email, address, gender, medical_history)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (data['first_name'], data['last_name'], birth_date,
-              data.get('phone'), data.get('email'), data.get('address'), data.get('medical_history')))
+              data.get('phone'), data.get('email'), data.get('address'),
+              data.get('gender') or '', data.get('medical_history')))
         conn.commit()
         new_id = cursor.lastrowid
         cursor.execute('SELECT * FROM patients WHERE id = ?', (new_id,))
@@ -2800,6 +2802,11 @@ def patient_followups(patient_id):
     discount = as_float(data.get('discount'))
     payment = as_float(data.get('payment'))
     lab_expense = as_float(data.get('lab_expense'))
+    # A discount can never exceed the price it applies to (keeps the line's net
+    # charge non-negative; see the billing endpoint for the same guard).
+    if discount > price:
+        conn.close()
+        return jsonify({'error': 'Discount cannot exceed the price'}), 400
     # Clinic profit is the net the clinic actually earns: price minus the discount
     # given to the patient, minus the lab cost. (Payment only moves the balance.)
     clinic_profit = price - discount - lab_expense
@@ -3086,7 +3093,7 @@ def appointments():
                    p.first_name || ' ' || p.last_name as patient_name
             FROM appointments a
             JOIN patients p ON a.patient_id = p.id
-            WHERE a.status = 'scheduled'
+            WHERE a.status IN ('scheduled', 'confirmed')
               AND datetime(?) < datetime(a.appointment_date, '+' || a.duration || ' minutes')
               AND datetime(?, '+' || ? || ' minutes') > datetime(a.appointment_date)
             ORDER BY a.appointment_date ASC
@@ -3772,8 +3779,14 @@ def patient_invoice_summary(patient_id):
     _recompute_followup_balances(cursor, patient_id)
     conn.commit()
 
+    # session_id narrows the statement to ONE session (a single-session invoice);
+    # start_date/end_date give a date range; none of them gives the full history.
+    session_id = request.args.get('session_id')
     conditions = ['patient_id = ?', 'COALESCE(is_deleted, 0) = 0']
     params = [patient_id]
+    if session_id:
+        conditions.append('id = ?')
+        params.append(session_id)
     if start_date:
         conditions.append('date(followup_date) >= ?')
         params.append(start_date)
@@ -3800,6 +3813,10 @@ def patient_invoice_summary(patient_id):
         it['remaining_amount'] = float(it.get('remaining_amount') or 0)
         # Net amount the patient owes for this line (price minus the discount given).
         it['net_due'] = round(it['price'] - it['discount'], 2)
+        if session_id:
+            # A single-session invoice shows the session's OWN balance
+            # (price − discount − payment), not the cumulative running-ledger value.
+            it['remaining_amount'] = round(it['price'] - it['discount'] - it['payment'], 2)
         items.append(it)
 
     cursor.execute(f'''
@@ -4003,6 +4020,21 @@ def delete_holiday(holiday_id):
 def backup_database():
     backup_name = f"dental_clinic_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     return send_file(DB_NAME, as_attachment=True, download_name=backup_name)
+
+
+@app.route('/api/backup-file', methods=['POST'])
+def backup_database_file():
+    """Desktop-shell backup. The embedded WebView2 window can't surface a browser
+    download — a navigation to GET /api/backup silently does nothing — so write a
+    consistent on-disk backup and hand the path back for the shell to reveal in
+    Explorer (mirrors /api/data/export-bundle-file). Plain browsers keep using
+    the streamed GET /api/backup attachment."""
+    if CLOUD_MODE:
+        return jsonify({'error': 'Not available on the cloud node'}), 404
+    backups = run_database_backup()
+    if not backups:
+        return jsonify({'error': 'Could not create the backup.'}), 500
+    return jsonify({'success': True, 'path': backups[0]})
 
 
 @app.route('/api/data/export-bundle')
@@ -4855,6 +4887,12 @@ def billing():
         if paid_amount < 0:
             conn.close()
             return jsonify({'error': 'Paid amount cannot be negative'}), 400
+        # A discount can never exceed the charge it applies to — allowing it would
+        # make the line's net charge negative, which the invoice clamps to 0 while
+        # the unified ledger subtracts the raw negative, manufacturing phantom credit.
+        if discount > subtotal:
+            conn.close()
+            return jsonify({'error': 'Discount cannot exceed the charge'}), 400
         # A billing entry must do something: a charge, a payment, or both. A
         # payment-only receipt (subtotal 0, paid > 0) draws down the patient's
         # balance; an all-zero entry is meaningless.
@@ -4978,6 +5016,13 @@ def billing_invoice(billing_id):
     }
     lbl = labels.get(lang, labels['en'])
     currency = '₪'
+    # When rendered inside the in-document print iframe (embed=1), the SPA drives
+    # the print dialog itself — emitting our own window.print() here would fire it
+    # twice. Standalone browser tabs (no embed) keep the self-print behavior.
+    # (Built as a separate string, not an inline f-string conditional, to avoid
+    # braces-in-string-in-replacement-field — a syntax error on Python < 3.12.)
+    embed = request.args.get('embed') == '1'
+    auto_print = '' if embed else '<script>window.onload = function() { window.print(); }</script>'
 
     logo_path = _BUNDLE_DIR / 'DentaCare.PNG'
     logo_src = '/logo'
@@ -5038,7 +5083,7 @@ def billing_invoice(billing_id):
   <tr><th>{lbl["paid"]}</th><td>{amt_cell(b.get("paid_amount"), b.get("paid_amount_expr"))}</td></tr>
   <tr class="total-row"><th>{lbl["balance"]}</th><td>{currency} {float(b.get("balance_due") or 0):.2f}</td></tr>
 </table>
-<script>window.onload = function() {{ window.print(); }}</script>
+{auto_print}
 </body>
 </html>'''
     return html

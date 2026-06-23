@@ -3053,9 +3053,19 @@ HTML_TEMPLATE = '''
                         <input type="tel" name="phone" id="ap-phone">
                     </div>
                 </div>
-                <div class="form-group">
-                    <label data-i18n="email">Email</label>
-                    <input type="email" name="email">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="gender">Gender</label>
+                        <select name="gender" id="ap-gender">
+                            <option value="">--</option>
+                            <option value="male" data-i18n="male">Male</option>
+                            <option value="female" data-i18n="female">Female</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="email">Email</label>
+                        <input type="email" name="email">
+                    </div>
                 </div>
                 <div class="form-group">
                     <label data-i18n="address">Address</label>
@@ -6256,10 +6266,20 @@ HTML_TEMPLATE = '''
             `;
         }
 
-        function printBillingInvoice(billingId) {
+        async function printBillingInvoice(billingId) {
+            // Print through the same in-document iframe the statement uses. The
+            // packaged desktop app runs in WebView2, where window.open() is handed
+            // to the OS shell ("what app should open this?") instead of printing —
+            // so fetch the invoice HTML (embed=1 suppresses its own print call) and
+            // let openPrintWindow drive the dialog.
             const printLang = getInvoicePrintLanguage();
             const lang = printLang === 'ar' ? 'ar' : 'en';
-            window.open(`/invoice/${billingId}?lang=${lang}`, '_blank');
+            try {
+                const html = await fetch(`/invoice/${billingId}?lang=${lang}&embed=1`).then(r => r.text());
+                openPrintWindow(html);
+            } catch (e) {
+                showToast(t('invoice_preview_unavailable', 'No invoice data to print yet.'), 'warning');
+            }
         }
 
         function printInvoicePayload(payload) {
@@ -6304,6 +6324,17 @@ HTML_TEMPLATE = '''
 
         function printCurrentPatientInvoice() {
             printInvoicePayload(currentPatientInvoicePayload);
+        }
+
+        // Single-session invoice: print just one treatment-sheet row. Reuses the
+        // same WebView2-safe iframe print path as the full statement.
+        async function printSingleSession(patientId, sessionId) {
+            try {
+                const payload = await fetch(`/api/patients/${patientId}/invoice-summary?session_id=${sessionId}`).then(r => r.json());
+                printInvoicePayload(payload);
+            } catch (e) {
+                showToast(t('invoice_preview_unavailable', 'No invoice data to print yet.'), 'warning');
+            }
         }
 
         async function printPatientInvoiceById(patientId) {
@@ -6467,6 +6498,23 @@ HTML_TEMPLATE = '''
         }
 
         async function downloadBackup() {
+            // Desktop shell: WebView2 can't surface a browser download (a
+            // navigation to /api/backup silently does nothing), so the server
+            // writes the backup to disk and the shell reveals it in Explorer.
+            // Plain browsers stream the .db download straight to the client.
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.open_path) {
+                showToast((currentLanguage === 'ar') ? 'جارٍ إنشاء النسخة الاحتياطية…' : 'Creating backup…', 'info');
+                try {
+                    const r = await fetch('/api/backup-file', { method: 'POST' });
+                    const b = await r.json();
+                    if (!r.ok || !b.success) throw new Error(b.error || 'failed');
+                    showToast(((currentLanguage === 'ar') ? 'تم حفظ النسخة الاحتياطية: ' : 'Backup saved: ') + b.path, 'success');
+                    try { window.pywebview.api.open_path(b.path); } catch (_) {}
+                } catch (e) {
+                    showToast(((currentLanguage === 'ar') ? 'فشل النسخ الاحتياطي: ' : 'Backup failed: ') + (e.message || e), 'error');
+                }
+                return;
+            }
             window.location.href = '/api/backup';
         }
 
@@ -7127,7 +7175,7 @@ HTML_TEMPLATE = '''
                             <div class="info-field"><label>${t('patient_name','Name')}</label><span>${patient.first_name} ${patient.last_name}</span></div>
                             <div class="info-field"><label>${t('phone','Phone')}</label><span>${patient.phone || '—'}</span></div>
                             ${profile.birth_date_display ? `<div class="info-field"><label>${t('date_of_birth','Date of Birth')}</label><span>${profile.birth_date_display}</span></div>` : ''}
-                            ${patient.gender ? `<div class="info-field"><label>${t('gender','Gender')}</label><span>${patient.gender}</span></div>` : ''}
+                            ${patient.gender ? `<div class="info-field"><label>${t('gender','Gender')}</label><span>${t(patient.gender, patient.gender)}</span></div>` : ''}
                             ${patient.address ? `<div class="info-field"><label>${t('address','Address')}</label><span>${patient.address}</span></div>` : ''}
                         </div>
                         ${patient.medical_history ? `<div style="margin-top:14px;"><div class="info-field"><label>${t('medical_history','Medical History')}</label><span style="display:block;white-space:pre-wrap;font-weight:400;line-height:1.6;">${patient.medical_history}</span></div></div>` : ''}
@@ -7605,6 +7653,7 @@ HTML_TEMPLATE = '''
                     <td class="numeric-cell">₪${parseFloat(item.remaining_amount || 0).toFixed(2)}</td>
                     <td>${item.notes || ''}</td>
                     <td>
+                        <button class="btn btn-success btn-icon" onclick="printSingleSession(${item.patient_id},${item.id})" title="${t('print_invoice','Print Invoice')}">🖨</button>
                         <button class="btn btn-warning btn-icon" onclick="deleteFollowup(${item.patient_id},${item.id})">🗑</button>
                         <button class="btn btn-primary btn-icon" onclick="editFollowupById(${item.patient_id},${item.id})">✏</button>
                     </td>

@@ -85,6 +85,32 @@ def _make_source_db(path):
     conn.close()
 
 
+def test_backup_file_requires_login(client):
+    assert client.post('/api/backup-file').status_code == 401
+
+
+def test_backup_file_writes_db_and_returns_path(client):
+    # Desktop "Download Backup": WebView2 can't surface a browser download, so the
+    # server writes a backup to disk and returns its path for the shell to reveal.
+    _login(client)
+    resp = client.post('/api/backup-file')
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['success'] is True
+    assert body['path'].endswith('.db')
+    assert os.path.exists(body['path'])
+
+
+def test_backup_file_blocked_on_cloud(client, monkeypatch):
+    # backup-file is a desktop-only feature and is NOT part of the cloud API
+    # surface (unlike /api/data/* which the cloud gate allows). On the cloud node
+    # the clinic-token gate rejects it (401) before the endpoint's own
+    # CLOUD_MODE guard — i.e. it's simply unreachable there.
+    _login(client)
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
+    assert client.post('/api/backup-file').status_code == 401
+
+
 def test_merge_requires_login(client):
     assert client.post('/api/data/merge').status_code == 401
 

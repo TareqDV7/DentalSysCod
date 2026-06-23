@@ -10,6 +10,38 @@ themselves. This doc covers choosing a certificate and signing the build.
 
 ---
 
+## 0. Do this now — purchase checklist (the actual blocker)
+
+Everything below (sections 1–5) is reference. This is the ordered action list to clear the blocker.
+
+- [ ] **Pick the publisher identity.** Whatever you sign with is the name clinics see as the
+      publisher, and the CA validates it against a registered entity. Decide now: a registered
+      **business/clinic name** (preferred — enables EV) or, if you have no business registration,
+      an **individual** identity. Have the matching documents ready (commercial registration /
+      trade license for a business; government ID + verifiable history for an individual).
+- [ ] **Attempt 1 — Azure Trusted Signing (~$10/mo, cheapest + cleanest).** Create an Azure
+      account → **Trusted Signing** resource → an *Identity Validation* request (org = business
+      docs; individual = harder, historically needs a multi-year verifiable history) → a
+      *Certificate Profile*. **Caveat for the Gulf/MENA beachhead:** Trusted Signing has had
+      region/eligibility limits — if your entity's country isn't accepted or validation stalls,
+      don't fight it, go to Attempt 2.
+- [ ] **Attempt 2 (fallback) — SSL.com eSigner EV (~$250–500/yr).** Order an **EV code-signing**
+      cert with **cloud signing (eSigner)** — explicitly serves MENA/Gulf, instant SmartScreen
+      trust. Complete business validation (registration docs + phone verification), then set up
+      **eSigner CKA** (their tool that exposes the cloud key to `signtool` as a normal cert-store
+      cert) **or** the CSC API + dlib. Sectigo EV via an international reseller (Codegic /
+      SignMyCode / Certera) with **cloud** signing is an equivalent fallback — never accept a
+      shipped USB token.
+- [ ] **Install `signtool`** — Windows SDK → "Signing Tools for Desktop Apps" only (§2).
+- [ ] **Produce the first signed release** — §3 (sign binaries) + §3b (sign installer) + §4 (verify).
+- [ ] **Smoke-install on a clean Windows VM** and confirm **zero** "unknown publisher" prompt (EV).
+
+> EV is worth the extra cost over OV here: EV is trusted by SmartScreen **instantly**, while OV
+> stays warned until it *earns reputation* over many installs — brutal for a brand-new, low-volume
+> product. For a paid product you're actively selling, buy EV (or Azure Trusted Signing).
+
+---
+
 ## 1. Choosing a certificate
 
 Since June 2023, the CA/Browser Forum requires code-signing private keys to live on certified
@@ -107,6 +139,20 @@ immediately; OV may still warn until reputation builds.
 ## 5. Order of operations at release time
 
 1. Buy + provision the cert (one-time).
-2. `set DENTACARE_SIGN=1` + `DENTACARE_SIGNTOOL_ARGS=...`, run `rebuild.bat` → signed binaries.
-3. `ISCC /DSIGN "/Ssigntool=..." installer\DentaCare.iss` → signed `DentaCare-Setup.exe`.
-4. Verify (step 4), smoke-install on a clean VM, then distribute.
+2. **Stop the running DentaCare service first** (see gotcha below).
+3. `set DENTACARE_SIGN=1` + `DENTACARE_SIGNTOOL_ARGS=...`, run `rebuild.bat` → signed binaries.
+4. `ISCC /DSIGN "/Ssigntool=..." installer\DentaCare.iss` → signed `DentaCare-Setup.exe`.
+5. Verify (§4), smoke-install on a clean VM, then distribute.
+
+> **Gotcha — the locked service:** on a dev/build machine that also *runs* DentaCare as the
+> installed Windows service, `rebuild.bat`'s clean step (`rmdir /s /q dist`) fails with
+> "Access is denied" because the service holds `dist\DentaCareService.exe` open, and PyInstaller
+> then dies (`PermissionError [WinError 5]`). Before a signed release, stop it from an
+> **elevated** shell: `Stop-Service DentaCare` (or `sc stop DentaCare`), build, then
+> `Start-Service DentaCare` (or just install the new setup, which replaces the service). A
+> non-elevated shell cannot stop it. (For *unsigned* dev builds you can sidestep the lock by
+> building into a throwaway `--distpath dist2 --workpath build2` and copying the binaries into
+> `dist\staging\` before ISCC — but a signed release should use the clean `rebuild.bat` path.)
+
+> **This repeats every release.** Each new feature you ship = a new signed build: steps 2–5
+> above. Signing is not a one-time setup; budget a few minutes per release for it.

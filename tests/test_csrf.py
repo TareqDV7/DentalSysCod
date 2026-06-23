@@ -1,6 +1,25 @@
+import os
+import subprocess
+import sys
+
 import pytest
 
 import dental_clinic
+
+
+def test_disable_csrf_killswitch_imports_cleanly():
+    """Regression: the CLINIC_DISABLE_CSRF kill-switch logs a warning at import
+    time. `logging` was only imported (aliased) far below that line, so setting
+    the switch crashed the whole app with NameError before it could start."""
+    env = dict(os.environ, CLINIC_DISABLE_CSRF='1')
+    proc = subprocess.run(
+        [sys.executable, '-c', 'import dental_clinic; print("OK")'],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert 'OK' in proc.stdout
+    assert 'NameError' not in proc.stderr
 
 
 @pytest.fixture()
