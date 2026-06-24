@@ -2976,10 +2976,24 @@ def patient_followups(patient_id):
             'amount': lab_expense
         })
 
+    # Auto-deduct linked materials from stock (insight-only; never blocks the
+    # follow-up). Idempotent on the follow-up id; warnings surface low/zero stock.
+    overrides = None
+    raw_materials = data.get('materials')
+    if isinstance(raw_materials, list):
+        overrides = {}
+        for m in raw_materials:
+            try:
+                overrides[int(m['item_id'])] = float(m['qty'])
+            except (KeyError, TypeError, ValueError):
+                continue
+    stock_warnings = inventory.apply_followup_consumption(
+        cursor, followup_id, procedure_id, overrides=overrides)
+
     _recompute_followup_balances(cursor, patient_id)
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'stock_warnings': stock_warnings})
 
 @app.route('/api/patients/<int:patient_id>/followups/<int:followup_id>', methods=['DELETE', 'PUT'])
 def followup_detail(patient_id, followup_id):
@@ -3004,6 +3018,8 @@ def followup_detail(patient_id, followup_id):
             cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
             record_tombstone(cursor, 'expenses', exp_id)
         append_audit_log(cursor, 'delete', 'patient_followup', followup_id, {'patient_id': patient_id})
+        # Restore any stock this follow-up consumed (compensating reversal).
+        inventory.reverse_followup_consumption(cursor, followup_id)
         _recompute_followup_balances(cursor, patient_id)
         conn.commit()
         conn.close()
@@ -3085,6 +3101,22 @@ def followup_detail(patient_id, followup_id):
         'price': price,
         'payment': payment,
     })
+    # Re-sync stock for the edited follow-up: reverse the prior deduction, then
+    # re-apply against the stored procedure (+ any point-of-use overrides).
+    cursor.execute('SELECT procedure_id FROM patient_followups WHERE id=?', (followup_id,))
+    prow = cursor.fetchone()
+    edited_procedure_id = prow['procedure_id'] if prow else None
+    overrides = None
+    raw_materials = data.get('materials')
+    if isinstance(raw_materials, list):
+        overrides = {}
+        for m in raw_materials:
+            try:
+                overrides[int(m['item_id'])] = float(m['qty'])
+            except (KeyError, TypeError, ValueError):
+                continue
+    inventory.reverse_followup_consumption(cursor, followup_id)
+    inventory.apply_followup_consumption(cursor, followup_id, edited_procedure_id, overrides=overrides)
     _recompute_followup_balances(cursor, patient_id)
     conn.commit()
     conn.close()

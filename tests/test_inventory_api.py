@@ -88,3 +88,58 @@ def test_materials_crud_and_unique(client):
     assert links[0]['item_id'] == item_id and links[0]['default_qty'] == 2
     client.delete(f'/api/inventory/procedures/{pid}/materials', json={'item_id': item_id})
     assert client.get(f'/api/inventory/procedures/{pid}/materials').get_json() == []
+
+
+def _make_patient(client):
+    return client.post('/api/patients', json={'first_name': 'P', 'last_name': 'Q'}).get_json()['id']
+
+
+def _make_linked_proc(client, item_id, default_qty=2):
+    import dental_clinic as dc
+    c = dc.sqlite3.connect(dc.DB_NAME)
+    pid = c.execute('INSERT INTO treatment_procedures (name) VALUES (?)', ('Filling',)).lastrowid
+    c.execute('INSERT INTO procedure_materials (procedure_id, item_id, default_qty) VALUES (?,?,?)',
+              (pid, item_id, default_qty))
+    c.commit(); c.close()
+    return pid
+
+
+def test_followup_record_deducts_stock(client):
+    _login(client)
+    pid_patient = _make_patient(client)
+    item = client.post('/api/inventory/items',
+                       json={'name': 'Compule', 'base_unit': 'compule'}).get_json()['id']
+    client.post(f'/api/inventory/items/{item}/restock', json={'base_qty': 10, 'unit_cost': 1.0})
+    proc = _make_linked_proc(client, item, default_qty=2)
+    r = client.post(f'/api/patients/{pid_patient}/followups', json={
+        'followup_date': '01/01/2026', 'procedure_id': proc, 'price': 100})
+    assert r.status_code == 200
+    row = next(x for x in client.get('/api/inventory/items').get_json() if x['id'] == item)
+    assert row['quantity'] == 8
+
+
+def test_followup_delete_restores_stock(client):
+    _login(client)
+    patient = _make_patient(client)
+    item = client.post('/api/inventory/items', json={'name': 'C'}).get_json()['id']
+    client.post(f'/api/inventory/items/{item}/restock', json={'base_qty': 10, 'unit_cost': 1.0})
+    proc = _make_linked_proc(client, item, default_qty=3)
+    client.post(f'/api/patients/{patient}/followups',
+                json={'followup_date': '01/01/2026', 'procedure_id': proc, 'price': 50})
+    fid = client.get(f'/api/patients/{patient}/followups').get_json()[0]['id']
+    client.delete(f'/api/patients/{patient}/followups/{fid}')
+    row = next(x for x in client.get('/api/inventory/items').get_json() if x['id'] == item)
+    assert row['quantity'] == 10
+
+
+def test_followup_with_material_override(client):
+    _login(client)
+    patient = _make_patient(client)
+    item = client.post('/api/inventory/items', json={'name': 'C'}).get_json()['id']
+    client.post(f'/api/inventory/items/{item}/restock', json={'base_qty': 10, 'unit_cost': 1.0})
+    proc = _make_linked_proc(client, item, default_qty=2)
+    client.post(f'/api/patients/{patient}/followups', json={
+        'followup_date': '01/01/2026', 'procedure_id': proc, 'price': 50,
+        'materials': [{'item_id': item, 'qty': 5}]})
+    row = next(x for x in client.get('/api/inventory/items').get_json() if x['id'] == item)
+    assert row['quantity'] == 5
