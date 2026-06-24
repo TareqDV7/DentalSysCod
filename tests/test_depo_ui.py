@@ -42,3 +42,24 @@ def test_depo_core_strings_are_bilingual():
     for key in ('depo_title', 'on_hand', 'packs_remaining', 'low_stock', 'stock_value'):
         assert f'{key}:' in en, f'missing EN key {key}'
         assert f'{key}:' in ar, f'missing AR key {key}'
+
+
+def test_item_editor_modal_and_handlers():
+    assert 'id="depo-item-modal"' in HTML
+    assert 'function openInventoryItemEditor' in HTML
+    assert 'function saveInventoryItem' in HTML
+    assert 'function deactivateInventoryItem' in HTML
+    # all spec'd item fields have inputs
+    for fid in ('depo-item-name', 'depo-item-name-ar', 'depo-item-category',
+                'depo-item-base-unit', 'depo-item-pack-unit', 'depo-item-pack-size',
+                'depo-item-threshold', 'depo-item-reorder', 'depo-item-supplier',
+                'depo-item-location', 'depo-item-track-expiry'):
+        assert f'id="{fid}"' in HTML, f'missing field {fid}'
+    # POST create / PUT edit
+    assert "method: 'POST'" in HTML and "method: 'PUT'" in HTML
+
+
+def test_item_editor_strings_bilingual():
+    en, ar = _lang_map('en'), _lang_map('ar')
+    for key in ('edit_item', 'track_expiry', 'reorder_qty', 'supplier', 'location', 'deactivate'):
+        assert f'{key}:' in en and f'{key}:' in ar, f'missing bilingual key {key}'

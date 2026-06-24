@@ -3321,6 +3321,57 @@ HTML_TEMPLATE = '''
       </div>
     </div>
 
+    <div id="depo-item-modal" class="modal" onclick="if(event.target===this)closeModal('depo-item-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="depo-item-modal-title" data-i18n="add_item">Add Item</h3>
+                <button type="button" class="modal-close" onclick="closeModal('depo-item-modal')">&times;</button>
+            </div>
+            <form id="depo-item-form" onsubmit="saveInventoryItem(event)">
+                <input type="hidden" id="depo-item-id" value="">
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="item_name_required">Name *</label>
+                        <input type="text" id="depo-item-name" required></div>
+                    <div class="form-group"><label data-i18n="item_name_ar">Name (Arabic)</label>
+                        <input type="text" id="depo-item-name-ar" dir="rtl"></div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group"><label data-i18n="category">Category</label>
+                        <input type="text" id="depo-item-category"></div>
+                    <div class="form-group"><label data-i18n="base_unit">Base unit</label>
+                        <input type="text" id="depo-item-base-unit" placeholder="piece / carpule / ml"></div>
+                    <div class="form-group"><label data-i18n="pack_unit">Pack unit</label>
+                        <input type="text" id="depo-item-pack-unit" placeholder="box / bottle"></div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group"><label data-i18n="pack_size">Pack size</label>
+                        <input type="number" step="any" id="depo-item-pack-size" value="1"></div>
+                    <div class="form-group"><label data-i18n="low_stock_threshold">Low-stock threshold</label>
+                        <input type="number" step="any" id="depo-item-threshold" value="0"></div>
+                    <div class="form-group"><label data-i18n="reorder_qty">Reorder qty</label>
+                        <input type="number" step="any" id="depo-item-reorder"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="supplier">Supplier</label>
+                        <input type="text" id="depo-item-supplier"></div>
+                    <div class="form-group"><label data-i18n="location">Location</label>
+                        <input type="text" id="depo-item-location"></div>
+                </div>
+                <div class="toolbar-row">
+                    <label style="display:flex; gap:8px; align-items:center; font-weight:600;">
+                        <input type="checkbox" id="depo-item-track-expiry">
+                        <span data-i18n="track_expiry">Track expiry</span>
+                    </label>
+                </div>
+                <div class="toolbar-row" style="justify-content:space-between;">
+                    <button class="btn btn-primary" type="submit" data-i18n="save">Save</button>
+                    <button class="btn btn-danger" type="button" id="depo-item-deactivate-btn"
+                            style="display:none;" onclick="deactivateInventoryItem()" data-i18n="deactivate">Deactivate</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-desc">
         <div class="modal-content">
             <div class="confirm-modal__icon" aria-hidden="true">⚠</div>
@@ -3815,7 +3866,21 @@ HTML_TEMPLATE = '''
                 in_stock: 'In stock',
                 low_stock: 'Low stock',
                 negative: 'Negative',
-                add_stock: 'Add stock'
+                add_stock: 'Add stock',
+                edit_item: 'Edit Item',
+                item_name_required: 'Name is required',
+                item_name_ar: 'Name (Arabic)',
+                base_unit: 'Base unit',
+                pack_unit: 'Pack unit',
+                pack_size: 'Pack size',
+                low_stock_threshold: 'Low-stock threshold',
+                reorder_qty: 'Reorder qty',
+                supplier: 'Supplier',
+                location: 'Location',
+                track_expiry: 'Track expiry',
+                unable_save_item: 'Unable to save item.',
+                item_saved: 'Item saved.',
+                item_deactivated: 'Item deactivated.'
             },
             ar: {
                 undo: 'تراجع',
@@ -4247,7 +4312,21 @@ HTML_TEMPLATE = '''
                 in_stock: 'متوفر',
                 low_stock: 'مخزون منخفض',
                 negative: 'سالب',
-                add_stock: 'إضافة مخزون'
+                add_stock: 'إضافة مخزون',
+                edit_item: 'تعديل المادة',
+                item_name_required: 'الاسم مطلوب',
+                item_name_ar: 'الاسم (بالعربية)',
+                base_unit: 'الوحدة الأساسية',
+                pack_unit: 'وحدة العبوة',
+                pack_size: 'حجم العبوة',
+                low_stock_threshold: 'حد المخزون المنخفض',
+                reorder_qty: 'كمية إعادة الطلب',
+                supplier: 'المورّد',
+                location: 'الموقع',
+                track_expiry: 'تتبّع الصلاحية',
+                unable_save_item: 'تعذّر حفظ المادة.',
+                item_saved: 'تم حفظ المادة.',
+                item_deactivated: 'تم إلغاء تفعيل المادة.'
             }
         };
 
@@ -4620,6 +4699,78 @@ HTML_TEMPLATE = '''
         async function loadDepoSection() {
             await loadInventoryItems();
             renderInventoryItems();
+        }
+
+        function openInventoryItemEditor(id) {
+            const item = (id != null) ? inventoryItemsCache.find(x => x.id === id) : null;
+            const setVal = (fid, v) => { const el = document.getElementById(fid); if (el) el.value = (v == null ? '' : v); };
+            document.getElementById('depo-item-id').value = item ? item.id : '';
+            setVal('depo-item-name', item && item.name);
+            setVal('depo-item-name-ar', item && item.name_ar);
+            setVal('depo-item-category', item && item.category);
+            setVal('depo-item-base-unit', item ? (item.base_unit || 'piece') : 'piece');
+            setVal('depo-item-pack-unit', item && item.pack_unit);
+            setVal('depo-item-pack-size', item ? (item.pack_size != null ? item.pack_size : 1) : 1);
+            setVal('depo-item-threshold', item ? (item.low_stock_threshold || 0) : 0);
+            setVal('depo-item-reorder', item && item.reorder_qty);
+            setVal('depo-item-supplier', item && item.supplier);
+            setVal('depo-item-location', item && item.location);
+            document.getElementById('depo-item-track-expiry').checked = Boolean(item && Number(item.track_expiry) === 1);
+            document.getElementById('depo-item-modal-title').textContent =
+                item ? t('edit_item','Edit Item') : t('add_item','Add Item');
+            document.getElementById('depo-item-deactivate-btn').style.display = item ? '' : 'none';
+            document.getElementById('depo-item-modal').classList.add('active');
+        }
+
+        async function saveInventoryItem(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-item-id').value;
+            const numOrNull = (fid) => {
+                const v = document.getElementById(fid).value;
+                return v === '' ? null : Number(v);
+            };
+            const payload = {
+                name: document.getElementById('depo-item-name').value.trim(),
+                name_ar: document.getElementById('depo-item-name-ar').value.trim() || null,
+                category: document.getElementById('depo-item-category').value.trim() || null,
+                base_unit: document.getElementById('depo-item-base-unit').value.trim() || 'piece',
+                pack_unit: document.getElementById('depo-item-pack-unit').value.trim() || null,
+                pack_size: numOrNull('depo-item-pack-size'),
+                low_stock_threshold: numOrNull('depo-item-threshold'),
+                reorder_qty: numOrNull('depo-item-reorder'),
+                supplier: document.getElementById('depo-item-supplier').value.trim() || null,
+                location: document.getElementById('depo-item-location').value.trim() || null,
+                track_expiry: document.getElementById('depo-item-track-expiry').checked,
+            };
+            if (!payload.name) { showToast(t('item_name_required','Name is required'), 'warning'); return; }
+            const url = id ? `/api/inventory/items/${id}` : '/api/inventory/items';
+            const res = await fetch(url, {
+                method: id ? 'PUT' : 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+                const p = await res.json().catch(() => ({}));
+                showToast(p.error || t('unable_save_item','Unable to save item.'), 'error');
+                return;
+            }
+            closeModal('depo-item-modal');
+            showToast(t('item_saved','Item saved.'), 'success');
+            await loadDepoSection();
+        }
+
+        async function deactivateInventoryItem() {
+            const id = document.getElementById('depo-item-id').value;
+            if (!id) return;
+            const res = await fetch(`/api/inventory/items/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({active: false}),
+            });
+            if (!res.ok) { showToast(t('unable_save_item','Unable to save item.'), 'error'); return; }
+            closeModal('depo-item-modal');
+            showToast(t('item_deactivated','Item deactivated.'), 'success');
+            await loadDepoSection();
         }
 
         async function loadTreatmentProcedures() {
