@@ -4744,11 +4744,17 @@ HTML_TEMPLATE = '''
             };
             if (!payload.name) { showToast(t('item_name_required','Name is required'), 'warning'); return; }
             const url = id ? `/api/inventory/items/${id}` : '/api/inventory/items';
-            const res = await fetch(url, {
-                method: id ? 'PUT' : 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload),
-            });
+            let res;
+            try {
+                res = await fetch(url, {
+                    method: id ? 'PUT' : 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+            } catch (err) {
+                showToast(t('unable_save_item','Unable to save item.'), 'error');
+                return;
+            }
             if (!res.ok) {
                 const p = await res.json().catch(() => ({}));
                 showToast(p.error || t('unable_save_item','Unable to save item.'), 'error');
@@ -4762,11 +4768,17 @@ HTML_TEMPLATE = '''
         async function deactivateInventoryItem() {
             const id = document.getElementById('depo-item-id').value;
             if (!id) return;
-            const res = await fetch(`/api/inventory/items/${id}`, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({active: false}),
-            });
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({active: false}),
+                });
+            } catch (err) {
+                showToast(t('unable_save_item','Unable to save item.'), 'error');
+                return;
+            }
             if (!res.ok) { showToast(t('unable_save_item','Unable to save item.'), 'error'); return; }
             closeModal('depo-item-modal');
             showToast(t('item_deactivated','Item deactivated.'), 'success');
