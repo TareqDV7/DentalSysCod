@@ -96,3 +96,89 @@ def test_invalid_reason_raises(conn):
     item = _new_item(conn)
     with pytest.raises(ValueError):
         inventory.post_movement(conn.cursor(), item, 1, 'bogus')
+
+
+def _link(conn, procedure_id, item_id, default_qty):
+    conn.execute('INSERT INTO procedure_materials (procedure_id, item_id, default_qty) '
+                 'VALUES (?,?,?)', (procedure_id, item_id, default_qty))
+
+
+def _proc(conn, name='Filling'):
+    cur = conn.execute('INSERT INTO treatment_procedures (name) VALUES (?)', (name,))
+    return cur.lastrowid
+
+
+def _qty(conn, item):
+    return conn.execute('SELECT quantity FROM inventory_items WHERE id=?', (item,)).fetchone()[0]
+
+
+def test_apply_consumption_uses_default_qty(conn):
+    proc = _proc(conn)
+    item = _new_item(conn)
+    inventory.post_movement(conn.cursor(), item, 10, 'restock', unit_cost=1.0)
+    _link(conn, proc, item, 2)
+    inventory.apply_followup_consumption(conn.cursor(), followup_id=101, procedure_id=proc)
+    assert _qty(conn, item) == 8
+
+
+def test_apply_consumption_override_beats_default(conn):
+    proc = _proc(conn)
+    item = _new_item(conn)
+    inventory.post_movement(conn.cursor(), item, 10, 'restock', unit_cost=1.0)
+    _link(conn, proc, item, 2)
+    inventory.apply_followup_consumption(conn.cursor(), 102, proc, overrides={item: 5})
+    assert _qty(conn, item) == 5
+
+
+def test_apply_is_idempotent(conn):
+    proc = _proc(conn)
+    item = _new_item(conn)
+    inventory.post_movement(conn.cursor(), item, 10, 'restock', unit_cost=1.0)
+    _link(conn, proc, item, 2)
+    inventory.apply_followup_consumption(conn.cursor(), 103, proc)
+    inventory.apply_followup_consumption(conn.cursor(), 103, proc)  # re-run
+    assert _qty(conn, item) == 8  # not 6
+
+
+def test_no_links_means_no_movement(conn):
+    item = _new_item(conn)
+    inventory.post_movement(conn.cursor(), item, 10, 'restock', unit_cost=1.0)
+    warnings = inventory.apply_followup_consumption(conn.cursor(), 104, procedure_id=999)
+    assert warnings == []
+    assert _qty(conn, item) == 10
+
+
+def test_reverse_restores_stock(conn):
+    proc = _proc(conn)
+    item = _new_item(conn)
+    inventory.post_movement(conn.cursor(), item, 10, 'restock', unit_cost=1.0)
+    _link(conn, proc, item, 3)
+    inventory.apply_followup_consumption(conn.cursor(), 105, proc)
+    assert _qty(conn, item) == 7
+    inventory.reverse_followup_consumption(conn.cursor(), 105)
+    assert _qty(conn, item) == 10
+    # Net effect of this follow-up is now zero across the ledger.
+    net = conn.execute("SELECT COALESCE(SUM(change_qty),0) FROM stock_movements "
+                       "WHERE source_type='followup' AND source_id=105").fetchone()[0]
+    assert net == 0
+
+
+def test_edit_via_reverse_then_apply(conn):
+    proc = _proc(conn)
+    item = _new_item(conn)
+    inventory.post_movement(conn.cursor(), item, 10, 'restock', unit_cost=1.0)
+    _link(conn, proc, item, 3)
+    inventory.apply_followup_consumption(conn.cursor(), 106, proc)        # -3 -> 7
+    inventory.reverse_followup_consumption(conn.cursor(), 106)            # +3 -> 10
+    inventory.apply_followup_consumption(conn.cursor(), 106, proc, overrides={item: 4})  # -4 -> 6
+    assert _qty(conn, item) == 6
+
+
+def test_warning_returned_on_low_stock(conn):
+    proc = _proc(conn)
+    item = _new_item(conn, low_stock_threshold=5)
+    inventory.post_movement(conn.cursor(), item, 6, 'restock', unit_cost=1.0)
+    _link(conn, proc, item, 3)  # 6 - 3 = 3 <= 5
+    warnings = inventory.apply_followup_consumption(conn.cursor(), 107, proc)
+    assert warnings and warnings[0]['low_stock'] is True
+    assert warnings[0]['item_id'] == item

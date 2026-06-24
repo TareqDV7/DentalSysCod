@@ -84,3 +84,56 @@ def post_movement(cursor, item_id: int, change_qty: float, reason: str, *,
 
     return {'movement_id': movement_id, 'quantity': new_qty,
             'low_stock': new_qty <= threshold, 'negative': new_qty < 0}
+
+
+def _followup_net(cursor, followup_id: int) -> float:
+    row = cursor.execute(
+        "SELECT COALESCE(SUM(change_qty), 0) FROM stock_movements "
+        "WHERE source_type='followup' AND source_id=?", (followup_id,)).fetchone()
+    return float(row[0])
+
+
+def apply_followup_consumption(cursor, followup_id: int, procedure_id,
+                               overrides: dict | None = None) -> list[dict]:
+    """Deduct each linked material for procedure_id against this follow-up.
+
+    Idempotent: if the follow-up already has a non-zero (still-applied) net stock
+    effect, do nothing. Returns warnings for items that hit threshold / negative.
+    """
+    if procedure_id in (None, ''):
+        return []
+    if _followup_net(cursor, followup_id) < 0:   # already deducted, not reversed
+        return []
+
+    links = cursor.execute(
+        'SELECT pm.item_id, pm.default_qty, i.name '
+        'FROM procedure_materials pm JOIN inventory_items i ON i.id = pm.item_id '
+        'WHERE pm.procedure_id=? AND pm.active=1 AND i.active=1',
+        (procedure_id,)).fetchall()
+
+    overrides = overrides or {}
+    warnings: list[dict] = []
+    for item_id, default_qty, name in links:
+        qty = float(overrides.get(item_id, default_qty))
+        if qty <= 0:
+            continue
+        res = post_movement(cursor, item_id, -qty, 'consumption',
+                            source_type='followup', source_id=followup_id)
+        if res['low_stock'] or res['negative']:
+            warnings.append({'item_id': item_id, 'name': name,
+                             'quantity': res['quantity'],
+                             'low_stock': res['low_stock'], 'negative': res['negative']})
+    return warnings
+
+
+def reverse_followup_consumption(cursor, followup_id: int) -> None:
+    """Post compensating 'reversal' movements so this follow-up's net stock
+    effect becomes zero. Append-only; safe to call when already reversed (no-op)."""
+    rows = cursor.execute(
+        "SELECT item_id, COALESCE(SUM(change_qty), 0) FROM stock_movements "
+        "WHERE source_type='followup' AND source_id=? GROUP BY item_id",
+        (followup_id,)).fetchall()
+    for item_id, net in rows:
+        if net:
+            post_movement(cursor, item_id, -float(net), 'reversal',
+                          source_type='followup', source_id=followup_id)
