@@ -2231,6 +2231,10 @@ HTML_TEMPLATE = '''
                 <span class="tab-icon"><svg class="ic"><use href="#i-folders"/></svg></span>
                 <span data-en="Catalog" data-ar="الفهرس">Catalog</span>
             </button>
+            <button class="nav-tab" data-tab="depo" onclick="switchTab('depo', this)">
+                <span class="tab-icon"><svg class="ic"><use href="#i-folders"/></svg></span>
+                <span data-en="Depo" data-ar="مخزن">Depo</span>
+            </button>
             <button class="nav-tab" data-tab="support" onclick="switchTab('support', this)">
                 <span class="tab-icon"><svg class="ic"><use href="#i-gear"/></svg></span>
                 <span data-en="Settings" data-ar="الإعدادات">Settings</span>
@@ -2583,6 +2587,51 @@ HTML_TEMPLATE = '''
 
                 </div>
             </div><!-- /treatments -->
+
+            <!-- Depo Tab -->
+            <div id="depo" class="tab-content">
+                <div class="screen-shell">
+                    <div class="section-card">
+                        <div class="section-card-header">
+                            <div>
+                                <h2 data-i18n="depo_title">Depo</h2>
+                                <p data-i18n="depo_summary">Stock items, on-hand levels, and low-stock alerts.</p>
+                            </div>
+                            <div class="toolbar-row">
+                                <button class="btn btn-primary" type="button" onclick="openInventoryItemEditor()" data-i18n="add_item">+ Add Item</button>
+                            </div>
+                        </div>
+                        <div class="admin-overview-cards">
+                            <div class="stat-card stat-card-teal">
+                                <span class="stat-icon">📦</span>
+                                <h3 id="depo-item-count">0</h3>
+                                <p data-i18n="items_in_stock">Items in stock</p>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-icon">💰</span>
+                                <h3 id="depo-stock-value">0</h3>
+                                <p data-i18n="stock_value">Stock value</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="section-card">
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="item">Item</th>
+                                        <th class="numeric-cell" data-i18n="on_hand">On hand</th>
+                                        <th class="numeric-cell" data-i18n="packs_remaining">Packs</th>
+                                        <th class="center-cell" data-i18n="status">Status</th>
+                                        <th class="actions-cell" data-i18n="actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="depo-items-body"><tr><td colspan="5" data-i18n="no_data">No data</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <div id="reports" class="tab-content">
                 <div class="page-header">
@@ -3754,7 +3803,19 @@ HTML_TEMPLATE = '''
                 name_ar: 'Arabic name',
                 plan_pick_hint: 'Enter a number, or a new plan name:',
                 plan_new_name: 'New plan name:',
-                plan: 'Plan'
+                plan: 'Plan',
+                depo_title: 'Depo',
+                depo_summary: 'Stock items, on-hand levels, and low-stock alerts.',
+                add_item: '+ Add Item',
+                items_in_stock: 'Items in stock',
+                stock_value: 'Stock value',
+                item: 'Item',
+                on_hand: 'On hand',
+                packs_remaining: 'Packs',
+                in_stock: 'In stock',
+                low_stock: 'Low stock',
+                negative: 'Negative',
+                add_stock: 'Add stock'
             },
             ar: {
                 undo: 'تراجع',
@@ -4174,7 +4235,19 @@ HTML_TEMPLATE = '''
                 name_ar: 'الاسم بالعربية',
                 plan_pick_hint: 'أدخل رقمًا، أو اسم خطة جديدة:',
                 plan_new_name: 'اسم الخطة الجديدة:',
-                plan: 'خطة'
+                plan: 'خطة',
+                depo_title: 'مخزن',
+                depo_summary: 'مواد المخزون ومستويات التوفر وتنبيهات النقص.',
+                add_item: '+ إضافة مادة',
+                items_in_stock: 'مواد في المخزون',
+                stock_value: 'قيمة المخزون',
+                item: 'المادة',
+                on_hand: 'المتوفر',
+                packs_remaining: 'العبوات',
+                in_stock: 'متوفر',
+                low_stock: 'مخزون منخفض',
+                negative: 'سالب',
+                add_stock: 'إضافة مخزون'
             }
         };
 
@@ -4417,6 +4490,7 @@ HTML_TEMPLATE = '''
             else if (activeTab === 'reports') loadReportsSection();
             else if (activeTab === 'financial') loadFinancialSection();
             else if (activeTab === 'support') loadSupportSection();
+            else if (activeTab === 'depo') loadDepoSection();
 
             applyTheme();
         }
@@ -4487,6 +4561,65 @@ HTML_TEMPLATE = '''
                 if (evaled !== null) return evaled;
             }
             return Number.isFinite(direct) ? direct : 0;
+        }
+
+        let inventoryItemsCache = [];
+
+        async function loadInventoryItems() {
+            try {
+                const res = await fetch('/api/inventory/items');
+                inventoryItemsCache = await res.json();
+                if (!Array.isArray(inventoryItemsCache)) inventoryItemsCache = [];
+            } catch (_) {
+                inventoryItemsCache = [];
+            }
+            return inventoryItemsCache;
+        }
+
+        function inventoryStatusBadge(item) {
+            const qty = Number(item.quantity) || 0;
+            const threshold = Number(item.low_stock_threshold) || 0;
+            if (qty < 0) return `<span class="badge badge-danger">${t('negative','Negative')}</span>`;
+            if (qty <= threshold) return `<span class="badge badge-warning">${t('low_stock','Low stock')}</span>`;
+            return `<span class="badge badge-success">${t('in_stock','In stock')}</span>`;
+        }
+
+        function renderInventoryItems() {
+            const body = document.getElementById('depo-items-body');
+            if (!body) return;
+            const items = inventoryItemsCache;
+            if (!items.length) {
+                body.innerHTML = `<tr><td colspan="5">${t('no_data','No data')}</td></tr>`;
+            } else {
+                body.innerHTML = items.map(it => {
+                    const qty = Number(it.quantity) || 0;
+                    const packs = (it.packs_remaining == null) ? '—' : (Math.round(it.packs_remaining * 100) / 100);
+                    const unit = it.base_unit ? ` <small style="color:var(--muted)">${it.base_unit}</small>` : '';
+                    return `<tr>
+                        <td>${escapeHtml(it.name || '')}</td>
+                        <td class="numeric-cell">${qty}${unit}</td>
+                        <td class="numeric-cell">${packs}</td>
+                        <td class="center-cell">${inventoryStatusBadge(it)}</td>
+                        <td class="actions-cell">
+                            <button class="btn btn-sm" onclick="openInventoryItemEditor(${it.id})" data-i18n="edit">Edit</button>
+                            <button class="btn btn-sm btn-primary" onclick="openRestockModal(${it.id})" data-i18n="add_stock">Add stock</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+            }
+            const count = document.getElementById('depo-item-count');
+            if (count) count.textContent = items.length;
+            const value = document.getElementById('depo-stock-value');
+            if (value) {
+                const total = items.reduce((s, it) =>
+                    s + (Number(it.quantity) || 0) * (Number(it.cost_per_unit) || 0), 0);
+                value.textContent = '₪ ' + total.toFixed(2);
+            }
+        }
+
+        async function loadDepoSection() {
+            await loadInventoryItems();
+            renderInventoryItems();
         }
 
         async function loadTreatmentProcedures() {
@@ -4707,6 +4840,7 @@ HTML_TEMPLATE = '''
             else if (tabName === 'reports')      loadReportsSection();
             else if (tabName === 'financial')    loadFinancialSection();
             else if (tabName === 'support')      loadSupportSection();
+            else if (tabName === 'depo')         loadDepoSection();
         }
 
         function switchReportsSubTab(tabName, clickedBtn = null, shouldLoad = true) {
