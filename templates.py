@@ -5149,7 +5149,7 @@ HTML_TEMPLATE = '''
             if (!body) return;
             body.innerHTML = list.length ? list.map(m => `<tr>
                 <td>${escapeHtml(m.name || '')}</td>
-                <td class="numeric-cell">${m.default_qty}</td>
+                <td class="numeric-cell">${escapeHtml(String(m.default_qty ?? ''))}</td>
                 <td class="actions-cell"><button class="btn btn-sm btn-danger"
                     onclick="removeProcedureMaterial(${m.item_id})" data-i18n="remove">Remove</button></td>
             </tr>`).join('') : `<tr><td colspan="3">${t('no_data','No data')}</td></tr>`;
