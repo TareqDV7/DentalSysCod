@@ -1866,6 +1866,16 @@ def _apply_sync_import(cursor, payload):
         applied_total += applied
         skipped_total += skipped
 
+    # Depo v1 decision: we deliberately do NOT call
+    # inventory.apply_followup_consumption for synced-in patient_followups here.
+    # A desktop-recorded follow-up deducts at POST time, and its stock_movements
+    # replicate through this same loop (the 3 inventory tables are in SYNC_TABLES),
+    # so the deduction propagates as DATA — re-running it here would risk a
+    # double-deduct if a follow-up row arrives before its movement rows. Mobile is
+    # view-only for Depo, so a mobile-recorded procedure carries no movements; it
+    # reconciles on the desktop via Recount. apply_followup_consumption is
+    # idempotent, so a later version can safely enable sync-time deduction.
+
     incoming_tombstones = payload.get('tombstones')
     if not isinstance(incoming_tombstones, list):
         incoming_tombstones = []

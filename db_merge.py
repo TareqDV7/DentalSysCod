@@ -310,6 +310,23 @@ def merge_database(dst_conn, src_db_path, *, src_uploads=None, dst_uploads=None,
             remaps[table] = _safe_table(
                 report, table,
                 lambda t=table, f=fk_cols: _copy_table(dst_cur, src_cur, t, f, remaps, report))
+        # Inventory ("Depo"): items, their procedure links, and the movement
+        # ledger. Additive — source items become new rows; the links/movements
+        # remap item_id, and a movement's source_id remaps through the follow-up
+        # map so the ledger keeps its follow-up attribution (source_id is null for
+        # manual/recount/write-off movements, so the remap is a no-op there).
+        # Insight-only: nothing here touches expenses / clinic_profit.
+        remaps['inventory_items'] = _safe_table(
+            report, 'inventory_items',
+            lambda: _copy_table(dst_cur, src_cur, 'inventory_items', {}, remaps, report))
+        _safe_table(report, 'procedure_materials',
+                    lambda: _copy_table(dst_cur, src_cur, 'procedure_materials',
+                                        {'procedure_id': 'treatment_procedures',
+                                         'item_id': 'inventory_items'}, remaps, report))
+        _safe_table(report, 'stock_movements',
+                    lambda: _copy_table(dst_cur, src_cur, 'stock_movements',
+                                        {'item_id': 'inventory_items',
+                                         'source_id': 'patient_followups'}, remaps, report))
         _safe_table(report, 'expenses',
                     lambda: _copy_expenses(dst_cur, src_cur, remaps, report))
         remaps['patient_tooth_chart'] = _safe_table(
