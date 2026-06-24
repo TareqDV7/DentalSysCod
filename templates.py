@@ -3372,6 +3372,54 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
+    <div id="depo-restock-modal" class="modal" onclick="if(event.target===this)closeModal('depo-restock-modal')">
+        <div class="modal-content">
+            <div class="modal-header"><h3 data-i18n="add_stock">Add stock</h3>
+                <button type="button" class="modal-close" onclick="closeModal('depo-restock-modal')">&times;</button></div>
+            <form onsubmit="submitRestock(event)">
+                <input type="hidden" id="depo-restock-id">
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="quantity">Quantity (base units)</label>
+                        <input type="number" step="any" id="depo-restock-qty" required></div>
+                    <div class="form-group"><label data-i18n="unit_cost">Unit cost</label>
+                        <input type="number" step="any" id="depo-restock-cost" value="0"></div>
+                </div>
+                <div class="form-group" id="depo-restock-expiry-wrap" style="display:none;">
+                    <label data-i18n="expiry_date">Expiry date</label>
+                    <input type="date" id="depo-restock-expiry"></div>
+                <div class="toolbar-row"><button class="btn btn-primary" type="submit" data-i18n="add_stock">Add stock</button></div>
+            </form>
+        </div>
+    </div>
+    <div id="depo-adjust-modal" class="modal" onclick="if(event.target===this)closeModal('depo-adjust-modal')">
+        <div class="modal-content">
+            <div class="modal-header"><h3 data-i18n="adjust_count">Adjust count</h3>
+                <button type="button" class="modal-close" onclick="closeModal('depo-adjust-modal')">&times;</button></div>
+            <form onsubmit="submitAdjust(event)">
+                <input type="hidden" id="depo-adjust-id">
+                <div class="form-group"><label data-i18n="counted_qty">Counted quantity</label>
+                    <input type="number" step="any" id="depo-adjust-qty" required></div>
+                <div class="form-group"><label data-i18n="note">Note</label>
+                    <input type="text" id="depo-adjust-note"></div>
+                <div class="toolbar-row"><button class="btn btn-warning" type="submit" data-i18n="adjust_count">Adjust count</button></div>
+            </form>
+        </div>
+    </div>
+    <div id="depo-writeoff-modal" class="modal" onclick="if(event.target===this)closeModal('depo-writeoff-modal')">
+        <div class="modal-content">
+            <div class="modal-header"><h3 data-i18n="write_off">Write-off</h3>
+                <button type="button" class="modal-close" onclick="closeModal('depo-writeoff-modal')">&times;</button></div>
+            <form onsubmit="submitWriteoff(event)">
+                <input type="hidden" id="depo-writeoff-id">
+                <div class="form-group"><label data-i18n="quantity">Quantity</label>
+                    <input type="number" step="any" id="depo-writeoff-qty" required></div>
+                <div class="form-group"><label data-i18n="note">Note</label>
+                    <input type="text" id="depo-writeoff-note" placeholder="breakage / contamination / expired"></div>
+                <div class="toolbar-row"><button class="btn btn-danger" type="submit" data-i18n="write_off">Write-off</button></div>
+            </form>
+        </div>
+    </div>
+
     <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-desc">
         <div class="modal-content">
             <div class="confirm-modal__icon" aria-hidden="true">⚠</div>
@@ -3880,7 +3928,12 @@ HTML_TEMPLATE = '''
                 track_expiry: 'Track expiry',
                 unable_save_item: 'Unable to save item.',
                 item_saved: 'Item saved.',
-                item_deactivated: 'Item deactivated.'
+                item_deactivated: 'Item deactivated.',
+                adjust_count: 'Adjust count', write_off: 'Write-off', quantity: 'Quantity',
+                unit_cost: 'Unit cost', counted_qty: 'Counted quantity', expiry_date: 'Expiry date',
+                note: 'Note', stock_added: 'Stock added.', count_adjusted: 'Count adjusted.',
+                written_off: 'Written off.', now_low_stock: 'Item is now at/below its low-stock level.',
+                unable_restock: 'Unable to add stock.', unable_adjust: 'Unable to adjust.', unable_writeoff: 'Unable to write off.'
             },
             ar: {
                 undo: 'تراجع',
@@ -4326,7 +4379,12 @@ HTML_TEMPLATE = '''
                 track_expiry: 'تتبّع الصلاحية',
                 unable_save_item: 'تعذّر حفظ المادة.',
                 item_saved: 'تم حفظ المادة.',
-                item_deactivated: 'تم إلغاء تفعيل المادة.'
+                item_deactivated: 'تم إلغاء تفعيل المادة.',
+                adjust_count: 'تعديل الجرد', write_off: 'شطب', quantity: 'الكمية',
+                unit_cost: 'تكلفة الوحدة', counted_qty: 'الكمية المعدودة', expiry_date: 'تاريخ الصلاحية',
+                note: 'ملاحظة', stock_added: 'تمت إضافة المخزون.', count_adjusted: 'تم تعديل الجرد.',
+                written_off: 'تم الشطب.', now_low_stock: 'المادة الآن عند حد النقص أو أقل.',
+                unable_restock: 'تعذّرت إضافة المخزون.', unable_adjust: 'تعذّر التعديل.', unable_writeoff: 'تعذّر الشطب.'
             }
         };
 
@@ -4682,6 +4740,8 @@ HTML_TEMPLATE = '''
                         <td class="actions-cell">
                             <button class="btn btn-sm" onclick="openInventoryItemEditor(${it.id})" data-i18n="edit">Edit</button>
                             <button class="btn btn-sm btn-primary" onclick="openRestockModal(${it.id})" data-i18n="add_stock">Add stock</button>
+                            <button class="btn btn-sm btn-warning" onclick="openAdjustModal(${it.id})" data-i18n="adjust_count">Adjust</button>
+                            <button class="btn btn-sm btn-danger" onclick="openWriteoffModal(${it.id})" data-i18n="write_off">Write-off</button>
                         </td>
                     </tr>`;
                 }).join('');
@@ -4699,6 +4759,99 @@ HTML_TEMPLATE = '''
         async function loadDepoSection() {
             await loadInventoryItems();
             renderInventoryItems();
+        }
+
+        function openRestockModal(id) {
+            const item = inventoryItemsCache.find(x => x.id === id);
+            document.getElementById('depo-restock-id').value = id;
+            document.getElementById('depo-restock-qty').value = '';
+            document.getElementById('depo-restock-cost').value = item ? (item.cost_per_unit || 0) : 0;
+            document.getElementById('depo-restock-expiry').value = '';
+            document.getElementById('depo-restock-expiry-wrap').style.display =
+                (item && Number(item.track_expiry) === 1) ? '' : 'none';
+            document.getElementById('depo-restock-modal').classList.add('active');
+        }
+
+        function _stockWarnToast(res) {
+            // The follow-up path returns stock_warnings; restock returns low_stock.
+            if (res && res.low_stock) showToast(t('now_low_stock','Item is now at/below its low-stock level.'), 'warning');
+        }
+
+        async function submitRestock(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-restock-id').value;
+            const payload = {
+                base_qty: Number(document.getElementById('depo-restock-qty').value),
+                unit_cost: Number(document.getElementById('depo-restock-cost').value),
+                expiry_date: document.getElementById('depo-restock-expiry').value || null,
+            };
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}/restock`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            } catch (err) {
+                showToast(t('unable_restock','Unable to add stock.'), 'error');
+                return;
+            }
+            if (!res.ok) { const p = await res.json().catch(()=>({})); showToast(p.error || t('unable_restock','Unable to add stock.'), 'error'); return; }
+            const body = await res.json().catch(() => ({}));
+            closeModal('depo-restock-modal');
+            showToast(t('stock_added','Stock added.'), 'success');
+            _stockWarnToast(body);
+            await loadDepoSection();
+        }
+
+        async function submitAdjust(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-adjust-id').value;
+            const payload = {
+                counted_qty: Number(document.getElementById('depo-adjust-qty').value),
+                note: document.getElementById('depo-adjust-note').value || null};
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}/adjust`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            } catch (err) {
+                showToast(t('unable_adjust','Unable to adjust.'), 'error');
+                return;
+            }
+            if (!res.ok) { const p = await res.json().catch(()=>({})); showToast(p.error || t('unable_adjust','Unable to adjust.'), 'error'); return; }
+            closeModal('depo-adjust-modal');
+            showToast(t('count_adjusted','Count adjusted.'), 'success');
+            await loadDepoSection();
+        }
+        function openAdjustModal(id) {
+            const item = inventoryItemsCache.find(x => x.id === id);
+            document.getElementById('depo-adjust-id').value = id;
+            document.getElementById('depo-adjust-qty').value = item ? (item.quantity || 0) : 0;
+            document.getElementById('depo-adjust-note').value = '';
+            document.getElementById('depo-adjust-modal').classList.add('active');
+        }
+
+        async function submitWriteoff(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-writeoff-id').value;
+            const payload = {
+                qty: Number(document.getElementById('depo-writeoff-qty').value),
+                note: document.getElementById('depo-writeoff-note').value || null};
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}/writeoff`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            } catch (err) {
+                showToast(t('unable_writeoff','Unable to write off.'), 'error');
+                return;
+            }
+            if (!res.ok) { const p = await res.json().catch(()=>({})); showToast(p.error || t('unable_writeoff','Unable to write off.'), 'error'); return; }
+            closeModal('depo-writeoff-modal');
+            showToast(t('written_off','Written off.'), 'success');
+            await loadDepoSection();
+        }
+        function openWriteoffModal(id) {
+            document.getElementById('depo-writeoff-id').value = id;
+            document.getElementById('depo-writeoff-qty').value = '';
+            document.getElementById('depo-writeoff-note').value = '';
+            document.getElementById('depo-writeoff-modal').classList.add('active');
         }
 
         function openInventoryItemEditor(id) {

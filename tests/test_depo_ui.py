@@ -63,3 +63,20 @@ def test_item_editor_strings_bilingual():
     en, ar = _lang_map('en'), _lang_map('ar')
     for key in ('edit_item', 'track_expiry', 'reorder_qty', 'supplier', 'location', 'deactivate'):
         assert f'{key}:' in en and f'{key}:' in ar, f'missing bilingual key {key}'
+
+
+def test_stock_action_modals_and_handlers():
+    for mid in ('depo-restock-modal', 'depo-adjust-modal', 'depo-writeoff-modal'):
+        assert f'id="{mid}"' in HTML, f'missing {mid}'
+    for fn in ('openRestockModal', 'submitRestock', 'openAdjustModal',
+               'submitAdjust', 'openWriteoffModal', 'submitWriteoff'):
+        assert f'function {fn}' in HTML, f'missing {fn}'
+    assert '/restock' in HTML and '/adjust' in HTML and '/writeoff' in HTML
+    # restock toggles expiry input only when the item tracks expiry
+    assert 'depo-restock-expiry' in HTML
+
+
+def test_stock_action_strings_bilingual():
+    en, ar = _lang_map('en'), _lang_map('ar')
+    for key in ('adjust_count', 'write_off', 'quantity', 'unit_cost', 'counted_qty', 'expiry_date'):
+        assert f'{key}:' in en and f'{key}:' in ar, f'missing bilingual key {key}'
