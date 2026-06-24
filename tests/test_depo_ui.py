@@ -80,3 +80,19 @@ def test_stock_action_strings_bilingual():
     en, ar = _lang_map('en'), _lang_map('ar')
     for key in ('adjust_count', 'write_off', 'quantity', 'unit_cost', 'counted_qty', 'expiry_date'):
         assert f'{key}:' in en and f'{key}:' in ar, f'missing bilingual key {key}'
+
+
+def test_materials_subpanel_present():
+    assert 'id="materials-procedure-select"' in HTML
+    assert 'id="materials-item-select"' in HTML
+    assert 'id="materials-body"' in HTML
+    for fn in ('loadProcedureMaterials', 'renderProcedureMaterials',
+               'addProcedureMaterial', 'removeProcedureMaterial'):
+        assert f'function {fn}' in HTML, f'missing {fn}'
+    assert '/materials' in HTML
+
+
+def test_materials_strings_bilingual():
+    en, ar = _lang_map('en'), _lang_map('ar')
+    for key in ('procedure_materials', 'default_qty', 'link_material'):
+        assert f'{key}:' in en and f'{key}:' in ar, f'missing {key}'

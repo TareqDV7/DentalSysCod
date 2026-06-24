@@ -2570,6 +2570,32 @@ HTML_TEMPLATE = '''
                         </div><!-- /catalog-subtab-procedure -->
                     </div><!-- /section-card -->
 
+                    <div class="section-card">
+                        <div class="section-card-header"><div>
+                            <h3 data-i18n="procedure_materials">Procedure materials (Depo)</h3>
+                            <p data-i18n="procedure_materials_summary">Link stock items consumed by a procedure and set the default amount issued.</p>
+                        </div></div>
+                        <div class="form-row-3">
+                            <div class="form-group"><label data-i18n="procedure">Procedure</label>
+                                <select id="materials-procedure-select" onchange="loadProcedureMaterials()"></select></div>
+                            <div class="form-group"><label data-i18n="item">Item</label>
+                                <select id="materials-item-select"></select></div>
+                            <div class="form-group"><label data-i18n="default_qty">Default qty</label>
+                                <input type="number" step="any" id="materials-default-qty" value="1"></div>
+                        </div>
+                        <div class="toolbar-row">
+                            <button class="btn btn-primary" type="button" onclick="addProcedureMaterial()" data-i18n="link_material">+ Link material</button>
+                        </div>
+                        <div class="table-container" style="margin-top:12px;">
+                            <table><thead><tr>
+                                <th data-i18n="item">Item</th>
+                                <th class="numeric-cell" data-i18n="default_qty">Default qty</th>
+                                <th class="actions-cell" data-i18n="actions">Actions</th>
+                            </tr></thead>
+                            <tbody id="materials-body"><tr><td colspan="3" data-i18n="no_data">No data</td></tr></tbody></table>
+                        </div>
+                    </div>
+
                     <!-- ── Tooth Conditions Admin ── -->
                     <div class="section-card">
                         <div class="card">
@@ -3933,7 +3959,12 @@ HTML_TEMPLATE = '''
                 unit_cost: 'Unit cost', counted_qty: 'Counted quantity', expiry_date: 'Expiry date',
                 note: 'Note', stock_added: 'Stock added.', count_adjusted: 'Count adjusted.',
                 written_off: 'Written off.', now_low_stock: 'Item is now at/below its low-stock level.',
-                unable_restock: 'Unable to add stock.', unable_adjust: 'Unable to adjust.', unable_writeoff: 'Unable to write off.'
+                unable_restock: 'Unable to add stock.', unable_adjust: 'Unable to adjust.', unable_writeoff: 'Unable to write off.',
+                procedure_materials: 'Procedure materials (Depo)',
+                procedure_materials_summary: 'Link stock items consumed by a procedure and set the default amount issued.',
+                default_qty: 'Default qty', link_material: '+ Link material',
+                remove: 'Remove', pick_procedure_item: 'Pick a procedure and an item.',
+                unable_link: 'Unable to link material.', unable_unlink: 'Unable to remove link.'
             },
             ar: {
                 undo: 'تراجع',
@@ -4384,7 +4415,12 @@ HTML_TEMPLATE = '''
                 unit_cost: 'تكلفة الوحدة', counted_qty: 'الكمية المعدودة', expiry_date: 'تاريخ الصلاحية',
                 note: 'ملاحظة', stock_added: 'تمت إضافة المخزون.', count_adjusted: 'تم تعديل الجرد.',
                 written_off: 'تم الشطب.', now_low_stock: 'المادة الآن عند حد النقص أو أقل.',
-                unable_restock: 'تعذّرت إضافة المخزون.', unable_adjust: 'تعذّر التعديل.', unable_writeoff: 'تعذّر الشطب.'
+                unable_restock: 'تعذّرت إضافة المخزون.', unable_adjust: 'تعذّر التعديل.', unable_writeoff: 'تعذّر الشطب.',
+                procedure_materials: 'مواد الإجراء (المخزن)',
+                procedure_materials_summary: 'اربط مواد المخزون التي يستهلكها الإجراء وحدّد الكمية الافتراضية المصروفة.',
+                default_qty: 'الكمية الافتراضية', link_material: '+ ربط مادة',
+                remove: 'إزالة', pick_procedure_item: 'اختر إجراءً ومادة.',
+                unable_link: 'تعذّر ربط المادة.', unable_unlink: 'تعذّرت إزالة الربط.'
             }
         };
 
@@ -5076,6 +5112,80 @@ HTML_TEMPLATE = '''
             attachDatePickerButtons(document.getElementById('treatments'));
             // Load tooth conditions admin
             renderToothConditionsTable();
+            await loadInventoryItems();
+            _fillMaterialsSelects();
+            loadProcedureMaterials();
+        }
+
+        // ── Procedure Materials (Depo) ────────────────────────────────────────────
+        function _fillMaterialsSelects() {
+            const procSel = document.getElementById('materials-procedure-select');
+            const itemSel = document.getElementById('materials-item-select');
+            if (procSel) procSel.innerHTML = treatmentProceduresCache
+                .map(p => `<option value="${p.id}">${escapeHtml(p.name || '')}</option>`).join('');
+            if (itemSel) itemSel.innerHTML = inventoryItemsCache
+                .map(it => `<option value="${it.id}">${escapeHtml(it.name || '')}</option>`).join('');
+        }
+
+        async function loadProcedureMaterials() {
+            const procSel = document.getElementById('materials-procedure-select');
+            const body = document.getElementById('materials-body');
+            if (!procSel || !body) return;
+            const pid = procSel.value;
+            if (!pid) { renderProcedureMaterials([]); return; }
+            let res;
+            try {
+                res = await fetch(`/api/inventory/procedures/${pid}/materials`);
+            } catch (err) {
+                renderProcedureMaterials([]);
+                return;
+            }
+            const links = await res.json().catch(() => []);
+            renderProcedureMaterials(Array.isArray(links) ? links : []);
+        }
+
+        function renderProcedureMaterials(list) {
+            const body = document.getElementById('materials-body');
+            if (!body) return;
+            body.innerHTML = list.length ? list.map(m => `<tr>
+                <td>${escapeHtml(m.name || '')}</td>
+                <td class="numeric-cell">${m.default_qty}</td>
+                <td class="actions-cell"><button class="btn btn-sm btn-danger"
+                    onclick="removeProcedureMaterial(${m.item_id})" data-i18n="remove">Remove</button></td>
+            </tr>`).join('') : `<tr><td colspan="3">${t('no_data','No data')}</td></tr>`;
+        }
+
+        async function addProcedureMaterial() {
+            const pid = document.getElementById('materials-procedure-select').value;
+            const itemId = document.getElementById('materials-item-select').value;
+            const qty = Number(document.getElementById('materials-default-qty').value);
+            if (!pid || !itemId) { showToast(t('pick_procedure_item','Pick a procedure and an item.'), 'warning'); return; }
+            let res;
+            try {
+                res = await fetch(`/api/inventory/procedures/${pid}/materials`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({item_id: Number(itemId), default_qty: qty})});
+            } catch (err) {
+                showToast(t('unable_link','Unable to link material.'), 'error');
+                return;
+            }
+            if (!res.ok) { showToast(t('unable_link','Unable to link material.'), 'error'); return; }
+            await loadProcedureMaterials();
+        }
+
+        async function removeProcedureMaterial(itemId) {
+            const pid = document.getElementById('materials-procedure-select').value;
+            let res;
+            try {
+                res = await fetch(`/api/inventory/procedures/${pid}/materials`, {
+                    method: 'DELETE', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({item_id: itemId})});
+            } catch (err) {
+                showToast(t('unable_unlink','Unable to remove link.'), 'error');
+                return;
+            }
+            if (!res.ok) { showToast(t('unable_unlink','Unable to remove link.'), 'error'); return; }
+            await loadProcedureMaterials();
         }
 
         // ── Tooth Conditions Admin ────────────────────────────────────────────────
