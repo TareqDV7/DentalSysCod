@@ -4709,6 +4709,7 @@ def branding():
     conn.close()
     return jsonify({'success': True})
 
+
 @app.route('/api/visits', methods=['GET', 'POST'])
 def visits():
     conn = sqlite3.connect(DB_NAME)
