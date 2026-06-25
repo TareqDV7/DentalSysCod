@@ -125,3 +125,24 @@ def test_report_strings_bilingual():
     en, ar = _lang_map('en'), _lang_map('ar')
     for key in ('low_stock_items', 'expiring_soon', 'on_hand_value'):
         assert f'{key}:' in en and f'{key}:' in ar
+
+
+DEPO_KEYS = [
+    'depo_title', 'depo_summary', 'add_item', 'items_in_stock', 'stock_value', 'item', 'on_hand',
+    'packs_remaining', 'in_stock', 'low_stock', 'negative', 'add_stock', 'edit_item', 'item_name_required',
+    'item_name_ar', 'base_unit', 'pack_unit', 'pack_size', 'low_stock_threshold', 'reorder_qty', 'supplier',
+    'location', 'track_expiry', 'deactivate', 'unable_save_item', 'item_saved', 'item_deactivated',
+    'adjust_count', 'write_off', 'quantity', 'unit_cost', 'counted_qty', 'expiry_date', 'note', 'stock_added',
+    'count_adjusted', 'written_off', 'now_low_stock', 'unable_restock', 'unable_adjust', 'unable_writeoff',
+    'procedure_materials', 'procedure_materials_summary', 'default_qty', 'link_material', 'procedure', 'remove',
+    'pick_procedure_item', 'unable_link', 'unable_unlink', 'issued_from_stock', 'stock_low_after',
+    'depo_report', 'low_stock_items', 'expiring_soon', 'on_hand_value', 'none',
+]
+
+
+def test_every_depo_key_in_both_languages():
+    en, ar = _lang_map('en'), _lang_map('ar')
+    missing_en = [k for k in DEPO_KEYS if f'{k}:' not in en]
+    missing_ar = [k for k in DEPO_KEYS if f'{k}:' not in ar]
+    assert not missing_en, f'EN missing: {missing_en}'
+    assert not missing_ar, f'AR missing: {missing_ar}'

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-25
+
+- **Depo (inventory/stock) — desktop management UI.** Adds a full stock-management surface to the desktop app on top of the previously-shipped inventory engine + REST API. A new top-level **Depo** / **مخزن** tab (Management group, between Catalog and Settings) plus wiring into the Catalog and follow-up screens. Frontend-only (`templates.py`); consumes the existing `/api/inventory/*` engine routes — no backend changes. Bilingual EN/AR throughout; material cost stays **insight-only** (never affects clinic profit or the follow-up billing math). Full pytest suite green (14 new `tests/test_depo_ui.py` content/bilingual-balance checks; ~742 total); inline-JS `node --check` clean; licensed-server runtime render verified (every Depo panel/modal/handler present in the served portal, both language maps).
+  - **Item list + editor.** On-hand quantity, packs-remaining (`quantity / pack_size`, display-only), low-stock highlight, and total stock value. Item editor covers name EN/AR, category, base/pack units, pack size, low-stock threshold, reorder qty, supplier, location, and an opt-in **Track expiry** checkbox; unit cost is set via Add-stock (weighted-average), not typed, so costing can't be bypassed. Deactivate replaces hard delete.
+  - **Stock actions.** Add stock (qty + unit cost + optional expiry when tracked), Adjust count (recount to a counted quantity), and Write-off (breakage/expiry) — each posts through the engine's movement ledger and reloads the section. A restock that lands at/below threshold toasts a low-stock warning.
+  - **Procedure materials.** A sub-panel on the Catalog procedure editor links stock items to a procedure with a default consumption qty (add/remove links).
+  - **Follow-up "issued from stock".** When a follow-up's procedure has linked materials, editable consumption rows pre-fill with the defaults; on save they post as `materials:[{item_id,qty}]` and any resulting low/zero stock surfaces as a non-blocking toast. The save is never blocked and the billing/money fields are untouched.
+  - **Stock report.** Low-stock list, on-hand stock value, and expiring-soon list (for expiry-tracked items).
+  - All server-origin values are HTML-escaped before render; fetch calls are guarded so a stopped local server surfaces a toast instead of a silent failure.
+
 ## 2026-06-22
 
 - **Four local-server fixes (desktop).** Surfaced after running a second local clinic system on the same machine. Cloud node and mobile are unaffected. Full pytest suite green (+10 tests); frozen-exe boot smoke verified. Shipped via PR #17; a fresh `DentaCare-Setup.exe` (v1.1.1) was rebuilt.
