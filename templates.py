@@ -4789,7 +4789,7 @@ HTML_TEMPLATE = '''
                 body.innerHTML = items.map(it => {
                     const qty = Number(it.quantity) || 0;
                     const packs = (it.packs_remaining == null) ? '—' : (Math.round(it.packs_remaining * 100) / 100);
-                    const unit = it.base_unit ? ` <small style="color:var(--muted)">${it.base_unit}</small>` : '';
+                    const unit = it.base_unit ? ` <small style="color:var(--muted)">${escapeHtml(it.base_unit)}</small>` : '';
                     return `<tr>
                         <td>${escapeHtml(it.name || '')}</td>
                         <td class="numeric-cell">${qty}${unit}</td>
