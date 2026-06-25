@@ -70,6 +70,7 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from markupsafe import escape
+from PIL import Image
 
 # Werkzeug 3's default generate_password_hash method is scrypt
 # (scrypt:32768:8:1$...). scrypt needs OpenSSL scrypt support plus a ~32 MB
@@ -4708,6 +4709,41 @@ def branding():
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+
+@app.route('/api/branding/logo', methods=['POST'])
+def branding_logo_upload():
+    file = request.files.get('logo')
+    if not file:
+        return jsonify({'error': 'No logo uploaded'}), 400
+    try:
+        img = Image.open(file.stream)
+        img.verify()                      # reject non-images
+        file.stream.seek(0)
+        img = Image.open(file.stream).convert('RGBA')
+    except Exception:                     # noqa: BLE001
+        return jsonify({'error': 'File is not a valid image'}), 400
+    branding_dir = UPLOAD_FOLDER / 'branding'
+    branding_dir.mkdir(parents=True, exist_ok=True)
+    dest = branding_dir / 'logo.png'
+    img.save(dest, 'PNG')
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    write_app_setting(cur, 'clinic_logo_path', str(dest))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/branding/logo', methods=['GET'])
+def branding_logo_serve():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    path = read_app_setting(cur, 'clinic_logo_path', '')
+    conn.close()
+    if not path or not Path(path).exists():
+        return jsonify({'error': 'No logo'}), 404
+    return send_file(path, mimetype='image/png')
 
 
 @app.route('/api/visits', methods=['GET', 'POST'])

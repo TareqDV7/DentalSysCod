@@ -50,3 +50,38 @@ def test_branding_rejects_unknown_theme(client):
     _login(client)
     r = client.put('/api/branding', json={'default_theme': 'neon_chaos'})
     assert r.status_code == 400
+
+
+import io
+from PIL import Image
+
+
+def _png_bytes(color=(10, 20, 30), size=(64, 64)):
+    buf = io.BytesIO()
+    Image.new('RGB', size, color).save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def test_logo_upload_then_serve(client):
+    _login(client)
+    r = client.post('/api/branding/logo',
+                    data={'logo': (io.BytesIO(_png_bytes()), 'logo.png')},
+                    content_type='multipart/form-data')
+    assert r.status_code == 200
+    assert client.get('/api/branding').get_json()['has_logo'] is True
+    served = client.get('/api/branding/logo')
+    assert served.status_code == 200
+    assert Image.open(io.BytesIO(served.data)).size == (64, 64)
+
+
+def test_logo_upload_rejects_non_image(client):
+    _login(client)
+    r = client.post('/api/branding/logo',
+                    data={'logo': (io.BytesIO(b'not-an-image'), 'evil.png')},
+                    content_type='multipart/form-data')
+    assert r.status_code == 400
+
+
+def test_logo_serve_404_when_absent(client):
+    _login(client)
+    assert client.get('/api/branding/logo').status_code == 404
