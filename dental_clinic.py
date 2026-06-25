@@ -1990,8 +1990,9 @@ _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/backup-file', '/api/bt/status'
                         '/api/data/clear-catalogs',
                         '/api/data/duplicate-patients', '/api/data/merge-patients',
                         '/api/data/import-patients/preview',
-                        '/api/data/import-patients/commit'}
-_AUTH_REQUIRED_PREFIXES = ('/invoice/',)
+                        '/api/data/import-patients/commit',
+                        '/api/branding', '/api/posts'}
+_AUTH_REQUIRED_PREFIXES = ('/invoice/', '/api/branding/', '/api/posts/')
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
 _MAINTENANCE = False
@@ -4672,6 +4673,38 @@ def support_messages():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('INSERT INTO support_messages (subject, message) VALUES (?, ?)', (data['subject'], data['message']))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+_VALID_POST_THEMES = ('dark_premium', 'clean_clinical', 'soft_mint', 'bold_editorial')
+
+
+@app.route('/api/branding', methods=['GET', 'PUT'])
+def branding():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        logo_path = read_app_setting(cursor, 'clinic_logo_path', '')
+        out = {
+            'doctor_name': read_app_setting(cursor, 'doctor_name', '') or '',
+            'doctor_name_ar': read_app_setting(cursor, 'doctor_name_ar', '') or '',
+            'default_theme': read_app_setting(cursor, 'post_default_theme', 'clean_clinical'),
+            'has_logo': bool(logo_path and Path(logo_path).exists()),
+        }
+        conn.close()
+        return jsonify(out)
+
+    data = request.get_json(silent=True) or {}
+    theme = data.get('default_theme')
+    if theme is not None and theme not in _VALID_POST_THEMES:
+        conn.close()
+        return jsonify({'error': 'Unknown theme'}), 400
+    for key, col in (('doctor_name', 'doctor_name'),
+                     ('doctor_name_ar', 'doctor_name_ar'),
+                     ('default_theme', 'post_default_theme')):
+        if key in data and data[key] is not None:
+            write_app_setting(cursor, col, str(data[key]))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
