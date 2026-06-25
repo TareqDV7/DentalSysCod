@@ -111,3 +111,17 @@ def test_followup_override_strings_bilingual():
     en, ar = _lang_map('en'), _lang_map('ar')
     for key in ('issued_from_stock', 'stock_low_after'):
         assert f'{key}:' in en and f'{key}:' in ar
+
+
+def test_report_panel_present():
+    for did in ('depo-report-low', 'depo-report-expiring', 'depo-report-value'):
+        assert f'id="{did}"' in HTML, f'missing {did}'
+    assert 'function loadDepoReport' in HTML
+    assert 'function renderDepoReport' in HTML
+    assert "/api/inventory/report" in HTML
+
+
+def test_report_strings_bilingual():
+    en, ar = _lang_map('en'), _lang_map('ar')
+    for key in ('low_stock_items', 'expiring_soon', 'on_hand_value'):
+        assert f'{key}:' in en and f'{key}:' in ar

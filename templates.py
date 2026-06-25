@@ -2656,6 +2656,20 @@ HTML_TEMPLATE = '''
                             </table>
                         </div>
                     </div>
+                    <div class="section-card">
+                        <div class="section-card-header"><div>
+                            <h3 data-i18n="depo_report">Stock report</h3>
+                            <p data-i18n="on_hand_value">On-hand value</p>
+                        </div><div><strong id="depo-report-value">0</strong></div></div>
+                        <div class="form-row">
+                            <div class="form-group" style="flex:1;">
+                                <h4 data-i18n="low_stock_items">Low-stock items</h4>
+                                <div id="depo-report-low"></div></div>
+                            <div class="form-group" style="flex:1;">
+                                <h4 data-i18n="expiring_soon">Expiring soon</h4>
+                                <div id="depo-report-expiring"></div></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -3966,7 +3980,9 @@ HTML_TEMPLATE = '''
                 remove: 'Remove', pick_procedure_item: 'Pick a procedure and an item.',
                 unable_link: 'Unable to link material.', unable_unlink: 'Unable to remove link.',
                 issued_from_stock: 'Issued from stock',
-                stock_low_after: 'Low stock after issuing: '
+                stock_low_after: 'Low stock after issuing: ',
+                depo_report: 'Stock report', low_stock_items: 'Low-stock items',
+                expiring_soon: 'Expiring soon', on_hand_value: 'On-hand value', none: 'None',
             },
             ar: {
                 undo: 'تراجع',
@@ -4424,7 +4440,9 @@ HTML_TEMPLATE = '''
                 remove: 'إزالة', pick_procedure_item: 'اختر إجراءً ومادة.',
                 unable_link: 'تعذّر ربط المادة.', unable_unlink: 'تعذّرت إزالة الربط.',
                 issued_from_stock: 'المصروف من المخزون',
-                stock_low_after: 'مخزون منخفض بعد الصرف: '
+                stock_low_after: 'مخزون منخفض بعد الصرف: ',
+                depo_report: 'تقرير المخزون', low_stock_items: 'مواد منخفضة المخزون',
+                expiring_soon: 'قريبة الانتهاء', on_hand_value: 'قيمة المتوفر', none: 'لا يوجد',
             }
         };
 
@@ -4796,9 +4814,31 @@ HTML_TEMPLATE = '''
             }
         }
 
+        async function loadDepoReport() {
+            let report = {low_stock: [], expiring_soon: [], on_hand_value: 0};
+            try { report = await (await fetch('/api/inventory/report')).json(); } catch (_) {}
+            renderDepoReport(report || {});
+        }
+
+        function renderDepoReport(report) {
+            const low = document.getElementById('depo-report-low');
+            const exp = document.getElementById('depo-report-expiring');
+            const val = document.getElementById('depo-report-value');
+            const lowList = report.low_stock || [];
+            const expList = report.expiring_soon || [];
+            if (low) low.innerHTML = lowList.length
+                ? lowList.map(i => `<div>${escapeHtml(i.name || '')} — <span class="badge badge-warning">${escapeHtml(String(i.quantity ?? ''))}</span></div>`).join('')
+                : `<div style="color:var(--muted)">${t('none','None')}</div>`;
+            if (exp) exp.innerHTML = expList.length
+                ? expList.map(i => `<div>${escapeHtml(i.name || '')} — ${escapeHtml(i.expiry_date || '')}</div>`).join('')
+                : `<div style="color:var(--muted)">${t('none','None')}</div>`;
+            if (val) val.textContent = '₪ ' + (Number(report.on_hand_value) || 0).toFixed(2);
+        }
+
         async function loadDepoSection() {
             await loadInventoryItems();
             renderInventoryItems();
+            await loadDepoReport();
         }
 
         function openRestockModal(id) {
