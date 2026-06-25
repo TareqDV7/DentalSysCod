@@ -3364,8 +3364,8 @@ HTML_TEMPLATE = '''
     <div id="depo-item-modal" class="modal" onclick="if(event.target===this)closeModal('depo-item-modal')">
         <div class="modal-content">
             <div class="modal-header">
+                <span class="close-modal" onclick="closeModal('depo-item-modal')">&times;</span>
                 <h3 id="depo-item-modal-title" data-i18n="add_item">Add Item</h3>
-                <button type="button" class="modal-close" onclick="closeModal('depo-item-modal')">&times;</button>
             </div>
             <form id="depo-item-form" onsubmit="saveInventoryItem(event)">
                 <input type="hidden" id="depo-item-id" value="">
@@ -3414,8 +3414,8 @@ HTML_TEMPLATE = '''
 
     <div id="depo-restock-modal" class="modal" onclick="if(event.target===this)closeModal('depo-restock-modal')">
         <div class="modal-content">
-            <div class="modal-header"><h3 data-i18n="add_stock">Add stock</h3>
-                <button type="button" class="modal-close" onclick="closeModal('depo-restock-modal')">&times;</button></div>
+            <div class="modal-header"><span class="close-modal" onclick="closeModal('depo-restock-modal')">&times;</span>
+                <h3 data-i18n="add_stock">Add stock</h3></div>
             <form onsubmit="submitRestock(event)">
                 <input type="hidden" id="depo-restock-id">
                 <div class="form-row">
@@ -3433,8 +3433,8 @@ HTML_TEMPLATE = '''
     </div>
     <div id="depo-adjust-modal" class="modal" onclick="if(event.target===this)closeModal('depo-adjust-modal')">
         <div class="modal-content">
-            <div class="modal-header"><h3 data-i18n="adjust_count">Adjust count</h3>
-                <button type="button" class="modal-close" onclick="closeModal('depo-adjust-modal')">&times;</button></div>
+            <div class="modal-header"><span class="close-modal" onclick="closeModal('depo-adjust-modal')">&times;</span>
+                <h3 data-i18n="adjust_count">Adjust count</h3></div>
             <form onsubmit="submitAdjust(event)">
                 <input type="hidden" id="depo-adjust-id">
                 <div class="form-group"><label data-i18n="counted_qty">Counted quantity</label>
@@ -3447,8 +3447,8 @@ HTML_TEMPLATE = '''
     </div>
     <div id="depo-writeoff-modal" class="modal" onclick="if(event.target===this)closeModal('depo-writeoff-modal')">
         <div class="modal-content">
-            <div class="modal-header"><h3 data-i18n="write_off">Write-off</h3>
-                <button type="button" class="modal-close" onclick="closeModal('depo-writeoff-modal')">&times;</button></div>
+            <div class="modal-header"><span class="close-modal" onclick="closeModal('depo-writeoff-modal')">&times;</span>
+                <h3 data-i18n="write_off">Write-off</h3></div>
             <form onsubmit="submitWriteoff(event)">
                 <input type="hidden" id="depo-writeoff-id">
                 <div class="form-group"><label data-i18n="quantity">Quantity</label>

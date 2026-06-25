@@ -9,6 +9,7 @@
   - **Follow-up "issued from stock".** When a follow-up's procedure has linked materials, editable consumption rows pre-fill with the defaults; on save they post as `materials:[{item_id,qty}]` and any resulting low/zero stock surfaces as a non-blocking toast. The save is never blocked and the billing/money fields are untouched.
   - **Stock report.** Low-stock list, on-hand stock value, and expiring-soon list (for expiry-tracked items).
   - All server-origin values are HTML-escaped before render; fetch calls are guarded so a stopped local server surfaces a toast instead of a silent failure.
+  - **Modal close (×) buttons.** The four stock dialogs (item editor, add stock, adjust count, write-off) shipped with a non-existent CSS class (`modal-close`) and the × placed after the title, so it rendered as unstyled inline text beside the heading instead of at the panel's far corner. They now use the app-wide `.close-modal` control (placed before the title), so the × sits at the far corner and is mirrored correctly in RTL and dark mode — no new CSS.
 
 ## 2026-06-22
 
