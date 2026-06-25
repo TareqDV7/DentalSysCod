@@ -109,5 +109,5 @@ def test_followup_override_rows_present():
 
 def test_followup_override_strings_bilingual():
     en, ar = _lang_map('en'), _lang_map('ar')
-    for key in ('issued_from_stock',):
+    for key in ('issued_from_stock', 'stock_low_after'):
         assert f'{key}:' in en and f'{key}:' in ar

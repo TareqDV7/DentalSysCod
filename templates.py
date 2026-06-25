@@ -5035,7 +5035,7 @@ HTML_TEMPLATE = '''
                     <small style="color:var(--muted)">${escapeHtml(String(m.base_unit ?? ''))}</small></div>
                 <div class="form-group" style="flex:1;">
                     <input type="number" step="any" class="followup-material-qty"
-                           data-item-id="${m.item_id}" value="${escapeHtml(String(m.default_qty ?? ''))}"></div>
+                           data-item-id="${escapeHtml(String(m.item_id ?? ''))}" value="${escapeHtml(String(m.default_qty ?? ''))}"></div>
             </div>`).join('');
         }
 
