@@ -1,6 +1,5 @@
 # tests/test_branding_api.py
 import io
-import sqlite3
 
 import pytest
 from PIL import Image
