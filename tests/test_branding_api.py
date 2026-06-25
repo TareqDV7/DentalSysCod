@@ -1,6 +1,10 @@
 # tests/test_branding_api.py
+import io
 import sqlite3
+
 import pytest
+from PIL import Image
+
 import dental_clinic
 
 
@@ -50,10 +54,6 @@ def test_branding_rejects_unknown_theme(client):
     _login(client)
     r = client.put('/api/branding', json={'default_theme': 'neon_chaos'})
     assert r.status_code == 400
-
-
-import io
-from PIL import Image
 
 
 def _png_bytes(color=(10, 20, 30), size=(64, 64)):
