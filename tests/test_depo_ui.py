@@ -96,3 +96,18 @@ def test_materials_strings_bilingual():
     en, ar = _lang_map('en'), _lang_map('ar')
     for key in ('procedure_materials', 'default_qty', 'link_material'):
         assert f'{key}:' in en and f'{key}:' in ar, f'missing {key}'
+
+
+def test_followup_override_rows_present():
+    assert 'id="followup-materials-wrap"' in HTML
+    assert 'id="followup-materials-body"' in HTML
+    assert 'function loadFollowupMaterials' in HTML
+    assert 'function collectFollowupMaterials' in HTML
+    assert 'stock_warnings' in HTML
+    assert 'data.materials' in HTML  # overrides injected into POST body
+
+
+def test_followup_override_strings_bilingual():
+    en, ar = _lang_map('en'), _lang_map('ar')
+    for key in ('issued_from_stock',):
+        assert f'{key}:' in en and f'{key}:' in ar

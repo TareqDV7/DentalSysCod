@@ -3964,7 +3964,9 @@ HTML_TEMPLATE = '''
                 procedure_materials_summary: 'Link stock items consumed by a procedure and set the default amount issued.',
                 default_qty: 'Default qty', link_material: '+ Link material',
                 remove: 'Remove', pick_procedure_item: 'Pick a procedure and an item.',
-                unable_link: 'Unable to link material.', unable_unlink: 'Unable to remove link.'
+                unable_link: 'Unable to link material.', unable_unlink: 'Unable to remove link.',
+                issued_from_stock: 'Issued from stock',
+                stock_low_after: 'Low stock after issuing: '
             },
             ar: {
                 undo: 'تراجع',
@@ -4420,7 +4422,9 @@ HTML_TEMPLATE = '''
                 procedure_materials_summary: 'اربط مواد المخزون التي يستهلكها الإجراء وحدّد الكمية الافتراضية المصروفة.',
                 default_qty: 'الكمية الافتراضية', link_material: '+ ربط مادة',
                 remove: 'إزالة', pick_procedure_item: 'اختر إجراءً ومادة.',
-                unable_link: 'تعذّر ربط المادة.', unable_unlink: 'تعذّرت إزالة الربط.'
+                unable_link: 'تعذّر ربط المادة.', unable_unlink: 'تعذّرت إزالة الربط.',
+                issued_from_stock: 'المصروف من المخزون',
+                stock_low_after: 'مخزون منخفض بعد الصرف: '
             }
         };
 
@@ -5011,6 +5015,36 @@ HTML_TEMPLATE = '''
             }
 
             requiresLabField.value = requiresLab ? '1' : '0';
+            loadFollowupMaterials(select.value || null);
+        }
+
+        async function loadFollowupMaterials(procedureId) {
+            const wrap = document.getElementById('followup-materials-wrap');
+            const body = document.getElementById('followup-materials-body');
+            if (!wrap || !body) return;
+            if (!procedureId) { wrap.style.display = 'none'; body.innerHTML = ''; return; }
+            let links = [];
+            try {
+                const res = await fetch(`/api/inventory/procedures/${procedureId}/materials`);
+                links = await res.json();
+            } catch (_) { links = []; }
+            if (!Array.isArray(links) || !links.length) { wrap.style.display = 'none'; body.innerHTML = ''; return; }
+            wrap.style.display = 'block';
+            body.innerHTML = links.map(m => `<div class="form-row" style="align-items:center;">
+                <div class="form-group" style="flex:2;">${escapeHtml(m.name || '')}
+                    <small style="color:var(--muted)">${escapeHtml(String(m.base_unit ?? ''))}</small></div>
+                <div class="form-group" style="flex:1;">
+                    <input type="number" step="any" class="followup-material-qty"
+                           data-item-id="${m.item_id}" value="${escapeHtml(String(m.default_qty ?? ''))}"></div>
+            </div>`).join('');
+        }
+
+        function collectFollowupMaterials() {
+            const out = [];
+            document.querySelectorAll('#followup-materials-body .followup-material-qty').forEach(inp => {
+                out.push({item_id: Number(inp.getAttribute('data-item-id')), qty: Number(inp.value)});
+            });
+            return out;
         }
 
         function resetProcedureForm() {
@@ -7779,6 +7813,10 @@ HTML_TEMPLATE = '''
                                     <input type="text" name="tooth_no" id="followup-tooth-no" placeholder="e.g. 16" maxlength="10" autocomplete="off">
                                 </div>
                             </div>
+                            <div class="form-group" id="followup-materials-wrap" style="display:none;">
+                                <label>${t('issued_from_stock','Issued from stock')}</label>
+                                <div id="followup-materials-body"></div>
+                            </div>
                             <div class="form-row-3">
                                 <div class="form-group"><label>${t('price','Price')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')})</small></label><input type="text" inputmode="decimal" name="price" id="followup-price" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off" required></div>
                                 <div class="form-group"><label>${t('discount','Discount')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')}, ${t('or_percent','or % e.g. 20%')})</small></label><input type="text" inputmode="decimal" name="discount" id="followup-discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="followup-price" placeholder="0" autocomplete="off"></div>
@@ -7879,6 +7917,8 @@ HTML_TEMPLATE = '''
                     showToast(t('procedure_required', 'Please select a procedure or enter a custom procedure name.'), 'warning');
                     return;
                 }
+                const followupMaterials = collectFollowupMaterials();
+                if (followupMaterials.length) data.materials = followupMaterials;
                 const response = await fetch(`/api/patients/${patient.id}/followups`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -7888,6 +7928,11 @@ HTML_TEMPLATE = '''
                     const payload = await response.json().catch(() => ({}));
                     showToast(payload.error || t('unable_save_followup', 'Unable to save follow-up.'), 'error');
                     return;
+                }
+                const result = await response.json().catch(() => ({}));
+                if (Array.isArray(result.stock_warnings) && result.stock_warnings.length) {
+                    const names = result.stock_warnings.map(w => w.name).join(', ');
+                    showToast(t('stock_low_after','Low stock after issuing: ') + names, 'warning');
                 }
                 await viewPatientProfile(patientId);
                 const followupsBtn = document.querySelector('#patient-profile-modal .profile-tab:nth-child(2)');
