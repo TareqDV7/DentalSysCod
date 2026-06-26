@@ -2235,6 +2235,10 @@ HTML_TEMPLATE = '''
                 <span class="tab-icon"><svg class="ic"><use href="#i-gear"/></svg></span>
                 <span data-en="Settings" data-ar="الإعدادات">Settings</span>
             </button>
+            <button class="nav-tab" data-tab="poststudio" onclick="switchTab('poststudio', this)">
+                <span class="tab-icon"><svg class="ic"><use href="#i-chart-bar"/></svg></span>
+                <span data-en="Post Studio" data-ar="استوديو المنشورات">Post Studio</span>
+            </button>
         </div>
 
         <div class="content">
@@ -3006,6 +3010,74 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
         </div>
+
+            <!-- Post Studio Tab -->
+            <div id="poststudio" class="tab-content">
+                <div class="screen-shell">
+                    <div class="section-card-header">
+                        <div>
+                            <h2 data-i18n="post_studio_title">Post Studio</h2>
+                            <p data-i18n="post_studio_subtitle">Create branded social-media posts from patient photos.</p>
+                        </div>
+                    </div>
+
+                    <div class="ps-layout" style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">
+                        <!-- Controls column -->
+                        <div class="section-card ps-controls" style="flex:1;min-width:260px;max-width:420px;">
+                            <!-- Photo picker -->
+                            <div class="form-group">
+                                <label data-i18n="ps_photos">Photos <small style="font-weight:400;color:var(--muted);" data-i18n="ps_photos_hint">(up to 4)</small></label>
+                                <input type="file" id="ps-photo-input" accept="image/*" multiple style="width:100%;">
+                                <div id="ps-photo-labels" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
+                                <p id="ps-photo-count" class="muted" style="font-size:0.85em;margin:6px 0 0;"></p>
+                            </div>
+
+                            <!-- Doctor name -->
+                            <div class="form-group">
+                                <label data-i18n="ps_doctor_name">Doctor name</label>
+                                <input type="text" id="ps-doctor-name" autocomplete="off">
+                            </div>
+
+                            <!-- Theme -->
+                            <div class="form-group">
+                                <label data-i18n="ps_theme">Theme</label>
+                                <select id="ps-theme">
+                                    <option value="dark_premium" data-i18n="ps_theme_dark_premium">Dark Premium</option>
+                                    <option value="clean_clinical" data-i18n="ps_theme_clean_clinical" selected>Clean Clinical</option>
+                                    <option value="soft_mint" data-i18n="ps_theme_soft_mint">Soft Mint</option>
+                                    <option value="bold_editorial" data-i18n="ps_theme_bold_editorial">Bold Editorial</option>
+                                </select>
+                            </div>
+
+                            <!-- Size -->
+                            <div class="form-group">
+                                <label data-i18n="ps_size">Size</label>
+                                <select id="ps-size">
+                                    <option value="square" data-i18n="ps_size_square">Square (1:1)</option>
+                                    <option value="portrait" data-i18n="ps_size_portrait">Portrait (4:5)</option>
+                                    <option value="story" data-i18n="ps_size_story">Story (9:16)</option>
+                                </select>
+                            </div>
+
+                            <!-- Actions -->
+                            <div style="display:flex;gap:8px;margin-top:4px;">
+                                <button class="btn btn-primary" type="button" onclick="psSave()" data-i18n="ps_save">Save to Gallery</button>
+                                <button class="btn" type="button" onclick="psDownload()" data-i18n="ps_download">Download</button>
+                            </div>
+                        </div>
+
+                        <!-- Preview column -->
+                        <div class="section-card ps-preview-card" style="flex:1;min-width:260px;display:flex;flex-direction:column;align-items:center;gap:12px;">
+                            <p class="muted" style="font-size:0.88em;margin:0;" data-i18n="ps_preview_label">Preview</p>
+                            <img id="psPreview" src="" alt=""
+                                 style="max-width:100%;border-radius:var(--radius,8px);display:none;box-shadow:var(--elev-card,0 2px 8px rgba(0,0,0,.15));">
+                            <p id="ps-preview-empty" class="muted" style="font-size:0.9em;text-align:center;" data-i18n="ps_preview_hint">Add photos to generate a preview.</p>
+                            <div id="ps-preview-spinner" style="display:none;font-size:0.88em;color:var(--muted);" data-i18n="ps_generating">Generating…</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div><!-- end app-body -->
     </div>
 
@@ -3754,7 +3826,30 @@ HTML_TEMPLATE = '''
                 name_ar: 'Arabic name',
                 plan_pick_hint: 'Enter a number, or a new plan name:',
                 plan_new_name: 'New plan name:',
-                plan: 'Plan'
+                plan: 'Plan',
+                post_studio_title: 'Post Studio',
+                post_studio_subtitle: 'Create branded social-media posts from patient photos.',
+                ps_photos: 'Photos',
+                ps_photos_hint: '(up to 4)',
+                ps_doctor_name: 'Doctor name',
+                ps_theme: 'Theme',
+                ps_theme_dark_premium: 'Dark Premium',
+                ps_theme_clean_clinical: 'Clean Clinical',
+                ps_theme_soft_mint: 'Soft Mint',
+                ps_theme_bold_editorial: 'Bold Editorial',
+                ps_size: 'Size',
+                ps_size_square: 'Square (1:1)',
+                ps_size_portrait: 'Portrait (4:5)',
+                ps_size_story: 'Story (9:16)',
+                ps_save: 'Save to Gallery',
+                ps_download: 'Download',
+                ps_preview_label: 'Preview',
+                ps_preview_hint: 'Add photos to generate a preview.',
+                ps_generating: 'Generating…',
+                ps_saved: 'Post saved to gallery',
+                ps_save_failed: 'Could not save post: ',
+                ps_too_many_photos: 'Maximum 4 photos allowed',
+                ps_label_photo: 'Label for photo'
             },
             ar: {
                 undo: 'تراجع',
@@ -4174,7 +4269,30 @@ HTML_TEMPLATE = '''
                 name_ar: 'الاسم بالعربية',
                 plan_pick_hint: 'أدخل رقمًا، أو اسم خطة جديدة:',
                 plan_new_name: 'اسم الخطة الجديدة:',
-                plan: 'خطة'
+                plan: 'خطة',
+                post_studio_title: 'استوديو المنشورات',
+                post_studio_subtitle: 'أنشئ منشورات مميزة لوسائل التواصل من صور المرضى.',
+                ps_photos: 'الصور',
+                ps_photos_hint: '(حتى 4)',
+                ps_doctor_name: 'اسم الطبيب',
+                ps_theme: 'الثيم',
+                ps_theme_dark_premium: 'داكن فاخر',
+                ps_theme_clean_clinical: 'طبي نظيف',
+                ps_theme_soft_mint: 'نعناعي ناعم',
+                ps_theme_bold_editorial: 'تحريري جريء',
+                ps_size: 'الحجم',
+                ps_size_square: 'مربع (1:1)',
+                ps_size_portrait: 'عمودي (4:5)',
+                ps_size_story: 'ستوري (9:16)',
+                ps_save: 'حفظ في المعرض',
+                ps_download: 'تحميل',
+                ps_preview_label: 'معاينة',
+                ps_preview_hint: 'أضف صوراً لإنشاء معاينة.',
+                ps_generating: 'جارٍ الإنشاء…',
+                ps_saved: 'تم حفظ المنشور في المعرض',
+                ps_save_failed: 'تعذّر حفظ المنشور: ',
+                ps_too_many_photos: 'الحد الأقصى 4 صور',
+                ps_label_photo: 'تسمية الصورة'
             }
         };
 
@@ -4707,6 +4825,7 @@ HTML_TEMPLATE = '''
             else if (tabName === 'reports')      loadReportsSection();
             else if (tabName === 'financial')    loadFinancialSection();
             else if (tabName === 'support')      loadSupportSection();
+            else if (tabName === 'poststudio')   psOnTabOpen();
         }
 
         function switchReportsSubTab(tabName, clickedBtn = null, shouldLoad = true) {
@@ -8717,6 +8836,172 @@ HTML_TEMPLATE = '''
             }
         }
         document.addEventListener('DOMContentLoaded', loadLicenseCard);
+    </script>
+
+    <script>
+        // ── Post Studio ───────────────────────────────────────────────────────
+        // State
+        const _ps = { photos: [] };
+
+        function _psDebounce(fn, ms) {
+            let timer;
+            return function() {
+                clearTimeout(timer);
+                timer = setTimeout(fn, ms);
+            };
+        }
+
+        function _psBuildForm() {
+            const fd = new FormData();
+            const docEl = document.getElementById('ps-doctor-name');
+            const themeEl = document.getElementById('ps-theme');
+            const sizeEl = document.getElementById('ps-size');
+            fd.append('doctor_name', docEl ? docEl.value : '');
+            fd.append('theme', themeEl ? themeEl.value : 'clean_clinical');
+            fd.append('size', sizeEl ? sizeEl.value : 'square');
+            _ps.photos.forEach(function(p) {
+                fd.append('photo', p.file);
+                fd.append('labels', p.label);
+            });
+            return fd;
+        }
+
+        const _psRenderPreview = _psDebounce(async function() {
+            if (!_ps.photos.length) return;
+            const spinner = document.getElementById('ps-preview-spinner');
+            const previewEl = document.getElementById('psPreview');
+            const emptyEl = document.getElementById('ps-preview-empty');
+            if (spinner) spinner.style.display = '';
+            try {
+                const r = await fetch('/api/posts/preview', { method: 'POST', body: _psBuildForm() });
+                if (r.ok) {
+                    const blob = await r.blob();
+                    const url = URL.createObjectURL(blob);
+                    if (previewEl) {
+                        if (previewEl._prevBlobUrl) URL.revokeObjectURL(previewEl._prevBlobUrl);
+                        previewEl._prevBlobUrl = url;
+                        previewEl.src = url;
+                        previewEl.style.display = '';
+                    }
+                    if (emptyEl) emptyEl.style.display = 'none';
+                } else {
+                    const msg = await r.text().catch(function() { return ''; });
+                    showToast(t('ps_save_failed') + msg, 'error');
+                }
+            } finally {
+                if (spinner) spinner.style.display = 'none';
+            }
+        }, 250);
+
+        async function psSave() {
+            if (!_ps.photos.length) return;
+            const r = await fetch('/api/posts', { method: 'POST', body: _psBuildForm() });
+            if (r.ok) {
+                showToast(t('ps_saved'), 'success');
+            } else {
+                const msg = await r.text().catch(function() { return ''; });
+                showToast(t('ps_save_failed') + msg, 'error');
+            }
+        }
+
+        function psDownload() {
+            const previewEl = document.getElementById('psPreview');
+            if (!previewEl || !previewEl.src || previewEl.style.display === 'none') return;
+            const a = document.createElement('a');
+            a.href = previewEl.src;
+            a.download = 'post.png';
+            a.click();
+        }
+
+        function _psRenderLabelInputs() {
+            const container = document.getElementById('ps-photo-labels');
+            if (!container) return;
+            container.innerHTML = '';
+            _ps.photos.forEach(function(p, i) {
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
+                const thumb = document.createElement('span');
+                thumb.textContent = '\\uD83D\\uDDBC\\uFE0F';
+                thumb.setAttribute('aria-hidden', 'true');
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.value = escapeHtml(p.label);
+                inp.placeholder = t('ps_label_photo', 'Label') + ' ' + (i + 1);
+                inp.style.cssText = 'flex:1;';
+                inp.addEventListener('input', function() {
+                    _ps.photos[i].label = inp.value;
+                    _psRenderPreview();
+                });
+                const rm = document.createElement('button');
+                rm.type = 'button';
+                rm.className = 'btn btn-danger';
+                rm.style.cssText = 'padding:2px 8px;font-size:0.8em;';
+                rm.textContent = '\\u00D7';
+                rm.addEventListener('click', function() {
+                    _ps.photos.splice(i, 1);
+                    _psRenderLabelInputs();
+                    _psUpdateCount();
+                    _psRenderPreview();
+                });
+                wrap.appendChild(thumb);
+                wrap.appendChild(inp);
+                wrap.appendChild(rm);
+                container.appendChild(wrap);
+            });
+        }
+
+        function _psUpdateCount() {
+            const el = document.getElementById('ps-photo-count');
+            if (!el) return;
+            el.textContent = _ps.photos.length
+                ? _ps.photos.length + ' / 4'
+                : '';
+        }
+
+        function _psOnFileChange(evt) {
+            const files = Array.from(evt.target.files || []);
+            const defaultLabels = ['Before', 'During', 'After'];
+            files.forEach(function(f) {
+                if (_ps.photos.length >= 4) {
+                    showToast(t('ps_too_many_photos', 'Maximum 4 photos allowed'), 'warning');
+                    return;
+                }
+                _ps.photos.push({
+                    file: f,
+                    label: defaultLabels[_ps.photos.length] || ('Photo ' + (_ps.photos.length + 1))
+                });
+            });
+            evt.target.value = '';
+            _psRenderLabelInputs();
+            _psUpdateCount();
+            _psRenderPreview();
+        }
+
+        async function psOnTabOpen() {
+            // Prefill doctor name + default theme from branding
+            try {
+                const r = await fetch('/api/branding');
+                if (r.ok) {
+                    const b = await r.json();
+                    const docEl = document.getElementById('ps-doctor-name');
+                    const themeEl = document.getElementById('ps-theme');
+                    if (docEl && !docEl.value && b.doctor_name) docEl.value = b.doctor_name;
+                    if (themeEl && b.default_theme) themeEl.value = b.default_theme;
+                }
+            } catch (_e) { /* ignore */ }
+        }
+
+        // Wire up file input and controls after DOM ready
+        document.addEventListener('DOMContentLoaded', function() {
+            const fi = document.getElementById('ps-photo-input');
+            if (fi) fi.addEventListener('change', _psOnFileChange);
+            ['ps-doctor-name', 'ps-theme', 'ps-size'].forEach(function(id) {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', function() { _psRenderPreview(); });
+            });
+            const docEl = document.getElementById('ps-doctor-name');
+            if (docEl) docEl.addEventListener('input', function() { _psRenderPreview(); });
+        });
     </script>
 
     <!-- Doctor name edit popover: direct body child to escape backdrop-filter containment -->
