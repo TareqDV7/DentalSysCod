@@ -94,3 +94,27 @@ def test_preview_rejects_bad_theme_and_size(client):
               'photo': [(io.BytesIO(_png()), 'p.png')]},
         content_type='multipart/form-data')
     assert bad_size.status_code == 400
+
+
+def _save_one(client):
+    return client.post('/api/posts',
+                       data={'doctor_name': 'Dr. Wasfy', 'theme': 'soft_mint',
+                             'size': 'portrait', 'photo': [(io.BytesIO(_png()), 'a.png')],
+                             'labels': ['Before']},
+                       content_type='multipart/form-data')
+
+
+def test_save_then_list_serve_delete(client):
+    _login(client)
+    pid = _save_one(client).get_json()['id']
+    listing = client.get('/api/posts').get_json()
+    assert any(p['id'] == pid for p in listing)
+    img = client.get(f'/api/posts/{pid}/image')
+    assert img.status_code == 200 and img.content_type.startswith('image/png')
+    assert Image.open(io.BytesIO(img.data)).size == (1080, 1350)
+    assert client.delete(f'/api/posts/{pid}').status_code == 200
+    assert client.get(f'/api/posts/{pid}/image').status_code == 404
+
+
+def test_list_requires_login(client):
+    assert client.get('/api/posts').status_code == 401

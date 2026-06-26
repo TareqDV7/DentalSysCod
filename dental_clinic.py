@@ -4807,6 +4807,70 @@ def posts_preview():
     return send_file(buf, mimetype='image/png')
 
 
+@app.route('/api/posts', methods=['GET', 'POST'])
+def posts_collection():
+    import json as _json
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    if request.method == 'GET':
+        cur.execute('''SELECT id, theme, size, doctor_name, photo_count, created_at
+                       FROM marketing_posts ORDER BY created_at DESC''')
+        rows = [{'id': r[0], 'theme': r[1], 'size': r[2], 'doctor_name': r[3],
+                 'photo_count': r[4], 'created_at': r[5]} for r in cur.fetchall()]
+        conn.close()
+        return jsonify(rows)
+
+    spec, err = _build_spec_from_request()
+    if err:
+        conn.close()
+        return jsonify({'error': err}), 400
+    labels = [p.label for p in spec.photos]
+    cur.execute('''INSERT INTO marketing_posts
+                   (theme, size, doctor_name, photo_count, labels_json)
+                   VALUES (?,?,?,?,?)''',
+                (spec.theme, spec.size, spec.doctor_name, len(spec.photos),
+                 _json.dumps(labels, ensure_ascii=False)))
+    new_id = cur.lastrowid
+    posts_dir = UPLOAD_FOLDER / 'posts'
+    posts_dir.mkdir(parents=True, exist_ok=True)
+    dest = posts_dir / f'{new_id}.png'
+    post_studio.render_post(spec).save(dest, 'PNG')
+    cur.execute('UPDATE marketing_posts SET file_name=?, file_path=? WHERE id=?',
+                (f'{new_id}.png', str(dest), new_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'id': new_id})
+
+
+@app.route('/api/posts/<int:post_id>/image')
+def posts_image(post_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute('SELECT file_path FROM marketing_posts WHERE id=?', (post_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row or not row[0] or not Path(row[0]).exists():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(row[0], mimetype='image/png')
+
+
+@app.route('/api/posts/<int:post_id>', methods=['DELETE'])
+def posts_delete(post_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute('SELECT file_path FROM marketing_posts WHERE id=?', (post_id,))
+    row = cur.fetchone()
+    if row and row[0] and Path(row[0]).exists():
+        try:
+            Path(row[0]).unlink()
+        except OSError:
+            pass
+    cur.execute('DELETE FROM marketing_posts WHERE id=?', (post_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
 @app.route('/api/visits', methods=['GET', 'POST'])
 def visits():
     conn = sqlite3.connect(DB_NAME)
