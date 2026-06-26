@@ -145,3 +145,83 @@ def test_gallery_delete_uses_fetch_delete():
     load_idx = HTML_TEMPLATE.index('async function psLoadGallery()')
     delete_idx = HTML_TEMPLATE.find("method: 'DELETE'", load_idx)
     assert delete_idx > load_idx, 'psLoadGallery delete does not use fetch method DELETE'
+
+
+# ── Task 12: Settings → Branding panel ──────────────────────────────────────
+
+def test_branding_card_present():
+    assert 'id="branding-card"' in HTML_TEMPLATE
+    assert 'id="branding-doctor-name"' in HTML_TEMPLATE
+    assert 'id="branding-doctor-name-ar"' in HTML_TEMPLATE
+    assert 'id="branding-default-theme"' in HTML_TEMPLATE
+    assert 'id="branding-logo-preview"' in HTML_TEMPLATE
+    assert 'id="branding-logo-input"' in HTML_TEMPLATE
+
+
+def test_branding_theme_options():
+    """Branding select must have all 4 theme options."""
+    # All 4 option values exist (shared with Post Studio select)
+    for value in ('dark_premium', 'clean_clinical', 'soft_mint', 'bold_editorial'):
+        assert f'value="{value}"' in HTML_TEMPLATE
+
+
+def test_branding_js_functions_present():
+    assert 'function loadBranding()' in HTML_TEMPLATE
+    assert 'function brandingSave()' in HTML_TEMPLATE
+    assert 'function brandingUploadLogo(' in HTML_TEMPLATE
+
+
+def test_branding_wired_into_load_support():
+    """loadSupportSection must call loadBranding()."""
+    support_idx = HTML_TEMPLATE.index('function loadSupportSection()')
+    call_idx = HTML_TEMPLATE.find('loadBranding()', support_idx)
+    assert call_idx > support_idx, 'loadSupportSection does not call loadBranding()'
+
+
+def test_branding_api_calls_correct_endpoints():
+    """brandingSave uses PUT /api/branding; brandingUploadLogo posts to /api/branding/logo."""
+    save_idx = HTML_TEMPLATE.index('function brandingSave()')
+    branding_put = HTML_TEMPLATE.find("'/api/branding'", save_idx)
+    assert branding_put > save_idx, 'brandingSave does not call /api/branding'
+    put_method = HTML_TEMPLATE.find("method: 'PUT'", save_idx)
+    assert put_method > save_idx, 'brandingSave does not use PUT method'
+
+    upload_idx = HTML_TEMPLATE.index('function brandingUploadLogo(')
+    logo_post = HTML_TEMPLATE.find("'/api/branding/logo'", upload_idx)
+    assert logo_post > upload_idx, 'brandingUploadLogo does not post to /api/branding/logo'
+
+
+def test_branding_translation_keys_in_en():
+    en_match = re.search(r'en:\s*\{(.+?)^\s*\}', HTML_TEMPLATE, re.S | re.M)
+    assert en_match, 'Could not find en: { ... } translation block'
+    en_block = en_match.group(1)
+    required_keys = [
+        'ps_branding',
+        'ps_branding_name_ar',
+        'ps_branding_default_theme',
+        'ps_branding_logo',
+        'ps_branding_logo_upload',
+        'ps_branding_save',
+        'ps_branding_saved',
+        'ps_branding_save_failed',
+    ]
+    for key in required_keys:
+        assert f'{key}:' in en_block, f'Missing EN translation key: {key}'
+
+
+def test_branding_translation_keys_in_ar():
+    ar_match = re.search(r'ar:\s*\{(.+?)^\s*\}', HTML_TEMPLATE, re.S | re.M)
+    assert ar_match, 'Could not find ar: { ... } translation block'
+    ar_block = ar_match.group(1)
+    required_keys = [
+        'ps_branding',
+        'ps_branding_name_ar',
+        'ps_branding_default_theme',
+        'ps_branding_logo',
+        'ps_branding_logo_upload',
+        'ps_branding_save',
+        'ps_branding_saved',
+        'ps_branding_save_failed',
+    ]
+    for key in required_keys:
+        assert f'{key}:' in ar_block, f'Missing AR translation key: {key}'

@@ -3002,6 +3002,36 @@ HTML_TEMPLATE = '''
                   </div>
                 </details>
 
+                <h3 class="settings-group" data-en="Branding" data-ar="العلامة التجارية">Branding</h3>
+                <div class="section-card" id="branding-card" style="max-width:560px;margin-bottom:18px;">
+                    <div class="form-group">
+                        <label data-i18n="ps_doctor_name">Doctor name</label>
+                        <input type="text" id="branding-doctor-name" autocomplete="off" placeholder="Dr. …">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="ps_branding_name_ar">Doctor name (Arabic)</label>
+                        <input type="text" id="branding-doctor-name-ar" autocomplete="off" dir="rtl" placeholder="د. …">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="ps_branding_default_theme">Default post theme</label>
+                        <select id="branding-default-theme">
+                            <option value="dark_premium" data-i18n="ps_theme_dark_premium">Dark Premium</option>
+                            <option value="clean_clinical" data-i18n="ps_theme_clean_clinical">Clean Clinical</option>
+                            <option value="soft_mint" data-i18n="ps_theme_soft_mint">Soft Mint</option>
+                            <option value="bold_editorial" data-i18n="ps_theme_bold_editorial">Bold Editorial</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="ps_branding_logo">Clinic logo</label>
+                        <img id="branding-logo-preview" src="/api/branding/logo" alt=""
+                             style="display:none;max-height:80px;max-width:200px;margin-bottom:8px;border-radius:6px;object-fit:contain;"
+                             onerror="this.style.display='none'">
+                        <label class="btn" for="branding-logo-input" style="cursor:pointer;margin-bottom:0;" data-i18n="ps_branding_logo_upload">Upload logo</label>
+                        <input type="file" id="branding-logo-input" accept="image/*" style="display:none" onchange="brandingUploadLogo(this)">
+                    </div>
+                    <button class="btn btn-primary" type="button" onclick="brandingSave()" data-i18n="ps_branding_save">Save branding</button>
+                </div>
+
                 <h3 class="settings-group" data-en="License" data-ar="الترخيص">License</h3>
                 <div class="section-card" id="license-card" style="max-width:460px;margin-bottom:18px;">
                     <div class="license-preview__grid" id="license-card-grid"></div>
@@ -3865,7 +3895,15 @@ HTML_TEMPLATE = '''
                 ps_delete: 'Delete',
                 ps_delete_confirm: 'Delete this post permanently?',
                 ps_delete_ok: 'Post deleted',
-                ps_delete_failed: 'Could not delete post'
+                ps_delete_failed: 'Could not delete post',
+                ps_branding: 'Branding',
+                ps_branding_name_ar: 'Doctor name (Arabic)',
+                ps_branding_default_theme: 'Default post theme',
+                ps_branding_logo: 'Clinic logo',
+                ps_branding_logo_upload: 'Upload logo',
+                ps_branding_save: 'Save branding',
+                ps_branding_saved: 'Branding saved',
+                ps_branding_save_failed: 'Could not save branding: '
             },
             ar: {
                 undo: 'تراجع',
@@ -4315,7 +4353,15 @@ HTML_TEMPLATE = '''
                 ps_delete: 'حذف',
                 ps_delete_confirm: 'حذف هذا المنشور نهائياً؟',
                 ps_delete_ok: 'تم حذف المنشور',
-                ps_delete_failed: 'تعذّر حذف المنشور'
+                ps_delete_failed: 'تعذّر حذف المنشور',
+                ps_branding: 'العلامة التجارية',
+                ps_branding_name_ar: 'اسم الطبيب (بالعربية)',
+                ps_branding_default_theme: 'ثيم المنشور الافتراضي',
+                ps_branding_logo: 'شعار العيادة',
+                ps_branding_logo_upload: 'رفع الشعار',
+                ps_branding_save: 'حفظ العلامة التجارية',
+                ps_branding_saved: 'تم حفظ العلامة التجارية',
+                ps_branding_save_failed: 'تعذّر حفظ العلامة التجارية: '
             }
         };
 
@@ -6058,6 +6104,65 @@ HTML_TEMPLATE = '''
             loadBluetoothSyncSettings();
             bindBluetoothSyncControls();
             loadLicenseCard();
+            loadBranding();
+        }
+
+        async function loadBranding() {
+            try {
+                const data = await fetch('/api/branding').then(function(r) { return r.json(); });
+                const nameEl = document.getElementById('branding-doctor-name');
+                const nameArEl = document.getElementById('branding-doctor-name-ar');
+                const themeEl = document.getElementById('branding-default-theme');
+                if (nameEl) nameEl.value = data.doctor_name || '';
+                if (nameArEl) nameArEl.value = data.doctor_name_ar || '';
+                if (themeEl && data.default_theme) themeEl.value = data.default_theme;
+                const preview = document.getElementById('branding-logo-preview');
+                if (preview) {
+                    preview.src = '/api/branding/logo?_t=' + Date.now();
+                    preview.style.display = '';
+                }
+            } catch (_) {}
+        }
+
+        async function brandingSave() {
+            const nameEl = document.getElementById('branding-doctor-name');
+            const nameArEl = document.getElementById('branding-doctor-name-ar');
+            const themeEl = document.getElementById('branding-default-theme');
+            const payload = {
+                doctor_name: nameEl ? nameEl.value.trim() : '',
+                doctor_name_ar: nameArEl ? nameArEl.value.trim() : '',
+                default_theme: themeEl ? themeEl.value : 'clean_clinical'
+            };
+            try {
+                const res = await fetch('/api/branding', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error(res.status);
+                showToast(t('ps_branding_saved', 'Branding saved'), 'success');
+            } catch (err) {
+                showToast(t('ps_branding_save_failed', 'Could not save branding: ') + err, 'error');
+            }
+        }
+
+        async function brandingUploadLogo(input) {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('logo', file);
+            try {
+                const res = await fetch('/api/branding/logo', { method: 'POST', body: fd });
+                if (!res.ok) throw new Error(res.status);
+                const preview = document.getElementById('branding-logo-preview');
+                if (preview) {
+                    preview.src = '/api/branding/logo?_t=' + Date.now();
+                    preview.style.display = '';
+                }
+                showToast(t('ps_branding_saved', 'Branding saved'), 'success');
+            } catch (err) {
+                showToast(t('ps_branding_save_failed', 'Could not save branding: ') + err, 'error');
+            }
         }
 
         async function loadReceivables() {
