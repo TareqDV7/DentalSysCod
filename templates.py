@@ -3075,6 +3075,15 @@ HTML_TEMPLATE = '''
                             <div id="ps-preview-spinner" style="display:none;font-size:0.88em;color:var(--muted);" data-i18n="ps_generating">Generating…</div>
                         </div>
                     </div>
+
+                    <!-- Saved Posts Gallery -->
+                    <div class="section-card" style="margin-top:24px;">
+                        <h3 style="margin:0 0 16px;font-size:1rem;font-weight:600;" data-i18n="ps_gallery">Saved Posts</h3>
+                        <div id="psGallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px;">
+                            <!-- cards injected by psLoadGallery() -->
+                        </div>
+                        <p id="psGalleryEmpty" class="muted" style="display:none;font-size:0.9em;text-align:center;padding:24px 0;" data-i18n="ps_gallery_empty">No saved posts yet.</p>
+                    </div>
                 </div>
             </div>
 
@@ -3850,7 +3859,13 @@ HTML_TEMPLATE = '''
                 ps_save_failed: 'Could not save post: ',
                 ps_preview_failed: 'Could not generate preview: ',
                 ps_too_many_photos: 'Maximum 4 photos allowed',
-                ps_label_photo: 'Label for photo'
+                ps_label_photo: 'Label for photo',
+                ps_gallery: 'Saved Posts',
+                ps_gallery_empty: 'No saved posts yet.',
+                ps_delete: 'Delete',
+                ps_delete_confirm: 'Delete this post permanently?',
+                ps_delete_ok: 'Post deleted',
+                ps_delete_failed: 'Could not delete post'
             },
             ar: {
                 undo: 'تراجع',
@@ -4294,7 +4309,13 @@ HTML_TEMPLATE = '''
                 ps_save_failed: 'تعذّر حفظ المنشور: ',
                 ps_preview_failed: 'تعذّر إنشاء المعاينة: ',
                 ps_too_many_photos: 'الحد الأقصى 4 صور',
-                ps_label_photo: 'تسمية الصورة'
+                ps_label_photo: 'تسمية الصورة',
+                ps_gallery: 'المنشورات المحفوظة',
+                ps_gallery_empty: 'لا توجد منشورات محفوظة بعد.',
+                ps_delete: 'حذف',
+                ps_delete_confirm: 'حذف هذا المنشور نهائياً؟',
+                ps_delete_ok: 'تم حذف المنشور',
+                ps_delete_failed: 'تعذّر حذف المنشور'
             }
         };
 
@@ -8980,6 +9001,81 @@ HTML_TEMPLATE = '''
             _psRenderPreview();
         }
 
+        async function psLoadGallery() {
+            const grid = document.getElementById('psGallery');
+            const empty = document.getElementById('psGalleryEmpty');
+            if (!grid) return;
+            try {
+                const r = await fetch('/api/posts');
+                if (!r.ok) return;
+                const posts = await r.json();
+                grid.innerHTML = '';
+                if (!posts.length) {
+                    if (empty) { empty.style.display = ''; empty.textContent = t('ps_gallery_empty', 'No saved posts yet.'); }
+                    return;
+                }
+                if (empty) empty.style.display = 'none';
+                posts.forEach(function(post) {
+                    const safeId = encodeURIComponent(String(post.id));
+                    const card = document.createElement('div');
+                    card.style.cssText = 'border-radius:var(--radius,8px);overflow:hidden;background:var(--surface-alt,#f5f5f5);display:flex;flex-direction:column;';
+                    const img = document.createElement('img');
+                    img.src = '/api/posts/' + safeId + '/image';
+                    img.alt = '';
+                    img.loading = 'lazy';
+                    img.style.cssText = 'width:100%;aspect-ratio:1/1;object-fit:cover;display:block;';
+                    img.onerror = function() { this.style.display = 'none'; };
+                    const body = document.createElement('div');
+                    body.style.cssText = 'padding:8px;display:flex;flex-direction:column;gap:4px;';
+                    const meta = document.createElement('p');
+                    meta.style.cssText = 'margin:0;font-size:0.78em;color:var(--muted);line-height:1.4;';
+                    meta.textContent = escapeHtml(post.theme || '') + (post.created_at ? ' · ' + escapeHtml(String(post.created_at).slice(0, 10)) : '');
+                    const actions = document.createElement('div');
+                    actions.style.cssText = 'display:flex;gap:6px;margin-top:2px;';
+                    const dlBtn = document.createElement('a');
+                    dlBtn.href = '/api/posts/' + safeId + '/image';
+                    dlBtn.download = 'post-' + safeId + '.jpg';
+                    dlBtn.className = 'btn';
+                    dlBtn.style.cssText = 'font-size:0.78em;padding:4px 8px;flex:1;text-align:center;text-decoration:none;';
+                    dlBtn.textContent = t('ps_download', 'Download');
+                    const delBtn = document.createElement('button');
+                    delBtn.type = 'button';
+                    delBtn.className = 'btn btn-danger';
+                    delBtn.style.cssText = 'font-size:0.78em;padding:4px 8px;';
+                    delBtn.textContent = t('ps_delete', 'Delete');
+                    delBtn.onclick = function() {
+                        showConfirm({
+                            title: t('ps_delete', 'Delete'),
+                            message: t('ps_delete_confirm', 'Delete this post permanently?'),
+                            confirmLabel: t('ps_delete', 'Delete'),
+                            danger: true
+                        }).then(function(confirmed) {
+                            if (!confirmed) return;
+                            fetch('/api/posts/' + safeId, { method: 'DELETE' })
+                                .then(function(res) {
+                                    if (res.ok) {
+                                        showToast(t('ps_delete_ok', 'Post deleted'), 'success');
+                                        psLoadGallery();
+                                    } else {
+                                        showToast(t('ps_delete_failed', 'Could not delete post'), 'error');
+                                    }
+                                })
+                                .catch(function() {
+                                    showToast(t('ps_delete_failed', 'Could not delete post'), 'error');
+                                });
+                        });
+                    };
+                    actions.appendChild(dlBtn);
+                    actions.appendChild(delBtn);
+                    body.appendChild(meta);
+                    body.appendChild(actions);
+                    card.appendChild(img);
+                    card.appendChild(body);
+                    grid.appendChild(card);
+                });
+            } catch (_e) { /* ignore network errors */ }
+        }
+
         async function psOnTabOpen() {
             // Prefill doctor name + default theme from branding
             try {
@@ -8992,6 +9088,7 @@ HTML_TEMPLATE = '''
                     if (themeEl && b.default_theme) themeEl.value = b.default_theme;
                 }
             } catch (_e) { /* ignore */ }
+            psLoadGallery();
         }
 
         // Wire up file input and controls after DOM ready
