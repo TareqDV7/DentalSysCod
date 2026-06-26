@@ -52,4 +52,6 @@ def test_is_rtl():
 def test_shape_arabic_changes_arabic_only():
     assert shape_arabic('Dr. Wasfy') == 'Dr. Wasfy'
     shaped = shape_arabic('عيادة')
-    assert isinstance(shaped, str) and shaped != ''
+    # reshape + bidi must actually transform Arabic into presentation forms,
+    # not return the input unchanged.
+    assert isinstance(shaped, str) and shaped != '' and shaped != 'عيادة'
