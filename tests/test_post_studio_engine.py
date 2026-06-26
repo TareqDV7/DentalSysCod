@@ -1,8 +1,10 @@
+import os
+
 import pytest
 from PIL import Image
 from post_studio import (
     Rect, photo_grid_rects, fit_crop, is_rtl, shape_arabic,
-    Photo, PostSpec, render_post, POST_SIZES,
+    Photo, PostSpec, render_post, POST_SIZES, THEMES,
 )
 
 
@@ -83,3 +85,40 @@ def test_render_handles_arabic_name_and_label():
                     doctor_name='د. وصفي برزق', theme='dark_premium', size='square', logo=None)
     img = render_post(spec)           # exercises the Arabic-font path (no tofu)
     assert img.size == POST_SIZES['square']
+
+
+# ---------------------------------------------------------------------------
+# Theme × size matrix
+# ---------------------------------------------------------------------------
+
+GOLDEN_DIR = os.path.join(os.path.dirname(__file__), 'golden', 'post_studio')
+
+
+@pytest.mark.parametrize('theme', THEMES)
+@pytest.mark.parametrize('size', list(POST_SIZES))
+def test_every_theme_size_renders_correct_dims(theme, size):
+    img = render_post(_spec(theme=theme, size=size))
+    assert img.size == POST_SIZES[size]
+
+
+# ---------------------------------------------------------------------------
+# Golden-image regression
+# ---------------------------------------------------------------------------
+
+def _diff_ratio(a, b):
+    pa, pb = a.tobytes(), b.tobytes()
+    if len(pa) != len(pb):
+        return 1.0
+    diff = sum(1 for x, y in zip(pa, pb) if abs(x - y) > 8)
+    return diff / max(1, len(pa))
+
+
+@pytest.mark.parametrize('theme', THEMES)
+def test_golden_square(theme):
+    img = render_post(_spec(theme=theme, size='square'))
+    path = os.path.join(GOLDEN_DIR, f'{theme}_square.png')
+    if not os.path.exists(path):  # regenerate locally when missing
+        os.makedirs(GOLDEN_DIR, exist_ok=True)
+        img.save(path)
+        pytest.skip(f'generated golden {path}; re-run to assert')
+    assert _diff_ratio(img, Image.open(path).convert('RGB')) < 0.02
