@@ -1,6 +1,10 @@
 """Pure, Flask-free post-image composition engine."""
+import arabic_reshaper
+from bidi.algorithm import get_display
 from collections import namedtuple
 from dataclasses import dataclass
+from PIL import Image
+from PIL import ImageOps
 
 Rect = namedtuple('Rect', 'x y w h')
 
@@ -25,3 +29,17 @@ def photo_grid_rects(count, region, gap=16):
                           region.y + r * (cell_h + gap),
                           cell_w, cell_h))
     return rects
+
+
+def fit_crop(image, w, h):
+    return ImageOps.fit(image.convert('RGB'), (w, h), method=Image.LANCZOS)
+
+
+def is_rtl(text):
+    return any('؀' <= ch <= 'ۿ' for ch in (text or ''))
+
+
+def shape_arabic(text):
+    if not is_rtl(text):
+        return text
+    return get_display(arabic_reshaper.reshape(text))

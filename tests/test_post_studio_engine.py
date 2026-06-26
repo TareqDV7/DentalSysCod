@@ -1,5 +1,6 @@
 import pytest
-from post_studio import Rect, photo_grid_rects
+from PIL import Image
+from post_studio import Rect, photo_grid_rects, fit_crop, is_rtl, shape_arabic
 
 
 def _inside(r, region):
@@ -35,3 +36,20 @@ def test_rects_do_not_overlap():
             sep = (a.x + a.w <= b.x or b.x + b.w <= a.x
                    or a.y + a.h <= b.y or b.y + b.h <= a.y)
             assert sep
+
+
+def test_fit_crop_exact_size():
+    src = Image.new('RGB', (400, 200), (255, 0, 0))
+    out = fit_crop(src, 100, 100)
+    assert out.size == (100, 100)
+
+
+def test_is_rtl():
+    assert is_rtl('د. وصفي') is True
+    assert is_rtl('Dr. Wasfy') is False
+
+
+def test_shape_arabic_changes_arabic_only():
+    assert shape_arabic('Dr. Wasfy') == 'Dr. Wasfy'
+    shaped = shape_arabic('عيادة')
+    assert isinstance(shaped, str) and shaped != ''
