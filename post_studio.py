@@ -63,10 +63,6 @@ class PostSpec:
     logo: object = None
 
 
-def _font(path: str, px: int):
-    return ImageFont.truetype(path, px)
-
-
 def _draw_text(draw, xy, text: str, font, fill, anchor: str = 'la') -> None:
     draw.text(xy, shape_arabic(text), font=font, fill=fill, anchor=anchor)
 
@@ -104,12 +100,13 @@ def render_post(spec: PostSpec) -> Image.Image:
     region = Rect(pad, header_h, W - 2 * pad, H - header_h - footer_h - pad)
     rects = photo_grid_rects(len(spec.photos), region)
     label_px = max(20, int(region.h * 0.045))
+    strip_h = int(label_px * 2.2)          # scales with size, not a fixed 44px
     for ph, r in zip(spec.photos, rects):
         canvas.paste(fit_crop(ph.image, r.w, r.h), (r.x, r.y))
         if ph.label:
-            draw.rectangle([r.x, r.y + r.h - 44, r.x + r.w, r.y + r.h],
+            draw.rectangle([r.x, r.y + r.h - strip_h, r.x + r.w, r.y + r.h],
                            fill=theme.accent)
-            _draw_text(draw, (r.x + r.w // 2, r.y + r.h - 22), ph.label,
+            _draw_text(draw, (r.x + r.w // 2, r.y + r.h - strip_h // 2), ph.label,
                        _pick_font(theme, ph.label, label_px, theme.label_font),
                        theme.bg, anchor='mm')
 

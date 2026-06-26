@@ -1,6 +1,9 @@
 import pytest
 from PIL import Image
-from post_studio import Rect, photo_grid_rects, fit_crop, is_rtl, shape_arabic
+from post_studio import (
+    Rect, photo_grid_rects, fit_crop, is_rtl, shape_arabic,
+    Photo, PostSpec, render_post, POST_SIZES,
+)
 
 
 def _inside(r, region):
@@ -55,9 +58,6 @@ def test_shape_arabic_changes_arabic_only():
     # reshape + bidi must actually transform Arabic into presentation forms,
     # not return the input unchanged.
     assert isinstance(shaped, str) and shaped != '' and shaped != 'عيادة'
-
-
-from post_studio import Photo, PostSpec, render_post, POST_SIZES
 
 
 def _spec(theme='clean_clinical', size='square', n=3):
