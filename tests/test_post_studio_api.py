@@ -80,12 +80,17 @@ def test_preview_rejects_more_than_four_photos(client):
 
 def test_preview_rejects_bad_theme_and_size(client):
     _login(client)
-    base = {'doctor_name': 'X', 'photo': [(io.BytesIO(_png()), 'p.png')]}
-    bad_theme = client.post('/api/posts/preview',
-                            data={**base, 'theme': 'neon_chaos', 'size': 'square'},
-                            content_type='multipart/form-data')
+    # A fresh BytesIO per request: werkzeug closes the stream after sending,
+    # so the two POSTs cannot share one photo object.
+    bad_theme = client.post(
+        '/api/posts/preview',
+        data={'doctor_name': 'X', 'theme': 'neon_chaos', 'size': 'square',
+              'photo': [(io.BytesIO(_png()), 'p.png')]},
+        content_type='multipart/form-data')
     assert bad_theme.status_code == 400
-    bad_size = client.post('/api/posts/preview',
-                           data={**base, 'theme': 'clean_clinical', 'size': 'billboard'},
-                           content_type='multipart/form-data')
+    bad_size = client.post(
+        '/api/posts/preview',
+        data={'doctor_name': 'X', 'theme': 'clean_clinical', 'size': 'billboard',
+              'photo': [(io.BytesIO(_png()), 'p.png')]},
+        content_type='multipart/form-data')
     assert bad_size.status_code == 400
