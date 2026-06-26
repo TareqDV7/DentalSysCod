@@ -55,3 +55,31 @@ def test_shape_arabic_changes_arabic_only():
     # reshape + bidi must actually transform Arabic into presentation forms,
     # not return the input unchanged.
     assert isinstance(shaped, str) and shaped != '' and shaped != 'عيادة'
+
+
+from post_studio import Photo, PostSpec, render_post, POST_SIZES
+
+
+def _spec(theme='clean_clinical', size='square', n=3):
+    photos = [Photo(Image.new('RGB', (300, 300), (i * 60, 120, 200)),
+                    label=lbl) for i, lbl in zip(range(n), ['Before', 'During', 'After'])]
+    return PostSpec(photos=photos, doctor_name='Dr. Wasfy Barzaq',
+                    theme=theme, size=size, logo=None)
+
+
+def test_render_returns_exact_size():
+    img = render_post(_spec())
+    assert img.size == POST_SIZES['square']
+    assert img.mode == 'RGB'
+
+
+def test_render_is_not_blank():
+    img = render_post(_spec())
+    assert len(img.getcolors(maxcolors=100000) or [1] * 999) > 5
+
+
+def test_render_handles_arabic_name_and_label():
+    spec = PostSpec(photos=[Photo(Image.new('RGB', (200, 200), (80, 80, 80)), 'قبل')],
+                    doctor_name='د. وصفي برزق', theme='dark_premium', size='square', logo=None)
+    img = render_post(spec)           # exercises the Arabic-font path (no tofu)
+    assert img.size == POST_SIZES['square']
