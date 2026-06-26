@@ -3848,6 +3848,7 @@ HTML_TEMPLATE = '''
                 ps_generating: 'Generating…',
                 ps_saved: 'Post saved to gallery',
                 ps_save_failed: 'Could not save post: ',
+                ps_preview_failed: 'Could not generate preview: ',
                 ps_too_many_photos: 'Maximum 4 photos allowed',
                 ps_label_photo: 'Label for photo'
             },
@@ -4291,6 +4292,7 @@ HTML_TEMPLATE = '''
                 ps_generating: 'جارٍ الإنشاء…',
                 ps_saved: 'تم حفظ المنشور في المعرض',
                 ps_save_failed: 'تعذّر حفظ المنشور: ',
+                ps_preview_failed: 'تعذّر إنشاء المعاينة: ',
                 ps_too_many_photos: 'الحد الأقصى 4 صور',
                 ps_label_photo: 'تسمية الصورة'
             }
@@ -4825,7 +4827,7 @@ HTML_TEMPLATE = '''
             else if (tabName === 'reports')      loadReportsSection();
             else if (tabName === 'financial')    loadFinancialSection();
             else if (tabName === 'support')      loadSupportSection();
-            else if (tabName === 'poststudio')   psOnTabOpen();
+            else if (tabName === 'poststudio')   psOnTabOpen().catch(function(){});
         }
 
         function switchReportsSubTab(tabName, clickedBtn = null, shouldLoad = true) {
@@ -8886,7 +8888,7 @@ HTML_TEMPLATE = '''
                     if (emptyEl) emptyEl.style.display = 'none';
                 } else {
                     const msg = await r.text().catch(function() { return ''; });
-                    showToast(t('ps_save_failed') + msg, 'error');
+                    showToast(t('ps_preview_failed') + msg, 'error');
                 }
             } finally {
                 if (spinner) spinner.style.display = 'none';
@@ -8898,6 +8900,7 @@ HTML_TEMPLATE = '''
             const r = await fetch('/api/posts', { method: 'POST', body: _psBuildForm() });
             if (r.ok) {
                 showToast(t('ps_saved'), 'success');
+                if (typeof psLoadGallery === 'function') psLoadGallery();
             } else {
                 const msg = await r.text().catch(function() { return ''; });
                 showToast(t('ps_save_failed') + msg, 'error');
@@ -8925,7 +8928,7 @@ HTML_TEMPLATE = '''
                 thumb.setAttribute('aria-hidden', 'true');
                 const inp = document.createElement('input');
                 inp.type = 'text';
-                inp.value = escapeHtml(p.label);
+                inp.value = p.label;
                 inp.placeholder = t('ps_label_photo', 'Label') + ' ' + (i + 1);
                 inp.style.cssText = 'flex:1;';
                 inp.addEventListener('input', function() {
