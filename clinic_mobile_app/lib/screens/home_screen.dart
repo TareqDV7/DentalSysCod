@@ -11,6 +11,7 @@ import 'patients_screen.dart';
 import 'appointments_screen.dart';
 import 'financial_screen.dart';
 import 'reports_screen.dart';
+import 'posts_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const AppointmentsScreen(),
     const FinancialScreen(),
     const ReportsScreen(),
+    const PostsScreen(),
   ];
 
   @override
@@ -56,7 +58,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return switch (_gate) {
       GateGrace(:final graceUntil) when !_graceDismissed => MaterialBanner(
         content: Text(
-            '${AppStrings.t('renew_by_prefix', isArabic: ar)}$graceUntil'),
+          '${AppStrings.t('renew_by_prefix', isArabic: ar)}$graceUntil',
+        ),
         backgroundColor: Colors.amber.shade100,
         actions: [
           TextButton(
@@ -88,9 +91,10 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
               AppBranding.systemName,
               style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.3),
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.3,
+              ),
             ),
             const SizedBox(height: 24),
             const Icon(Icons.lock_outline, size: 48, color: Colors.grey),
@@ -187,8 +191,7 @@ class _HomeScreenState extends State<HomeScreen> {
               GateActive() ||
               GateGrace() ||
               GateViewOnly() ||
-              GateUnknown() =>
-                IndexedStack(index: _index, children: _screens),
+              GateUnknown() => IndexedStack(index: _index, children: _screens),
             },
           ),
         ],
@@ -227,6 +230,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.bar_chart_outlined),
             selectedIcon: const Icon(Icons.bar_chart),
             label: AppStrings.t('nav_reports', isArabic: state.isArabic),
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.photo_library_outlined),
+            selectedIcon: const Icon(Icons.photo_library),
+            label: AppStrings.t('nav_posts', isArabic: state.isArabic),
           ),
         ],
       ),
