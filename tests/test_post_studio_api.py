@@ -118,3 +118,20 @@ def test_save_then_list_serve_delete(client):
 
 def test_list_requires_login(client):
     assert client.get('/api/posts').status_code == 401
+
+
+def test_save_render_failure_rolls_back(client, monkeypatch):
+    _login(client)
+
+    def _boom(spec):
+        raise RuntimeError('render exploded')
+
+    monkeypatch.setattr(dental_clinic.post_studio, 'render_post', _boom)
+    r = client.post(
+        '/api/posts',
+        data={'doctor_name': 'X', 'theme': 'clean_clinical', 'size': 'square',
+              'photo': [(io.BytesIO(_png()), 'a.png')], 'labels': ['Before']},
+        content_type='multipart/form-data')
+    assert r.status_code == 500
+    # rollback must discard the INSERTed row, so the gallery stays empty.
+    assert client.get('/api/posts').get_json() == []

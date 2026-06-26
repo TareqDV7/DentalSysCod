@@ -4834,10 +4834,15 @@ def posts_collection():
     posts_dir = UPLOAD_FOLDER / 'posts'
     posts_dir.mkdir(parents=True, exist_ok=True)
     dest = posts_dir / f'{new_id}.png'
-    post_studio.render_post(spec).save(dest, 'PNG')
-    cur.execute('UPDATE marketing_posts SET file_name=?, file_path=? WHERE id=?',
-                (f'{new_id}.png', str(dest), new_id))
-    conn.commit()
+    try:
+        post_studio.render_post(spec).save(dest, 'PNG')
+        cur.execute('UPDATE marketing_posts SET file_name=?, file_path=? WHERE id=?',
+                    (f'{new_id}.png', str(dest), new_id))
+        conn.commit()
+    except Exception:  # noqa: BLE001 - never leak the connection or persist a half-written row
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'Failed to render the post'}), 500
     conn.close()
     return jsonify({'success': True, 'id': new_id})
 
