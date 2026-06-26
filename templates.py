@@ -6118,8 +6118,12 @@ HTML_TEMPLATE = '''
                 if (themeEl && data.default_theme) themeEl.value = data.default_theme;
                 const preview = document.getElementById('branding-logo-preview');
                 if (preview) {
-                    preview.src = '/api/branding/logo?_t=' + Date.now();
-                    preview.style.display = '';
+                    if (data.has_logo) {
+                        preview.src = '/api/branding/logo?_t=' + Date.now();
+                        preview.style.display = '';
+                    } else {
+                        preview.style.display = 'none';
+                    }
                 }
             } catch (_) {}
         }
