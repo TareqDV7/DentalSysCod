@@ -454,7 +454,7 @@ Expected: FAIL (`No module named 'post_studio'`).
 # post_studio.py
 """Pure, Flask-free post-image composition engine."""
 from collections import namedtuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 Rect = namedtuple('Rect', 'x y w h')
 
@@ -606,6 +606,13 @@ def test_render_returns_exact_size():
 def test_render_is_not_blank():
     img = render_post(_spec())
     assert len(img.getcolors(maxcolors=100000) or [1] * 999) > 5
+
+
+def test_render_handles_arabic_name_and_label():
+    spec = PostSpec(photos=[Photo(Image.new('RGB', (200, 200), (80, 80, 80)), 'قبل')],
+                    doctor_name='د. وصفي برزق', theme='dark_premium', size='square', logo=None)
+    img = render_post(spec)           # exercises the Arabic-font path (no tofu)
+    assert img.size == POST_SIZES['square']
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -686,6 +693,12 @@ def _draw_text(draw, xy, text, font, fill, anchor='la'):
     draw.text(xy, shape_arabic(text), font=font, fill=fill, anchor=anchor)
 
 
+def _pick_font(theme, text, px, latin_path):
+    """Arabic text needs the Arabic font; Manrope/Playfair render it as tofu."""
+    path = theme.arabic_font if is_rtl(text) else latin_path
+    return ImageFont.truetype(path, px)
+
+
 def render_post(spec):
     if not (1 <= len(spec.photos) <= 4):
         raise ValueError('photos must be 1..4')
@@ -701,7 +714,7 @@ def render_post(spec):
     pad = int(W * 0.04)
 
     # Header: doctor name (+ logo at right if present)
-    name_font = _font(theme.heading_font, int(header_h * 0.42))
+    name_font = _pick_font(theme, spec.doctor_name, int(header_h * 0.42), theme.heading_font)
     _draw_text(draw, (pad, header_h // 2), spec.doctor_name, name_font,
                theme.fg, anchor='lm')
     if spec.logo is not None:
@@ -712,14 +725,15 @@ def render_post(spec):
     # Photo grid
     region = Rect(pad, header_h, W - 2 * pad, H - header_h - footer_h - pad)
     rects = photo_grid_rects(len(spec.photos), region)
-    label_font = _font(theme.label_font, max(20, int(region.h * 0.045)))
+    label_px = max(20, int(region.h * 0.045))
     for ph, r in zip(spec.photos, rects):
         canvas.paste(fit_crop(ph.image, r.w, r.h), (r.x, r.y))
         if ph.label:
             draw.rectangle([r.x, r.y + r.h - 44, r.x + r.w, r.y + r.h],
                            fill=theme.accent)
             _draw_text(draw, (r.x + r.w // 2, r.y + r.h - 22), ph.label,
-                       label_font, theme.bg, anchor='mm')
+                       _pick_font(theme, ph.label, label_px, theme.label_font),
+                       theme.bg, anchor='mm')
 
     # Footer accent bar
     draw.rectangle([0, H - footer_h, W, H], fill=theme.accent)
@@ -778,7 +792,7 @@ def _diff_ratio(a, b):
 def test_golden_square(theme):
     img = render_post(_spec(theme=theme, size='square'))
     path = os.path.join(GOLDEN_DIR, f'{theme}_square.png')
-    if not os.path.exists(img and path):  # regenerate locally when missing
+    if not os.path.exists(path):  # regenerate locally when missing
         os.makedirs(GOLDEN_DIR, exist_ok=True)
         img.save(path)
         pytest.skip(f'generated golden {path}; re-run to assert')
