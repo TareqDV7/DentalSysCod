@@ -84,3 +84,18 @@ def test_logo_upload_rejects_non_image(client):
 def test_logo_serve_404_when_absent(client):
     _login(client)
     assert client.get('/api/branding/logo').status_code == 404
+
+
+def test_wizard_done_false_on_fresh_db(client):
+    _login(client)
+    body = client.get('/api/branding').get_json()
+    assert body['wizard_done'] is False
+
+
+def test_wizard_done_flips_to_true(client):
+    _login(client)
+    r = client.post('/api/branding/wizard-done')
+    assert r.status_code == 200
+    assert r.get_json()['success'] is True
+    body = client.get('/api/branding').get_json()
+    assert body['wizard_done'] is True

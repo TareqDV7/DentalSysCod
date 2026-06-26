@@ -4710,6 +4710,7 @@ def branding():
             'doctor_name_ar': read_app_setting(cursor, 'doctor_name_ar', '') or '',
             'default_theme': read_app_setting(cursor, 'post_default_theme', 'clean_clinical'),
             'has_logo': bool(logo_path and Path(logo_path).exists()),
+            'wizard_done': read_app_setting(cursor, 'branding_wizard_done', '') == '1',
         }
         conn.close()
         return jsonify(out)
@@ -4762,6 +4763,16 @@ def branding_logo_serve():
     if not path or not Path(path).exists():
         return jsonify({'error': 'No logo'}), 404
     return send_file(path, mimetype='image/png')
+
+
+@app.route('/api/branding/wizard-done', methods=['POST'])
+def branding_wizard_done():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    write_app_setting(cur, 'branding_wizard_done', '1')
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 
 _VALID_POST_SIZES = ('square', 'portrait', 'story')

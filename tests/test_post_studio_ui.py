@@ -225,3 +225,93 @@ def test_branding_translation_keys_in_ar():
     ]
     for key in required_keys:
         assert f'{key}:' in ar_block, f'Missing AR translation key: {key}'
+
+
+# ── Task 13: First-run branding wizard ──────────────────────────────────────
+
+def test_wizard_modal_present():
+    assert 'id="branding-wizard-modal"' in HTML_TEMPLATE
+    assert 'id="bw-step-0"' in HTML_TEMPLATE
+    assert 'id="bw-step-1"' in HTML_TEMPLATE
+    assert 'id="bw-step-2"' in HTML_TEMPLATE
+
+
+def test_wizard_nav_buttons_present():
+    assert 'id="bw-btn-skip"' in HTML_TEMPLATE
+    assert 'id="bw-btn-back"' in HTML_TEMPLATE
+    assert 'id="bw-btn-next"' in HTML_TEMPLATE
+    assert 'id="bw-btn-finish"' in HTML_TEMPLATE
+
+
+def test_wizard_form_inputs_present():
+    assert 'id="bw-name-en"' in HTML_TEMPLATE
+    assert 'id="bw-name-ar"' in HTML_TEMPLATE
+    assert 'id="bw-logo-input"' in HTML_TEMPLATE
+    assert 'id="bw-theme"' in HTML_TEMPLATE
+
+
+def test_wizard_calls_wizard_done_endpoint():
+    assert "'/api/branding/wizard-done'" in HTML_TEMPLATE
+
+
+def test_wizard_translation_keys_in_en():
+    en_match = re.search(r'en:\s*\{(.+?)^\s*\}', HTML_TEMPLATE, re.S | re.M)
+    assert en_match, 'Could not find en: { ... } translation block'
+    en_block = en_match.group(1)
+    wizard_keys = [
+        'ps_wizard_title',
+        'ps_wizard_subtitle',
+        'ps_wizard_step1',
+        'ps_wizard_step2',
+        'ps_wizard_step3',
+        'ps_wizard_name_en',
+        'ps_wizard_name_ar',
+        'ps_wizard_logo_hint',
+        'ps_wizard_theme_hint',
+        'ps_wizard_skip',
+        'ps_wizard_back',
+        'ps_wizard_next',
+        'ps_wizard_finish',
+        'ps_wizard_saving',
+        'ps_wizard_done_toast',
+    ]
+    for key in wizard_keys:
+        assert f'{key}:' in en_block, f'Missing EN translation key: {key}'
+
+
+def test_wizard_translation_keys_in_ar():
+    ar_match = re.search(r'ar:\s*\{(.+?)^\s*\}', HTML_TEMPLATE, re.S | re.M)
+    assert ar_match, 'Could not find ar: { ... } translation block'
+    ar_block = ar_match.group(1)
+    wizard_keys = [
+        'ps_wizard_title',
+        'ps_wizard_subtitle',
+        'ps_wizard_step1',
+        'ps_wizard_step2',
+        'ps_wizard_step3',
+        'ps_wizard_name_en',
+        'ps_wizard_name_ar',
+        'ps_wizard_logo_hint',
+        'ps_wizard_theme_hint',
+        'ps_wizard_skip',
+        'ps_wizard_back',
+        'ps_wizard_next',
+        'ps_wizard_finish',
+        'ps_wizard_saving',
+        'ps_wizard_done_toast',
+    ]
+    for key in wizard_keys:
+        assert f'{key}:' in ar_block, f'Missing AR translation key: {key}'
+
+
+def test_wizard_domcontentloaded_gate_present():
+    """DOMContentLoaded must check wizard_done and call bwShow."""
+    assert 'wizard_done' in HTML_TEMPLATE
+    assert 'bwShow()' in HTML_TEMPLATE
+
+
+def test_wizard_js_functions_present():
+    assert 'function bwShow()' in HTML_TEMPLATE
+    assert 'function bwHide()' in HTML_TEMPLATE
+    assert 'function bwGoStep(' in HTML_TEMPLATE
+    assert 'window.bwHandleLogoInput' in HTML_TEMPLATE
