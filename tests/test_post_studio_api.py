@@ -150,3 +150,16 @@ def test_save_render_failure_rolls_back(client, monkeypatch):
     assert r.status_code == 500
     # rollback must discard the INSERTed row, so the gallery stays empty.
     assert client.get('/api/posts').get_json() == []
+
+
+def test_branding_logo_endpoints_are_gone(client):
+    _login(client)
+    assert client.post('/api/branding/logo').status_code == 404
+    assert client.get('/api/branding/logo').status_code == 404
+
+
+def test_branding_get_has_no_logo_field(client):
+    _login(client)
+    body = client.get('/api/branding').get_json()
+    assert body is not None
+    assert 'has_logo' not in body

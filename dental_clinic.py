@@ -4711,12 +4711,10 @@ def branding():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     if request.method == 'GET':
-        logo_path = read_app_setting(cursor, 'clinic_logo_path', '')
         out = {
             'doctor_name': read_app_setting(cursor, 'doctor_name', '') or '',
             'doctor_name_ar': read_app_setting(cursor, 'doctor_name_ar', '') or '',
             'default_theme': read_app_setting(cursor, 'post_default_theme', 'clean_clinical'),
-            'has_logo': bool(logo_path and Path(logo_path).exists()),
             'wizard_done': read_app_setting(cursor, 'branding_wizard_done', '') == '1',
         }
         conn.close()
@@ -4736,40 +4734,6 @@ def branding():
     conn.close()
     return jsonify({'success': True})
 
-
-@app.route('/api/branding/logo', methods=['POST'])
-def branding_logo_upload():
-    file = request.files.get('logo')
-    if not file:
-        return jsonify({'error': 'No logo uploaded'}), 400
-    try:
-        img = Image.open(file.stream)
-        img.verify()                      # reject non-images
-        file.stream.seek(0)
-        img = Image.open(file.stream).convert('RGBA')
-    except Exception:                     # noqa: BLE001
-        return jsonify({'error': 'File is not a valid image'}), 400
-    branding_dir = UPLOAD_FOLDER / 'branding'
-    branding_dir.mkdir(parents=True, exist_ok=True)
-    dest = branding_dir / 'logo.png'
-    img.save(dest, 'PNG')
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    write_app_setting(cur, 'clinic_logo_path', str(dest))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
-
-
-@app.route('/api/branding/logo', methods=['GET'])
-def branding_logo_serve():
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    path = read_app_setting(cur, 'clinic_logo_path', '')
-    conn.close()
-    if not path or not Path(path).exists():
-        return jsonify({'error': 'No logo'}), 404
-    return send_file(path, mimetype='image/png')
 
 
 @app.route('/api/branding/wizard-done', methods=['POST'])
@@ -4804,12 +4768,10 @@ def _build_spec_from_request():
         photos.append(post_studio.Photo(img, labels[i] if i < len(labels) else ''))
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    logo_path = read_app_setting(cur, 'clinic_logo_path', '')
     doctor = request.form.get('doctor_name') or read_app_setting(cur, 'doctor_name', '') or ''
     conn.close()
-    logo = _PILImage.open(logo_path) if logo_path and Path(logo_path).exists() else None
     spec = post_studio.PostSpec(photos=photos, doctor_name=doctor,
-                                theme=theme, size=size, logo=logo)
+                                theme=theme, size=size)
     return spec, None
 
 
