@@ -2036,6 +2036,13 @@ def _require_login_for_portal():
     path = request.path or '/'
     if path not in _AUTH_REQUIRED_EXACT and not path.startswith(_AUTH_REQUIRED_PREFIXES):
         return None
+    # Read-only marketing-post endpoints stay reachable for the offline-first
+    # mobile app, which authenticates with device/clinic-token headers rather
+    # than the portal session cookie — same open posture as /api/patients and
+    # /api/medical-images. Writes (POST/DELETE/preview) and branding stay gated.
+    if request.method == 'GET' and (path == '/api/posts'
+                                    or re.match(r'^/api/posts/\d+/image$', path)):
+        return None
     if session.get('uid'):
         return None
     if path.startswith('/api/'):

@@ -116,8 +116,23 @@ def test_save_then_list_serve_delete(client):
     assert client.get(f'/api/posts/{pid}/image').status_code == 404
 
 
-def test_list_requires_login(client):
-    assert client.get('/api/posts').status_code == 401
+def test_readonly_posts_reachable_without_login(client):
+    # The offline-first mobile app reads posts over the LAN with device/clinic
+    # token headers, not the portal session cookie — same open posture as
+    # /api/patients and /api/medical-images. The listing and image-serve GETs
+    # must pass the portal gate without a session.
+    listing = client.get('/api/posts')
+    assert listing.status_code == 200
+    assert listing.get_json() == []
+    # A missing image returns 404 (handler ran), proving the gate let it through
+    # rather than short-circuiting with a 401.
+    assert client.get('/api/posts/999/image').status_code == 404
+
+
+def test_post_writes_still_require_login(client):
+    # Reads are open, but creates and deletes stay gated behind the portal session.
+    assert client.post('/api/posts').status_code == 401
+    assert client.delete('/api/posts/1').status_code == 401
 
 
 def test_save_render_failure_rolls_back(client, monkeypatch):
