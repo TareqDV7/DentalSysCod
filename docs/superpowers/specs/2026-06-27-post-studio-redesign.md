@@ -48,12 +48,12 @@ This becomes the **Dark Premium** theme + the **Before/After Showcase** starter 
 - **Remove the clinic logo** entirely. **No branding popup on first run.**
 - **New tab icon** (today's bar-chart glyph is wrong for an image tool).
 - **Save + reopen for editing** (persist the editable spec, not just the PNG).
-- Mobile stays **read-only** (shows the synced exported PNG), unchanged.
+- **Full desktop↑↓mobile parity**: the phone can *create and customize* posts too, by
+  reusing the **same** editor inside a Flutter WebView (one renderer, identical output).
 - EN/AR throughout; Arabic renders natively (Chromium), no PIL reshaping hack.
 
 ## Non-goals (deliberate v1 scope)
 
-- **No mobile generation** — read-only viewer only.
 - **No free blank-canvas mode** (mini-Canva) — templates seed every composition.
 - **No patient-photo import** — photos uploaded fresh (future enhancement).
 - **No arbitrary user-uploaded fonts** — a curated bundled font set only.
@@ -78,6 +78,31 @@ mixed-weight type, and Arabic all render natively and identically to the export.
     before committing; this is the one open implementation risk and is contained.
   - Wait for `document.fonts.ready` and embed images before capture; render at full
     resolution (1080×1080 / 1080×1350 / 1080×1920) accounting for devicePixelRatio.
+
+### Portable editor (one renderer, two hosts)
+
+The editor is built as a **self-contained, host-agnostic JS module** from day one
+(P2) — not wired directly to Flask. It talks to its environment through a thin
+**host adapter** interface:
+
+```
+PostStudioHost {
+  pickPhotos() -> [{ id, dataUrl }]      // file picker (desktop) / image_picker (mobile)
+  savePost(pngBlob, templateJson) -> id  // persist + sync
+  listPosts() / getPost(id) / deletePost(id)
+}
+```
+
+- **Desktop host:** implements the adapter with `fetch` to the Flask endpoints
+  (+ the existing CSRF interceptor).
+- **Mobile host:** implements the adapter over a **Dart↔JS bridge**
+  (`webview_flutter`), so saving writes to the mobile local DB and rides the
+  existing sync path upward.
+
+Because both **WebView2 (desktop)** and **Android System WebView (mobile)** are
+Chromium, the same editor produces **pixel-identical** output on both. No second
+renderer, no drift. This portability is cheap to design up front and expensive to
+retrofit — so it is a P2 requirement, even though the mobile host ships in P6.
 
 ### Server role (shrinks to storage/sync)
 
@@ -182,7 +207,13 @@ Curated **bundled, inlined** set (no CDN), each selectable per element:
 - Source photos + exported PNG live under `UPLOAD_FOLDER/posts/<id>/…`, part of the
   export/import bundle → **syncs to mobile with no new sync code**.
 
-## Endpoints (`dental_clinic.py`) — desktop-only, auth + CSRF
+## Endpoints (`dental_clinic.py`) — auth + CSRF
+
+The **write/management** endpoints are desktop-host only; the **read GETs**
+(`/api/posts`, `/api/posts/<id>`, `/api/posts/<id>/image`) stay exposed to the mobile
+app as they are today (commit `a0163c9`). The **mobile host creates posts via its
+local DB + the existing sync path**, not via `POST /api/posts` — so mobile generation
+needs no new server endpoint.
 
 - `GET /api/branding` / `PUT /api/branding` — doctor name (EN/AR) + default theme.
   **(logo endpoints removed.)**
@@ -207,11 +238,21 @@ Curated **bundled, inlined** set (no CDN), each selectable per element:
   add one if none fits).
 - EN/AR + RTL-aware throughout.
 
-## Mobile (read-only, unchanged)
+## Mobile (full editor parity — P6)
 
-Flutter **Posts** screen lists synced `marketing_posts`, shows the exported PNG from
-synced uploads, offers OS share. No generation. The PNG-based contract is unchanged,
-so existing mobile code keeps working.
+The Flutter **Posts** screen keeps its current read-only gallery + OS share, and gains
+a **"New / Edit Post"** flow that hosts the **same WebView editor**:
+
+- A `webview_flutter` (v4+) screen loads the editor bundled as a **Flutter asset**
+  (offline; editor HTML/JS/fonts shipped in the app bundle).
+- The **mobile host adapter** bridges to Dart: `pickPhotos` → `image_picker`;
+  `savePost` → write the `marketing_posts` row + PNG/photos into the local DB /
+  `UPLOAD_FOLDER` and let the **existing sync services** push them up (same pattern
+  the app already uses for patients, images, appointments).
+- Touch-adapted controls (larger hit targets, drag works natively in WebView); the
+  renderer and themes are identical to desktop.
+- New deps: `webview_flutter`, `image_picker`. Editor assets added to `pubspec.yaml`.
+- Existing PNG-based read-only viewing/sharing is unchanged for posts made anywhere.
 
 ## Error handling & security
 
@@ -233,8 +274,11 @@ so existing mobile code keeps working.
   starter-template × theme; drag/type/add-phase smoke; EN/AR. Replaces the retired
   golden-image pixel tests.
 - Remove `test_post_studio_engine.py` (engine retired).
+- **Mobile (P6):** Flutter widget/integration smoke for the editor host screen —
+  WebView loads the bundled editor, the Dart bridge round-trips a save, and a
+  created post appears in the gallery; `dart analyze` clean; `flutter test` green.
 - **Gates:** full pytest green; `node --check` clean across edited assets;
-  Playwright smoke passes light + dark.
+  Playwright smoke passes light + dark; mobile `dart analyze` + `flutter test` green.
 
 ## Build order (resumable portions — each its own PR-able slice)
 
@@ -247,12 +291,15 @@ so existing mobile code keeps working.
   the reference; finalize the bundled font set.
 - **P4 — Deep customization:** drag-positioning + snap guides, full per-element type
   controls, numbered badges, add/reorder/insert phases, editable title/subline.
-- **P5 — QA & polish:** EN/AR pass, Playwright smoke, mobile read-only verify, full
-  pytest green, exe-rebuild note.
+- **P5 — Desktop QA & polish:** EN/AR pass, Playwright smoke per template × theme,
+  full pytest green, exe-rebuild note.
+- **P6 — Mobile editor parity:** Flutter WebView host + bundled editor asset +
+  `image_picker` + mobile host adapter (save → local DB → sync up); touch-adapted
+  controls; widget/integration smoke; APK-rebuild note.
 
 ## Open follow-ups (future, out of scope)
 
 - Free-caption `text` element; free blank-canvas mode.
 - "Import from patient" (reuse `medical_images`).
-- Mobile post generation.
+- iOS parity (WKWebView is WebKit, not Chromium — needs a fidelity pass if iOS is ever targeted).
 - More templates/themes; removing the now-unused Arabic-shaping Python deps from the bundle.
