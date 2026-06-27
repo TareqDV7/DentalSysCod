@@ -2236,7 +2236,7 @@ HTML_TEMPLATE = '''
                 <span data-en="Settings" data-ar="الإعدادات">Settings</span>
             </button>
             <button class="nav-tab" data-tab="poststudio" onclick="switchTab('poststudio', this)">
-                <span class="tab-icon"><svg class="ic"><use href="#i-chart-bar"/></svg></span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-image"/></svg></span>
                 <span data-en="Post Studio" data-ar="استوديو المنشورات">Post Studio</span>
             </button>
         </div>

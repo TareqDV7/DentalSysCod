@@ -315,3 +315,15 @@ def test_wizard_js_functions_present():
     assert 'function bwHide()' in HTML_TEMPLATE
     assert 'function bwGoStep(' in HTML_TEMPLATE
     assert 'window.bwHandleLogoInput' in HTML_TEMPLATE
+
+
+# ── Task 1: Post Studio tab icon ────────────────────────────────────────────
+
+def test_post_studio_tab_uses_image_icon():
+    # The sprite must define the image glyph...
+    assert '<symbol id="i-image"' in HTML_TEMPLATE
+    # ...and the Post Studio nav button must use it, not the chart-bar.
+    start = HTML_TEMPLATE.index('data-tab="poststudio"')
+    button = HTML_TEMPLATE[start:HTML_TEMPLATE.index('</button>', start)]
+    assert '#i-image' in button
+    assert '#i-chart-bar' not in button
