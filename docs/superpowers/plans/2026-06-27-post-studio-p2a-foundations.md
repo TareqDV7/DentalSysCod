@@ -24,6 +24,7 @@
 ## File Structure (decomposition locked here)
 
 - **Create** `static/post_studio/composition.js` — pure, DOM-free ESM composition state model (default-template construction, block add/remove/reorder/insert with badge renumbering, serialize/deserialize round-trip). The single source of truth for the `template_json` shape, consumed by both hosts in P2b/P6.
+- **Create** `static/post_studio/package.json` — `{"type":"module"}`, so Node treats the `.js` modules in this dir as ESM (there is no root `package.json`; `.js` would otherwise be parsed as CommonJS and `export` would throw under `node --test`). Keeps the `.js` extension, which serves cleanest as `text/javascript` to the browser/Flutter hosts in P2b/P6.
 - **Create** `static/post_studio/spike/spike.html` — self-contained rasterizer spike harness (throwaway-ish; kept in-repo as living proof + future reference).
 - **Create** `tests/js/composition.test.mjs` — `node --test` unit tests for the state model.
 - **Create** `tests/e2e/test_rasterizer_spike.py` — Playwright check that the spike rasterizes a hard composition to a correctly-sized, non-blank, untainted PNG.
@@ -352,6 +353,7 @@ git commit -m "feat(post-studio): marketing_posts stores template_json (drop pho
 A DOM-free module that owns the `template_json` shape: build a default composition from a starter-template key, and serialize/deserialize it losslessly with validation. (Block add/remove/reorder/insert lands in Task 4 — split so a reviewer can gate construction independently from mutation.)
 
 **Files:**
+- Create: `static/post_studio/package.json` (`{"type":"module"}` — makes `.js` here ESM under Node)
 - Create: `static/post_studio/composition.js`
 - Create: `tests/js/composition.test.mjs`
 
@@ -424,9 +426,15 @@ test('deserialize rejects wrong version and bad size', () => {
 Run: `node --test tests/js/composition.test.mjs`
 Expected: FAIL — module `static/post_studio/composition.js` does not exist.
 
-- [ ] **Step 3: Implement `composition.js`**
+- [ ] **Step 3: Implement `composition.js` (and the ESM marker)**
 
-Create `static/post_studio/composition.js`:
+First create `static/post_studio/package.json` so Node parses this dir's `.js` as ESM:
+
+```json
+{ "type": "module" }
+```
+
+Then create `static/post_studio/composition.js`:
 
 ```javascript
 // Pure, DOM-free composition state for Post Studio.
@@ -520,7 +528,7 @@ Expected: PASS (all tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add static/post_studio/composition.js tests/js/composition.test.mjs
+git add static/post_studio/package.json static/post_studio/composition.js tests/js/composition.test.mjs
 git commit -m "feat(post-studio): pure composition state model (default template + round-trip)"
 ```
 
