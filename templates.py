@@ -3021,14 +3021,6 @@ HTML_TEMPLATE = '''
                             <option value="bold_editorial" data-i18n="ps_theme_bold_editorial">Bold Editorial</option>
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label data-i18n="ps_branding_logo">Clinic logo</label>
-                        <img id="branding-logo-preview" src="/api/branding/logo" alt=""
-                             style="display:none;max-height:80px;max-width:200px;margin-bottom:8px;border-radius:6px;object-fit:contain;"
-                             onerror="this.style.display='none'">
-                        <label class="btn" for="branding-logo-input" style="cursor:pointer;margin-bottom:0;" data-i18n="ps_branding_logo_upload">Upload logo</label>
-                        <input type="file" id="branding-logo-input" accept="image/*" style="display:none" onchange="brandingUploadLogo(this)">
-                    </div>
                     <button class="btn btn-primary" type="button" onclick="brandingSave()" data-i18n="ps_branding_save">Save branding</button>
                 </div>
 
@@ -3963,8 +3955,6 @@ HTML_TEMPLATE = '''
                 ps_branding: 'Branding',
                 ps_branding_name_ar: 'Doctor name (Arabic)',
                 ps_branding_default_theme: 'Default post theme',
-                ps_branding_logo: 'Clinic logo',
-                ps_branding_logo_upload: 'Upload logo',
                 ps_branding_save: 'Save branding',
                 ps_branding_saved: 'Branding saved',
                 ps_branding_save_failed: 'Could not save branding: ',
@@ -4436,8 +4426,6 @@ HTML_TEMPLATE = '''
                 ps_branding: 'العلامة التجارية',
                 ps_branding_name_ar: 'اسم الطبيب (بالعربية)',
                 ps_branding_default_theme: 'ثيم المنشور الافتراضي',
-                ps_branding_logo: 'شعار العيادة',
-                ps_branding_logo_upload: 'رفع الشعار',
                 ps_branding_save: 'حفظ العلامة التجارية',
                 ps_branding_saved: 'تم حفظ العلامة التجارية',
                 ps_branding_save_failed: 'تعذّر حفظ العلامة التجارية: ',
@@ -6210,15 +6198,6 @@ HTML_TEMPLATE = '''
                 if (nameEl) nameEl.value = data.doctor_name || '';
                 if (nameArEl) nameArEl.value = data.doctor_name_ar || '';
                 if (themeEl && data.default_theme) themeEl.value = data.default_theme;
-                const preview = document.getElementById('branding-logo-preview');
-                if (preview) {
-                    if (data.has_logo) {
-                        preview.src = '/api/branding/logo?_t=' + Date.now();
-                        preview.style.display = '';
-                    } else {
-                        preview.style.display = 'none';
-                    }
-                }
             } catch (_) {}
         }
 
@@ -6238,25 +6217,6 @@ HTML_TEMPLATE = '''
                     body: JSON.stringify(payload)
                 });
                 if (!res.ok) throw new Error(res.status);
-                showToast(t('ps_branding_saved', 'Branding saved'), 'success');
-            } catch (err) {
-                showToast(t('ps_branding_save_failed', 'Could not save branding: ') + err, 'error');
-            }
-        }
-
-        async function brandingUploadLogo(input) {
-            const file = input.files && input.files[0];
-            if (!file) return;
-            const fd = new FormData();
-            fd.append('logo', file);
-            try {
-                const res = await fetch('/api/branding/logo', { method: 'POST', body: fd });
-                if (!res.ok) throw new Error(res.status);
-                const preview = document.getElementById('branding-logo-preview');
-                if (preview) {
-                    preview.src = '/api/branding/logo?_t=' + Date.now();
-                    preview.style.display = '';
-                }
                 showToast(t('ps_branding_saved', 'Branding saved'), 'success');
             } catch (err) {
                 showToast(t('ps_branding_save_failed', 'Could not save branding: ') + err, 'error');
