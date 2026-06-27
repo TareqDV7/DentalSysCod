@@ -3391,69 +3391,6 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <!-- Branding Wizard Modal -->
-    <div id="branding-wizard-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="bw-title">
-        <div class="modal-content" style="max-width:480px;padding:28px 32px;">
-            <div class="modal-header" style="margin-bottom:4px;">
-                <span class="close-modal" id="bw-skip-x" style="cursor:pointer;">&times;</span>
-                <h2 id="bw-title" data-i18n="ps_wizard_title">Set Up Your Clinic Branding</h2>
-            </div>
-            <p id="bw-subtitle" style="margin:0 0 20px;color:var(--text-muted,#5b6675);font-size:0.92rem;" data-i18n="ps_wizard_subtitle">Personalise posts with your name, logo, and preferred style</p>
-
-            <!-- Step indicators -->
-            <div style="display:flex;gap:6px;margin-bottom:22px;" aria-hidden="true">
-                <div class="bw-step-dot" id="bw-dot-0" style="height:4px;flex:1;border-radius:4px;background:var(--accent-strong,#38bdf8);transition:background .2s;"></div>
-                <div class="bw-step-dot" id="bw-dot-1" style="height:4px;flex:1;border-radius:4px;background:var(--surface-border,#e2e8f0);transition:background .2s;"></div>
-                <div class="bw-step-dot" id="bw-dot-2" style="height:4px;flex:1;border-radius:4px;background:var(--surface-border,#e2e8f0);transition:background .2s;"></div>
-            </div>
-
-            <!-- Step 1: Doctor name -->
-            <div id="bw-step-0">
-                <p style="font-weight:600;margin:0 0 14px;" data-i18n="ps_wizard_step1">Doctor Name</p>
-                <div class="form-group" style="margin-bottom:12px;">
-                    <label data-i18n="ps_wizard_name_en">Your name (English)</label>
-                    <input type="text" id="bw-name-en" autocomplete="off" placeholder="Dr. …" style="width:100%;box-sizing:border-box;">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                    <label data-i18n="ps_wizard_name_ar">Your name (Arabic)</label>
-                    <input type="text" id="bw-name-ar" autocomplete="off" dir="rtl" placeholder="د. …" style="width:100%;box-sizing:border-box;">
-                </div>
-            </div>
-
-            <!-- Step 2: Logo -->
-            <div id="bw-step-1" style="display:none;">
-                <p style="font-weight:600;margin:0 0 14px;" data-i18n="ps_wizard_step2">Clinic Logo</p>
-                <p style="font-size:0.88rem;color:var(--text-muted,#5b6675);margin:0 0 14px;" data-i18n="ps_wizard_logo_hint">Upload your clinic logo — shown on every post</p>
-                <img id="bw-logo-preview" src="" alt="" style="display:none;max-height:80px;max-width:200px;margin-bottom:12px;border-radius:6px;object-fit:contain;">
-                <div>
-                    <label class="btn" for="bw-logo-input" style="cursor:pointer;margin-bottom:0;" data-i18n="ps_branding_logo_upload">Upload logo</label>
-                    <input type="file" id="bw-logo-input" accept="image/*" style="display:none" onchange="bwHandleLogoInput(this)">
-                </div>
-            </div>
-
-            <!-- Step 3: Theme + Finish -->
-            <div id="bw-step-2" style="display:none;">
-                <p style="font-weight:600;margin:0 0 14px;" data-i18n="ps_wizard_step3">Default Theme</p>
-                <p style="font-size:0.88rem;color:var(--text-muted,#5b6675);margin:0 0 14px;" data-i18n="ps_wizard_theme_hint">Choose the default visual style for new posts</p>
-                <select id="bw-theme" style="width:100%;box-sizing:border-box;">
-                    <option value="dark_premium" data-i18n="ps_theme_dark_premium">Dark Premium</option>
-                    <option value="clean_clinical" data-i18n="ps_theme_clean_clinical" selected>Clean Clinical</option>
-                    <option value="soft_mint" data-i18n="ps_theme_soft_mint">Soft Mint</option>
-                    <option value="bold_editorial" data-i18n="ps_theme_bold_editorial">Bold Editorial</option>
-                </select>
-            </div>
-
-            <!-- Navigation buttons -->
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;gap:10px;">
-                <button type="button" id="bw-btn-skip" class="btn" style="background:transparent;border:none;color:var(--text-muted,#5b6675);padding:0;font-size:0.88rem;" data-i18n="ps_wizard_skip">Skip Setup</button>
-                <div style="display:flex;gap:8px;">
-                    <button type="button" id="bw-btn-back" class="btn" style="display:none;" data-i18n="ps_wizard_back">Back</button>
-                    <button type="button" id="bw-btn-next" class="btn btn-primary" data-i18n="ps_wizard_next">Next</button>
-                    <button type="button" id="bw-btn-finish" class="btn btn-primary" style="display:none;" data-i18n="ps_wizard_finish">Finish</button>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <script>
         // CSRF: attach the per-session token to same-origin unsafe requests.
@@ -3958,21 +3895,6 @@ HTML_TEMPLATE = '''
                 ps_branding_save: 'Save branding',
                 ps_branding_saved: 'Branding saved',
                 ps_branding_save_failed: 'Could not save branding: ',
-                ps_wizard_title: 'Set Up Your Clinic Branding',
-                ps_wizard_subtitle: 'Personalise posts with your name, logo, and preferred style',
-                ps_wizard_step1: 'Doctor Name',
-                ps_wizard_step2: 'Clinic Logo',
-                ps_wizard_step3: 'Default Theme',
-                ps_wizard_name_en: 'Your name (English)',
-                ps_wizard_name_ar: 'Your name (Arabic)',
-                ps_wizard_logo_hint: 'Upload your clinic logo — shown on every post',
-                ps_wizard_theme_hint: 'Choose the default visual style for new posts',
-                ps_wizard_skip: 'Skip Setup',
-                ps_wizard_back: 'Back',
-                ps_wizard_next: 'Next',
-                ps_wizard_finish: 'Finish',
-                ps_wizard_saving: 'Saving…',
-                ps_wizard_done_toast: 'Branding set up successfully'
             },
             ar: {
                 undo: 'تراجع',
@@ -4429,21 +4351,6 @@ HTML_TEMPLATE = '''
                 ps_branding_save: 'حفظ العلامة التجارية',
                 ps_branding_saved: 'تم حفظ العلامة التجارية',
                 ps_branding_save_failed: 'تعذّر حفظ العلامة التجارية: ',
-                ps_wizard_title: 'إعداد هوية عيادتك',
-                ps_wizard_subtitle: 'خصّص منشوراتك باسمك وشعارك وأسلوبك المفضّل',
-                ps_wizard_step1: 'اسم الطبيب',
-                ps_wizard_step2: 'شعار العيادة',
-                ps_wizard_step3: 'الثيم الافتراضي',
-                ps_wizard_name_en: 'اسمك (بالإنجليزية)',
-                ps_wizard_name_ar: 'اسمك (بالعربية)',
-                ps_wizard_logo_hint: 'ارفع شعار عيادتك — يظهر على كل منشور',
-                ps_wizard_theme_hint: 'اختر الأسلوب البصري الافتراضي للمنشورات الجديدة',
-                ps_wizard_skip: 'تخطّي الإعداد',
-                ps_wizard_back: 'رجوع',
-                ps_wizard_next: 'التالي',
-                ps_wizard_finish: 'إنهاء',
-                ps_wizard_saving: 'جارٍ الحفظ…',
-                ps_wizard_done_toast: 'تم إعداد العلامة التجارية بنجاح'
             }
         };
 
@@ -9285,136 +9192,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
-        // ── Branding wizard ──────────────────────────────────────────────────
-        // Shows once on first login if branding has never been configured.
-        // Skip or Finish both call POST /api/branding/wizard-done so the modal
-        // never auto-shows again.  Finish also saves name/theme (and logo if
-        // the user picked one in step 2).
-        (function () {
-            var _bwStep = 0;
-            var _bwLogoFile = null;
 
-            function bwShow() {
-                var m = document.getElementById('branding-wizard-modal');
-                if (m) m.classList.add('active');
-                bwGoStep(0);
-                bwApplyI18n();
-            }
-
-            function bwHide() {
-                var m = document.getElementById('branding-wizard-modal');
-                if (m) m.classList.remove('active');
-            }
-
-            function bwApplyI18n() {
-                var m = document.getElementById('branding-wizard-modal');
-                if (!m) return;
-                m.querySelectorAll('[data-i18n]').forEach(function (el) {
-                    var key = el.getAttribute('data-i18n');
-                    var val = t(key, '');
-                    if (val) el.textContent = val;
-                });
-            }
-
-            function bwGoStep(step) {
-                _bwStep = step;
-                for (var i = 0; i < 3; i++) {
-                    var s = document.getElementById('bw-step-' + i);
-                    if (s) s.style.display = i === step ? '' : 'none';
-                    var d = document.getElementById('bw-dot-' + i);
-                    if (d) d.style.background = i <= step
-                        ? 'var(--accent-strong,#38bdf8)'
-                        : 'var(--surface-border,#e2e8f0)';
-                }
-                var btnBack   = document.getElementById('bw-btn-back');
-                var btnNext   = document.getElementById('bw-btn-next');
-                var btnFinish = document.getElementById('bw-btn-finish');
-                if (btnBack)   btnBack.style.display   = step > 0  ? '' : 'none';
-                if (btnNext)   btnNext.style.display   = step < 2  ? '' : 'none';
-                if (btnFinish) btnFinish.style.display = step === 2 ? '' : 'none';
-            }
-
-            window.bwHandleLogoInput = function (input) {
-                var file = input.files && input.files[0];
-                if (!file) return;
-                _bwLogoFile = file;
-                var preview = document.getElementById('bw-logo-preview');
-                if (preview) {
-                    var reader = new FileReader();
-                    reader.onload = function (e) {
-                        preview.src = e.target.result;
-                        preview.style.display = '';
-                    };
-                    reader.readAsDataURL(file);
-                }
-            };
-
-            async function bwDone(saveData) {
-                var finBtn = document.getElementById('bw-btn-finish');
-                var skipBtn = document.getElementById('bw-btn-skip');
-                if (finBtn) { finBtn.disabled = true; finBtn.textContent = t('ps_wizard_saving', 'Saving…'); }
-                if (skipBtn) skipBtn.disabled = true;
-                try {
-                    if (saveData) {
-                        // Upload logo first if provided
-                        if (_bwLogoFile) {
-                            var fd = new FormData();
-                            fd.append('logo', _bwLogoFile);
-                            await fetch('/api/branding/logo', { method: 'POST', body: fd });
-                        }
-                        // Save name + theme
-                        var nameEn = (document.getElementById('bw-name-en') || {}).value || '';
-                        var nameAr = (document.getElementById('bw-name-ar') || {}).value || '';
-                        var theme  = (document.getElementById('bw-theme') || {}).value || 'clean_clinical';
-                        var payload = {};
-                        if (nameEn) payload.doctor_name    = nameEn;
-                        if (nameAr) payload.doctor_name_ar = nameAr;
-                        payload.default_theme = theme;
-                        await fetch('/api/branding', {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
-                    }
-                    // Mark wizard done regardless of skip/finish
-                    await fetch('/api/branding/wizard-done', { method: 'POST' });
-                    bwHide();
-                    if (saveData) showToast(t('ps_wizard_done_toast', 'Branding set up successfully'), 'success');
-                } catch (_) {
-                    bwHide();
-                } finally {
-                    if (finBtn) { finBtn.disabled = false; finBtn.textContent = t('ps_wizard_finish', 'Finish'); }
-                    if (skipBtn) skipBtn.disabled = false;
-                }
-            }
-
-            function bwWireButtons() {
-                var btnBack   = document.getElementById('bw-btn-back');
-                var btnNext   = document.getElementById('bw-btn-next');
-                var btnFinish = document.getElementById('bw-btn-finish');
-                var btnSkip   = document.getElementById('bw-btn-skip');
-                var btnSkipX  = document.getElementById('bw-skip-x');
-
-                if (btnBack)   btnBack.addEventListener('click', function () { if (_bwStep > 0) bwGoStep(_bwStep - 1); });
-                if (btnNext)   btnNext.addEventListener('click', function () { if (_bwStep < 2) bwGoStep(_bwStep + 1); });
-                if (btnFinish) btnFinish.addEventListener('click', function () { bwDone(true); });
-                if (btnSkip)   btnSkip.addEventListener('click', function () { bwDone(false); });
-                if (btnSkipX)  btnSkipX.addEventListener('click', function () { bwDone(false); });
-            }
-
-            document.addEventListener('DOMContentLoaded', function () {
-                bwWireButtons();
-                // Only run on the main portal where the wizard modal exists
-                if (!document.getElementById('branding-wizard-modal')) return;
-                fetch('/api/branding').then(function (r) {
-                    return r.ok ? r.json() : null;
-                }).then(function (data) {
-                    if (data && data.wizard_done === false) {
-                        bwShow();
-                    }
-                }).catch(function () {});
-            });
-        })();
     </script>
 
 </body>

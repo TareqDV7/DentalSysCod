@@ -4715,7 +4715,6 @@ def branding():
             'doctor_name': read_app_setting(cursor, 'doctor_name', '') or '',
             'doctor_name_ar': read_app_setting(cursor, 'doctor_name_ar', '') or '',
             'default_theme': read_app_setting(cursor, 'post_default_theme', 'clean_clinical'),
-            'wizard_done': read_app_setting(cursor, 'branding_wizard_done', '') == '1',
         }
         conn.close()
         return jsonify(out)
@@ -4730,17 +4729,6 @@ def branding():
                      ('default_theme', 'post_default_theme')):
         if key in data and data[key] is not None:
             write_app_setting(cursor, col, str(data[key]))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
-
-
-
-@app.route('/api/branding/wizard-done', methods=['POST'])
-def branding_wizard_done():
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    write_app_setting(cur, 'branding_wizard_done', '1')
     conn.commit()
     conn.close()
     return jsonify({'success': True})

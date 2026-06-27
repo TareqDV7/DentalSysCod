@@ -163,3 +163,14 @@ def test_branding_get_has_no_logo_field(client):
     body = client.get('/api/branding').get_json()
     assert body is not None
     assert 'has_logo' not in body
+
+
+def test_wizard_done_endpoint_is_gone(client):
+    _login(client)
+    assert client.post('/api/branding/wizard-done').status_code == 404
+
+
+def test_branding_get_has_no_wizard_field(client):
+    _login(client)
+    body = client.get('/api/branding').get_json()
+    assert 'wizard_done' not in body
