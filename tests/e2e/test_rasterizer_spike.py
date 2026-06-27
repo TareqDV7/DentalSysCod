@@ -30,6 +30,12 @@ def test_spike_rasterizes_hard_composition_without_taint():
         # Run the in-page rasterizer; this rejects on SecurityError (tainted canvas).
         data_url = page.evaluate("() => window.__spikeRasterize()")
         err = page.evaluate("() => window.__spikeError")
+        # Sample a background pixel to verify CSS styles actually rasterized.
+        # Device-pixel (20,20) = logical (10,10) — top-left corner, well outside
+        # the card and text, deep in the outer stop of the radial gradient (#060f1c).
+        # An unstyled/transparent capture would yield r=g=b=0,a=0 (transparent) or
+        # r=g=b=255,a=255 (white default), not a dark opaque navy pixel.
+        bg_pixel = page.evaluate("() => window.__spikeSamplePixel(20, 20)")
         browser.close()
 
     assert err is None, f"rasterizer threw: {err}"
@@ -41,3 +47,17 @@ def test_spike_rasterizes_hard_composition_without_taint():
     # Non-blank: a fully-uniform image would compress tiny. The gradient + text
     # guarantees a substantial PNG.
     assert len(raw) > 20_000, f"suspiciously small PNG: {len(raw)} bytes"
+
+    # Fidelity check: the background pixel must be dark opaque navy, proving that
+    # the radial-gradient (and all other computed CSS) actually rasterized.
+    # Outer gradient stop is #060f1c = rgb(6, 15, 28); allow ±40 for anti-aliasing
+    # and gamma differences across Chromium builds, but it must be clearly dark.
+    assert bg_pixel is not None, "pixel sampler returned None (canvas not stored)"
+    r, g, b, a = bg_pixel
+    assert a == 255, (
+        f"background pixel is transparent (a={a}): computed styles were NOT inlined"
+    )
+    assert r < 80 and g < 80 and b < 100, (
+        f"background pixel is not dark navy: rgb({r},{g},{b}) — "
+        "radial-gradient did not rasterize; computed styles likely missing"
+    )
