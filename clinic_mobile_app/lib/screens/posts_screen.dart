@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/marketing_post.dart';
 import '../services/post_service.dart';
 import '../state/app_state.dart';
@@ -11,11 +12,8 @@ import '../utils/app_strings.dart';
 ///
 /// Lists posts fetched from `GET /api/posts` (thumbnail grid).
 /// Tapping a post opens a full-screen image view built from
-/// `GET /api/posts/<id>/image`.
-///
-/// Share is deferred: no share_plus dependency is present in pubspec.yaml.
-// TODO: share — add share_plus to pubspec.yaml, then implement OS image share
-// in _PostDetailScreen using Share.shareXFiles([XFile.fromData(bytes)]).
+/// `GET /api/posts/<id>/image`, with a share action that hands the rendered
+/// PNG bytes to the OS share sheet via `share_plus`.
 class PostsScreen extends StatefulWidget {
   const PostsScreen({super.key});
 
@@ -324,6 +322,39 @@ class _PostDetailScreenState extends State<_PostDetailScreen> {
     }
   }
 
+  /// Hands the rendered PNG bytes to the OS share sheet. [btnContext] is the
+  /// share button's own context so the iPad popover anchors to it.
+  Future<void> _share(BuildContext btnContext) async {
+    final bytes = _bytes;
+    if (bytes == null || bytes.isEmpty) return;
+    // Capture before the await so we never touch context across the async gap.
+    final messenger = ScaffoldMessenger.of(btnContext);
+    final box = btnContext.findRenderObject() as RenderBox?;
+    final origin = box != null
+        ? box.localToGlobal(Offset.zero) & box.size
+        : null;
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [
+            XFile.fromData(Uint8List.fromList(bytes), mimeType: 'image/png'),
+          ],
+          // XFile.fromData ignores its name arg on most platforms; this sets it.
+          fileNameOverrides: ['post_${widget.post.id}.png'],
+          sharePositionOrigin: origin,
+        ),
+      );
+    } on Exception {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            AppStrings.t('share_failed', isArabic: widget.isArabic),
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ar = widget.isArabic;
@@ -332,9 +363,18 @@ class _PostDetailScreenState extends State<_PostDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(AppStrings.t('nav_posts', isArabic: ar)),
-        // TODO: share — once share_plus is in pubspec.yaml, replace
-        // this comment with a share action that calls
-        // Share.shareXFiles([XFile.fromData(Uint8List.fromList(_bytes!))]).
+        actions: [
+          // Only offer sharing once the full-resolution PNG is in memory.
+          if (bytes != null && bytes.isNotEmpty)
+            Builder(
+              // A child context anchors the iPad share-sheet popover.
+              builder: (btnContext) => IconButton(
+                icon: const Icon(Icons.share),
+                tooltip: AppStrings.t('share', isArabic: ar),
+                onPressed: () => _share(btnContext),
+              ),
+            ),
+        ],
       ),
       backgroundColor: Colors.black,
       body: Builder(

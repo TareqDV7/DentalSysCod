@@ -224,6 +224,8 @@ class AppStrings {
       'no_posts': 'لا توجد منشورات بعد.\nأنشئ منشورًا من تطبيق سطح المكتب.',
       'post_theme_label': 'القالب: ',
       'post_doctor_label': 'الطبيب: ',
+      'share': 'مشاركة',
+      'share_failed': 'تعذّرت المشاركة',
     },
     'en': {
       'cancel': 'Cancel',
@@ -450,6 +452,8 @@ class AppStrings {
       'no_posts': 'No posts yet.\nCreate one from the desktop app.',
       'post_theme_label': 'Theme: ',
       'post_doctor_label': 'Doctor: ',
+      'share': 'Share',
+      'share_failed': 'Could not share',
     },
   };
 
