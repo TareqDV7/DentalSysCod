@@ -67,31 +67,41 @@ def test_post_studio_tab_uses_image_icon():
 Run: `python -m pytest tests/test_post_studio_ui.py::test_post_studio_tab_uses_image_icon -v`
 Expected: FAIL — `'<symbol id="i-image"'` is not present.
 
-- [ ] **Step 3: Add the `i-image` symbol to the sprite**
+- [ ] **Step 3: Add the `i-image` symbol + name (via a Python script — the file is too large for the editor)**
 
-In `web_assets.py`, find the end of the `i-folders` symbol inside `ICON_SPRITE` and append the new symbol immediately after it. Replace:
+`web_assets.py` is ~249k tokens (it inlines base64 fonts), so the Read/Edit tools **cannot open it**. Make BOTH edits with a Python script. The script is idempotent and asserts its anchors exist. Run from the repo root:
 
-```
-H72V56h45.33L147.2,78.4A8,8,0,0,0,152,80h72Z"/></symbol>
-```
+````bash
+python - <<'PY'
+import io
+p = 'web_assets.py'
+s = io.open(p, encoding='utf-8').read()
 
-with (single line — keep it on one line like the rest of the sprite):
+# 1) Add 'image' to ICON_NAMES (idempotent)
+old_names = "'chart-bar', 'folders')"
+new_names = "'chart-bar', 'folders', 'image')"
+assert old_names in s, 'ICON_NAMES anchor not found'
+if new_names not in s:
+    s = s.replace(old_names, new_names, 1)
 
-```
-H72V56h45.33L147.2,78.4A8,8,0,0,0,152,80h72Z"/></symbol><symbol id="i-image" viewBox="0 0 256 256"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,16V158.75l-26.07-26.06a16,16,0,0,0-22.63,0l-20,20-44-44a16,16,0,0,0-22.62,0L40,149.37V56ZM40,172l52-52,80,80H40Zm176,28H194.63l-36-36,20-20L216,181.38V200Zm-72-100a12,12,0,1,1,12,12A12,12,0,0,1,144,100Z"/></symbol>
-```
+# 2) Append the i-image <symbol> immediately after the i-folders symbol (idempotent)
+anchor = 'H72V56h45.33L147.2,78.4A8,8,0,0,0,152,80h72Z"/></symbol>'
+img_symbol = (
+    '<symbol id="i-image" viewBox="0 0 256 256"><path d="M216,40H40A16,16,0,0,0,'
+    '24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,16V158.75l-26.07-26.06a16,'
+    '16,0,0,0-22.63,0l-20,20-44-44a16,16,0,0,0-22.62,0L40,149.37V56ZM40,172l52-52,80,80H40Zm176,28H194.63l-36-36,'
+    '20-20L216,181.38V200Zm-72-100a12,12,0,1,1,12,12A12,12,0,0,1,144,100Z"/></symbol>'
+)
+assert anchor in s, 'i-folders anchor not found'
+if 'id="i-image"' not in s:
+    s = s.replace(anchor, anchor + img_symbol, 1)
 
-Then add `'image'` to `ICON_NAMES` (line 3) for consistency — replace:
+io.open(p, 'w', encoding='utf-8').write(s)
+print('web_assets.py updated')
+PY
+````
 
-```python
-ICON_NAMES = ('house', 'users', 'calendar-dots', 'receipt', 'gear', 'magnifying-glass', 'bell', 'caret-down', 'moon', 'sun', 'sign-out', 'user', 'user-plus', 'chart-bar', 'folders')
-```
-
-with:
-
-```python
-ICON_NAMES = ('house', 'users', 'calendar-dots', 'receipt', 'gear', 'magnifying-glass', 'bell', 'caret-down', 'moon', 'sun', 'sign-out', 'user', 'user-plus', 'chart-bar', 'folders', 'image')
-```
+Expected output: `web_assets.py updated`. (Do **not** try to Read or Edit `web_assets.py` with the file tools — they will fail on its size.)
 
 - [ ] **Step 4: Repoint the Post Studio button**
 
