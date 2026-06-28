@@ -1,6 +1,12 @@
 # tests/test_post_studio_ui.py
 """Presence tests for the Post Studio tab (Tasks 10 & 11 — generator + gallery UI)."""
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+
+import pytest
 
 from templates import HTML_TEMPLATE
 
@@ -53,6 +59,38 @@ def test_post_studio_old_inline_generator_gone():
     assert 'function psLoadGallery()' not in HTML_TEMPLATE
     assert 'function psOnTabOpen()' not in HTML_TEMPLATE
     assert 'id="psGallery"' not in HTML_TEMPLATE
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node not installed')
+def test_template_module_scripts_pass_node_check():
+    # Every inline <script type="module"> block must be valid ESM.
+    # Each block is written to its own .mjs temp file so node --check accepts
+    # top-level import statements (node rejects those in .js files).
+    scripts = re.findall(
+        r'<script[^>]*type=["\']module["\'][^>]*>(.*?)</script>',
+        HTML_TEMPLATE,
+        re.DOTALL,
+    )
+    assert scripts, 'expected at least one inline type="module" script'
+    for i, script in enumerate(scripts):
+        with tempfile.NamedTemporaryFile(
+            'w', suffix='.mjs', delete=False, encoding='utf-8'
+        ) as fh:
+            fh.write(script)
+            path = fh.name
+        try:
+            proc = subprocess.run(
+                ['node', '--check', path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+            )
+            assert proc.returncode == 0, (
+                f'module block {i} failed node --check:\n{proc.stderr}'
+            )
+        finally:
+            os.unlink(path)
 
 
 def test_post_studio_translation_keys_in_en():
