@@ -1,0 +1,223 @@
+// editor.js — host-agnostic Post Studio controller. Minimal P2b editing surface
+// (template pick + add photos) over the structural renderer + client export +
+// host adapter. Deep editing (text/drag/typography/phases) is P4; premium themes
+// are P3. EN/AR via the STR map keyed off <html lang>.
+import { TEMPLATES, defaultComposition, serialize, deserialize } from './composition.js';
+import { renderComposition, EXPORT_PX } from './render.js';
+import { rasterizeToPngBlob } from './rasterize.js';
+
+const STR = {
+  en: { templates: 'Template', add_photos: 'Add photos', download: 'Download',
+        save: 'Save to Gallery', gallery: 'Saved posts', empty: 'No saved posts yet.',
+        reopen: 'Edit', del: 'Delete', saved: 'Saved.', save_failed: 'Save failed',
+        del_confirm: 'Delete this post?' },
+  ar: { templates: 'القالب', add_photos: 'إضافة صور', download: 'تنزيل',
+        save: 'حفظ في المعرض', gallery: 'المنشورات المحفوظة', empty: 'لا توجد منشورات بعد.',
+        reopen: 'تعديل', del: 'حذف', saved: 'تم الحفظ.', save_failed: 'فشل الحفظ',
+        del_confirm: 'حذف هذا المنشور؟' },
+};
+const TPL_LABEL = {
+  en: { before_after: 'Before / After', multi_phase: 'Multi-Phase',
+        quad_grid: 'Quad Grid', single_feature: 'Single Feature' },
+  ar: { before_after: 'قبل / بعد', multi_phase: 'متعدد المراحل',
+        quad_grid: 'شبكة رباعية', single_feature: 'صورة واحدة' },
+};
+
+const PREVIEW_W = 360; // displayed width; the stage renders at native export px.
+
+function el(tag, attrs = {}, styles = {}) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'text') node.textContent = v;
+    else node.setAttribute(k, v);
+  }
+  Object.assign(node.style, styles);
+  return node;
+}
+
+export function mountEditor(rootEl, host) {
+  const lang = document.documentElement.lang === 'ar' ? 'ar' : 'en';
+  const s = STR[lang];
+  const tl = TPL_LABEL[lang];
+  const state = { comp: defaultComposition('before_after') };
+
+  rootEl.innerHTML = '';
+  const layout = el('div', {}, { display: 'flex', gap: '24px', flexWrap: 'wrap', alignItems: 'flex-start' });
+
+  // ── Controls column ──
+  const controls = el('div', {}, { flex: '1', minWidth: '240px', maxWidth: '420px',
+    display: 'flex', flexDirection: 'column', gap: '16px' });
+
+  const tplGroup = el('div', {});
+  tplGroup.appendChild(el('label', { text: s.templates }, { display: 'block', marginBottom: '6px', fontWeight: '600' }));
+  const tplRow = el('div', {}, { display: 'flex', flexWrap: 'wrap', gap: '8px' });
+  for (const key of TEMPLATES) {
+    const btn = el('button', { type: 'button', 'data-ps-template': key, text: tl[key] || key }, {});
+    btn.className = 'btn';
+    btn.addEventListener('click', () => { state.comp = defaultComposition(key); renderPreview(); });
+    tplRow.appendChild(btn);
+  }
+  tplGroup.appendChild(tplRow);
+
+  const addBtn = el('button', { type: 'button', 'data-ps-action': 'add-photos', text: s.add_photos }, {});
+  addBtn.className = 'btn';
+  addBtn.addEventListener('click', onAddPhotos);
+
+  const actions = el('div', {}, { display: 'flex', gap: '8px', marginTop: '4px' });
+  const saveBtn = el('button', { type: 'button', 'data-ps-action': 'save', text: s.save }, {});
+  saveBtn.className = 'btn btn-primary';
+  saveBtn.addEventListener('click', onSave);
+  const dlBtn = el('button', { type: 'button', 'data-ps-action': 'download', text: s.download }, {});
+  dlBtn.className = 'btn';
+  dlBtn.addEventListener('click', onDownload);
+  actions.appendChild(saveBtn);
+  actions.appendChild(dlBtn);
+
+  controls.appendChild(tplGroup);
+  controls.appendChild(addBtn);
+  controls.appendChild(actions);
+
+  // ── Preview column ──
+  const previewCol = el('div', {}, { flex: '1', minWidth: '260px', display: 'flex',
+    flexDirection: 'column', alignItems: 'center', gap: '12px' });
+  const previewBox = el('div', { 'data-ps-preview': '' }, { position: 'relative', overflow: 'hidden' });
+  previewCol.appendChild(previewBox);
+
+  layout.appendChild(controls);
+  layout.appendChild(previewCol);
+
+  // ── Gallery ──
+  const gallery = el('div', {}, { marginTop: '24px' });
+  gallery.appendChild(el('h3', { text: s.gallery }, { margin: '0 0 16px', fontSize: '1rem', fontWeight: '600' }));
+  const galleryGrid = el('div', { 'data-ps-gallery': '' }, {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '16px' });
+  const galleryEmpty = el('p', { text: s.empty }, { display: 'none', fontSize: '0.9em', opacity: '0.7' });
+  gallery.appendChild(galleryGrid);
+  gallery.appendChild(galleryEmpty);
+
+  rootEl.appendChild(layout);
+  rootEl.appendChild(gallery);
+
+  function renderPreview() {
+    const stage = renderComposition(state.comp);
+    const [w, h] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
+    const scale = PREVIEW_W / w;
+    previewBox.innerHTML = '';
+    previewBox.style.width = `${PREVIEW_W}px`;
+    previewBox.style.height = `${h * scale}px`;
+    const scaler = el('div', {}, { transformOrigin: 'top left', transform: `scale(${scale})` });
+    scaler.appendChild(stage);
+    previewBox.appendChild(scaler);
+    previewBox._stage = stage; // native-size node for export
+  }
+
+  async function onAddPhotos() {
+    const picked = await host.pickPhotos();
+    if (!picked || !picked.length) return;
+    const strip = state.comp.elements.find((e) => e.id === 'strip');
+    if (!strip) return;
+    let i = 0;
+    for (const block of strip.blocks) {
+      if (!block.photo && i < picked.length) { block.photo = picked[i++].dataUrl; }
+    }
+    renderPreview();
+  }
+
+  async function exportBlob() {
+    // export captures the native-size stage (not the scaled preview)
+    const stage = renderComposition(state.comp);
+    const holder = el('div', {}, { position: 'fixed', left: '-99999px', top: '0' });
+    holder.appendChild(stage);
+    document.body.appendChild(holder);
+    try {
+      return await rasterizeToPngBlob(stage, 2);
+    } finally {
+      holder.remove();
+    }
+  }
+
+  async function onDownload() {
+    const blob = await exportBlob();
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: 'post.png' }, {});
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function onSave() {
+    try {
+      const blob = await exportBlob();
+      await host.savePost(blob, serialize(state.comp), {
+        theme: state.comp.theme, size: state.comp.size,
+        title: titleText(state.comp),
+      });
+      notify(s.saved);
+      await refreshGallery();
+    } catch (e) {
+      notify(s.save_failed + ': ' + e.message);
+    }
+  }
+
+  async function refreshGallery() {
+    let posts = [];
+    try { posts = await host.listPosts(); } catch (e) { posts = []; }
+    galleryGrid.innerHTML = '';
+    galleryEmpty.style.display = posts.length ? 'none' : '';
+    for (const post of posts) {
+      galleryGrid.appendChild(galleryCard(post));
+    }
+  }
+
+  function galleryCard(post) {
+    const card = el('div', { 'data-ps-gallery-item': '' }, {
+      border: '1px solid rgba(0,0,0,.12)', borderRadius: '8px', padding: '10px',
+      display: 'flex', flexDirection: 'column', gap: '8px' });
+    card.appendChild(el('div', { text: (post.title || '') + ' · ' + (post.theme || '') },
+      { fontSize: '0.82em', opacity: '0.8' }));
+    const row = el('div', {}, { display: 'flex', gap: '6px' });
+    const edit = el('button', { type: 'button', 'data-ps-action': 'reopen', text: s.reopen }, {});
+    edit.className = 'btn';
+    edit.addEventListener('click', () => reopen(post.id));
+    const del = el('button', { type: 'button', 'data-ps-action': 'gdelete', text: s.del }, {});
+    del.className = 'btn btn-danger';
+    del.addEventListener('click', () => removePost(post.id));
+    row.appendChild(edit);
+    row.appendChild(del);
+    card.appendChild(row);
+    return card;
+  }
+
+  async function reopen(id) {
+    const post = await host.getPost(id);
+    if (post && post.template_json) {
+      state.comp = deserialize(post.template_json);
+      renderPreview();
+      previewBox.scrollIntoView({ block: 'center' });
+    }
+  }
+
+  async function removePost(id) {
+    if (typeof window.showConfirm === 'function') {
+      const ok = await window.showConfirm({ message: s.del_confirm, danger: true });
+      if (!ok) return;
+    }
+    await host.deletePost(id);
+    await refreshGallery();
+  }
+
+  function notify(msg) {
+    if (typeof window.showToast === 'function') window.showToast(msg);
+  }
+
+  // init
+  renderPreview();
+  refreshGallery();
+  rootEl.dataset.psReady = '1';
+}
+
+function titleText(comp) {
+  const t = (comp.elements || []).find((e) => e.id === 'title');
+  return t && t.headline ? (t.headline.text || '') : '';
+}
