@@ -185,3 +185,37 @@ def test_marketing_posts_schema_has_template_json_not_photo_count(client):
     assert 'template_json' in cols
     assert 'photo_count' not in cols
     assert 'labels_json' not in cols
+
+
+def test_photos_requires_login(client):
+    assert client.post('/api/posts/photos').status_code == 401
+
+
+def test_photos_upload_returns_staged_paths(client):
+    _login(client)
+    r = client.post('/api/posts/photos',
+                    data={'photo': [(io.BytesIO(_png()), 'a.png'),
+                                    (io.BytesIO(_png()), 'b.png')]},
+                    content_type='multipart/form-data')
+    assert r.status_code == 200
+    paths = r.get_json()['photos']
+    assert len(paths) == 2
+    assert all(p.startswith('posts/_staging/') for p in paths)
+    assert all((dental_clinic.UPLOAD_FOLDER / p).exists() for p in paths)
+
+
+def test_photos_rejects_zero_and_too_many(client):
+    _login(client)
+    assert client.post('/api/posts/photos', data={},
+                       content_type='multipart/form-data').status_code == 400
+    seven = [(io.BytesIO(_png()), f'p{i}.png') for i in range(7)]
+    assert client.post('/api/posts/photos', data={'photo': seven},
+                       content_type='multipart/form-data').status_code == 400
+
+
+def test_photos_rejects_non_image(client):
+    _login(client)
+    r = client.post('/api/posts/photos',
+                    data={'photo': [(io.BytesIO(b'not an image'), 'x.png')]},
+                    content_type='multipart/form-data')
+    assert r.status_code == 400

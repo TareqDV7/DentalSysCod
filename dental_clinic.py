@@ -4796,6 +4796,39 @@ def posts_preview():
     return send_file(buf, mimetype='image/png')
 
 
+_MAX_POST_PHOTOS = 6
+_POST_PHOTO_MAX_EDGE = 2000  # px; downscale longer edge to keep files sane
+
+
+@app.route('/api/posts/photos', methods=['POST'])
+def posts_photos():
+    files = [f for f in request.files.getlist('photo') if f and f.filename]
+    if not files:
+        return jsonify({'error': 'No photos uploaded'}), 400
+    if len(files) > _MAX_POST_PHOTOS:
+        return jsonify({'error': f'At most {_MAX_POST_PHOTOS} photos'}), 400
+    staging = UPLOAD_FOLDER / 'posts' / '_staging'
+    staging.mkdir(parents=True, exist_ok=True)
+    out = []
+    for f in files:
+        try:
+            img = _PILImage.open(f.stream)
+            img.verify()                 # reject corrupt/non-images
+            f.stream.seek(0)
+            img = _PILImage.open(f.stream).convert('RGB')
+        except Exception:                # noqa: BLE001
+            return jsonify({'error': 'One of the files is not a valid image'}), 400
+        longest = max(img.size)
+        if longest > _POST_PHOTO_MAX_EDGE:
+            scale = _POST_PHOTO_MAX_EDGE / longest
+            img = img.resize((max(1, round(img.width * scale)),
+                              max(1, round(img.height * scale))))
+        name = f'{uuid.uuid4().hex}.jpg'
+        img.save(staging / name, 'JPEG', quality=88)
+        out.append(f'posts/_staging/{name}')
+    return jsonify({'photos': out})
+
+
 @app.route('/api/posts', methods=['GET', 'POST'])
 def posts_collection():
     conn = sqlite3.connect(DB_NAME)
