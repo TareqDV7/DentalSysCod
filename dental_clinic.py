@@ -1217,13 +1217,34 @@ def init_database():
             theme TEXT NOT NULL,
             size TEXT NOT NULL,
             doctor_name TEXT,
-            photo_count INTEGER NOT NULL,
-            labels_json TEXT,
+            template_json TEXT,
             file_name TEXT,
             file_path TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Pre-release migration: rebuild old-shape DBs (those still carrying the
+    # Pillow-era photo_count/labels_json) to the new shape. No production data
+    # exists, so dropping the table is safe; this spares a manual DB delete on
+    # dev machines. New-shape DBs that merely lack template_json get the column.
+    _mp_cols = {row[1] for row in cursor.execute('PRAGMA table_info(marketing_posts)')}
+    if 'photo_count' in _mp_cols or 'labels_json' in _mp_cols:
+        cursor.execute('DROP TABLE marketing_posts')
+        cursor.execute('''
+            CREATE TABLE marketing_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                theme TEXT NOT NULL,
+                size TEXT NOT NULL,
+                doctor_name TEXT,
+                template_json TEXT,
+                file_name TEXT,
+                file_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    else:
+        ensure_table_column(cursor, 'marketing_posts', 'template_json', 'TEXT')
 
     # Add missing columns to existing tables
     ensure_table_column(cursor, 'patient_followups', 'is_deleted', 'INTEGER DEFAULT 0')
@@ -4777,14 +4798,13 @@ def posts_preview():
 
 @app.route('/api/posts', methods=['GET', 'POST'])
 def posts_collection():
-    import json as _json
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     if request.method == 'GET':
-        cur.execute('''SELECT id, theme, size, doctor_name, photo_count, created_at
+        cur.execute('''SELECT id, theme, size, doctor_name, created_at
                        FROM marketing_posts ORDER BY created_at DESC''')
         rows = [{'id': r[0], 'theme': r[1], 'size': r[2], 'doctor_name': r[3],
-                 'photo_count': r[4], 'created_at': r[5]} for r in cur.fetchall()]
+                 'created_at': r[4]} for r in cur.fetchall()]
         conn.close()
         return jsonify(rows)
 
@@ -4792,12 +4812,10 @@ def posts_collection():
     if err:
         conn.close()
         return jsonify({'error': err}), 400
-    labels = [p.label for p in spec.photos]
     cur.execute('''INSERT INTO marketing_posts
-                   (theme, size, doctor_name, photo_count, labels_json)
-                   VALUES (?,?,?,?,?)''',
-                (spec.theme, spec.size, spec.doctor_name, len(spec.photos),
-                 _json.dumps(labels, ensure_ascii=False)))
+                   (theme, size, doctor_name)
+                   VALUES (?,?,?)''',
+                (spec.theme, spec.size, spec.doctor_name))
     new_id = cur.lastrowid
     posts_dir = UPLOAD_FOLDER / 'posts'
     posts_dir.mkdir(parents=True, exist_ok=True)

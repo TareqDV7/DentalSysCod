@@ -1,4 +1,5 @@
 import io
+import sqlite3 as _sqlite3
 import pytest
 from PIL import Image
 import dental_clinic
@@ -174,3 +175,13 @@ def test_branding_get_has_no_wizard_field(client):
     _login(client)
     body = client.get('/api/branding').get_json()
     assert 'wizard_done' not in body
+
+
+def test_marketing_posts_schema_has_template_json_not_photo_count(client):
+    # client fixture has already run init_database() against a fresh temp DB.
+    conn = _sqlite3.connect(dental_clinic.DB_NAME)
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(marketing_posts)')}
+    conn.close()
+    assert 'template_json' in cols
+    assert 'photo_count' not in cols
+    assert 'labels_json' not in cols
