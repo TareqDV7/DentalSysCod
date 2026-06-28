@@ -3043,16 +3043,7 @@ HTML_TEMPLATE = '''
                         </div>
                     </div>
 
-                    <!-- WYSIWYG editor mounts here in P2b; the Pillow generator was retired in P2a. -->
-
-                    <!-- Saved Posts Gallery -->
-                    <div class="section-card" style="margin-top:24px;">
-                        <h3 style="margin:0 0 16px;font-size:1rem;font-weight:600;" data-i18n="ps_gallery">Saved Posts</h3>
-                        <div id="psGallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px;">
-                            <!-- cards injected by psLoadGallery() -->
-                        </div>
-                        <p id="psGalleryEmpty" class="muted" style="display:none;font-size:0.9em;text-align:center;padding:24px 0;" data-i18n="ps_gallery_empty">No saved posts yet.</p>
-                    </div>
+                    <div id="ps-editor-root" class="section-card" style="padding:20px;"></div>
                 </div>
             </div>
 
@@ -4830,7 +4821,7 @@ HTML_TEMPLATE = '''
             else if (tabName === 'reports')      loadReportsSection();
             else if (tabName === 'financial')    loadFinancialSection();
             else if (tabName === 'support')      loadSupportSection();
-            else if (tabName === 'poststudio')   psOnTabOpen().catch(function(){});
+            else if (tabName === 'poststudio')   { if (window.PostStudioMount) window.PostStudioMount(); }
         }
 
         function switchReportsSubTab(tabName, clickedBtn = null, shouldLoad = true) {
@@ -8878,90 +8869,18 @@ HTML_TEMPLATE = '''
         document.addEventListener('DOMContentLoaded', loadLicenseCard);
     </script>
 
-    <script>
-        // ── Post Studio ───────────────────────────────────────────────────────
-        // Post Studio gallery list. The Pillow-era generator JS was retired in P2a;
-        // the WYSIWYG editor + its client export wiring land in P2b.
-
-        async function psLoadGallery() {
-            const grid = document.getElementById('psGallery');
-            const empty = document.getElementById('psGalleryEmpty');
-            if (!grid) return;
-            try {
-                const r = await fetch('/api/posts');
-                if (!r.ok) return;
-                const posts = await r.json();
-                grid.innerHTML = '';
-                if (!posts.length) {
-                    if (empty) { empty.style.display = ''; empty.textContent = t('ps_gallery_empty', 'No saved posts yet.'); }
-                    return;
-                }
-                if (empty) empty.style.display = 'none';
-                posts.forEach(function(post) {
-                    const safeId = encodeURIComponent(String(post.id));
-                    const card = document.createElement('div');
-                    card.style.cssText = 'border-radius:var(--radius,8px);overflow:hidden;background:var(--surface-alt,#f5f5f5);display:flex;flex-direction:column;';
-                    const img = document.createElement('img');
-                    img.src = '/api/posts/' + safeId + '/image';
-                    img.alt = '';
-                    img.loading = 'lazy';
-                    img.style.cssText = 'width:100%;aspect-ratio:1/1;object-fit:cover;display:block;';
-                    img.onerror = function() { this.style.display = 'none'; };
-                    const body = document.createElement('div');
-                    body.style.cssText = 'padding:8px;display:flex;flex-direction:column;gap:4px;';
-                    const meta = document.createElement('p');
-                    meta.style.cssText = 'margin:0;font-size:0.78em;color:var(--muted);line-height:1.4;';
-                    meta.textContent = t('ps_theme_' + (post.theme || ''), post.theme || '') + (post.created_at ? ' · ' + String(post.created_at).slice(0, 10) : '');
-                    const actions = document.createElement('div');
-                    actions.style.cssText = 'display:flex;gap:6px;margin-top:2px;';
-                    const dlBtn = document.createElement('a');
-                    dlBtn.href = '/api/posts/' + safeId + '/image';
-                    dlBtn.download = 'post-' + safeId + '.jpg';
-                    dlBtn.className = 'btn';
-                    dlBtn.style.cssText = 'font-size:0.78em;padding:4px 8px;flex:1;text-align:center;text-decoration:none;';
-                    dlBtn.textContent = t('ps_download', 'Download');
-                    const delBtn = document.createElement('button');
-                    delBtn.type = 'button';
-                    delBtn.className = 'btn btn-danger';
-                    delBtn.style.cssText = 'font-size:0.78em;padding:4px 8px;';
-                    delBtn.textContent = t('ps_delete', 'Delete');
-                    delBtn.onclick = function() {
-                        showConfirm({
-                            title: t('ps_delete', 'Delete'),
-                            message: t('ps_delete_confirm', 'Delete this post permanently?'),
-                            confirmLabel: t('ps_delete', 'Delete'),
-                            danger: true
-                        }).then(function(confirmed) {
-                            if (!confirmed) return;
-                            fetch('/api/posts/' + safeId, { method: 'DELETE' })
-                                .then(function(res) {
-                                    if (res.ok) {
-                                        showToast(t('ps_delete_ok', 'Post deleted'), 'success');
-                                        psLoadGallery();
-                                    } else {
-                                        showToast(t('ps_delete_failed', 'Could not delete post'), 'error');
-                                    }
-                                })
-                                .catch(function() {
-                                    showToast(t('ps_delete_failed', 'Could not delete post'), 'error');
-                                });
-                        });
-                    };
-                    actions.appendChild(dlBtn);
-                    actions.appendChild(delBtn);
-                    body.appendChild(meta);
-                    body.appendChild(actions);
-                    card.appendChild(img);
-                    card.appendChild(body);
-                    grid.appendChild(card);
-                });
-            } catch (_e) { /* ignore network errors */ }
-        }
-
-        async function psOnTabOpen() {
-            // P2a: the editor is inert (Pillow retired); just load the saved-posts gallery.
-            psLoadGallery();
-        }
+    <script type="module">
+        // Post Studio editor (ESM, served same-origin by /post_studio/<file>).
+        import { mountEditor } from '/post_studio/editor.js';
+        import { createDesktopHost } from '/post_studio/host.js';
+        let _psMounted = false;
+        window.PostStudioMount = function () {
+            if (_psMounted) return;
+            const root = document.getElementById('ps-editor-root');
+            if (!root) return;
+            mountEditor(root, createDesktopHost());
+            _psMounted = true;
+        };
     </script>
 
     <!-- Doctor name edit popover: direct body child to escape backdrop-filter containment -->

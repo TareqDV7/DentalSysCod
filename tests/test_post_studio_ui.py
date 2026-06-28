@@ -30,12 +30,29 @@ def test_post_studio_theme_options():
         assert f'value="{value}"' in HTML_TEMPLATE
 
 
-def test_post_studio_js_functions_present():
-    # P2a removed the Pillow-era generator JS; psSave/psDownload are gone, the
-    # gallery + tab-open hook stay.
-    assert 'function psOnTabOpen()' in HTML_TEMPLATE
-    assert 'function psSave()' not in HTML_TEMPLATE
-    assert 'function psDownload()' not in HTML_TEMPLATE
+# ── Task 6: ESM editor mount ─────────────────────────────────────────────────
+
+def test_post_studio_editor_mount_present():
+    assert 'id="ps-editor-root"' in HTML_TEMPLATE
+
+
+def test_post_studio_loads_editor_module():
+    assert ("from '/post_studio/editor.js'" in HTML_TEMPLATE or
+            'from "/post_studio/editor.js"' in HTML_TEMPLATE)
+    assert ("from '/post_studio/host.js'" in HTML_TEMPLATE or
+            'from "/post_studio/host.js"' in HTML_TEMPLATE)
+
+
+def test_post_studio_tab_open_mounts_editor():
+    assert 'PostStudioMount' in HTML_TEMPLATE
+    assert "tabName === 'poststudio'" in HTML_TEMPLATE
+
+
+def test_post_studio_old_inline_generator_gone():
+    # The P2a interim inline JS is fully superseded by the ESM editor.
+    assert 'function psLoadGallery()' not in HTML_TEMPLATE
+    assert 'function psOnTabOpen()' not in HTML_TEMPLATE
+    assert 'id="psGallery"' not in HTML_TEMPLATE
 
 
 def test_post_studio_translation_keys_in_en():
@@ -76,39 +93,14 @@ def test_post_studio_translation_keys_in_ar():
         assert f'{key}:' in ar_block, f'Missing AR translation key: {key}'
 
 
-def test_post_studio_tab_switch_wired():
-    assert "tabName === 'poststudio'" in HTML_TEMPLATE
-    assert 'psOnTabOpen()' in HTML_TEMPLATE
-
-
 def test_post_studio_bilingual_nav_label():
     assert 'data-en="Post Studio"' in HTML_TEMPLATE
     assert 'data-ar="استوديو المنشورات"' in HTML_TEMPLATE
 
 
-# ── Task 11: Gallery UI ──────────────────────────────────────────────────────
-
-def test_gallery_container_present():
-    assert 'id="psGallery"' in HTML_TEMPLATE
-    assert 'id="psGalleryEmpty"' in HTML_TEMPLATE
-
-
-def test_gallery_js_function_present():
-    assert 'function psLoadGallery()' in HTML_TEMPLATE
-
-
-def test_gallery_wired_into_tab_open():
-    """psOnTabOpen must call psLoadGallery so the gallery loads when the tab opens."""
-    # The call must appear at least twice: once in psSave guard, once in psOnTabOpen
-    assert HTML_TEMPLATE.count('psLoadGallery()') >= 2, (
-        'Expected psLoadGallery() in both psSave guard and psOnTabOpen'
-    )
-    # psOnTabOpen definition must appear before the call site at psLoadGallery() closing area
-    ps_on_idx = HTML_TEMPLATE.index('async function psOnTabOpen()')
-    # psLoadGallery() must appear after psOnTabOpen starts (wired in its body)
-    load_call_idx = HTML_TEMPLATE.index('psLoadGallery();', ps_on_idx)
-    assert load_call_idx > ps_on_idx, 'psOnTabOpen does not call psLoadGallery()'
-
+# ── Task 11: Gallery — translation keys stay ─────────────────────────────────
+# (The gallery HTML and JS were retired in Task 6; translation keys stay
+#  in the bundle for future use and are tested here.)
 
 def test_gallery_translation_keys_in_en():
     en_match = re.search(r'en:\s*\{(.+?)^\s*\}', HTML_TEMPLATE, re.S | re.M)
@@ -127,23 +119,8 @@ def test_gallery_translation_keys_in_ar():
 
 
 def test_gallery_uses_escape_html():
-    """Gallery cards must use escapeHtml for user-controlled values."""
+    """escapeHtml utility must remain in the template."""
     assert 'escapeHtml' in HTML_TEMPLATE
-
-
-def test_gallery_uses_show_confirm():
-    """Delete must use the showConfirm modal — check it appears after psLoadGallery definition."""
-    load_idx = HTML_TEMPLATE.index('async function psLoadGallery()')
-    # showConfirm must appear somewhere after psLoadGallery starts
-    confirm_idx = HTML_TEMPLATE.find('showConfirm(', load_idx)
-    assert confirm_idx > load_idx, 'psLoadGallery does not use showConfirm for delete'
-
-
-def test_gallery_delete_uses_fetch_delete():
-    """Delete action must issue a fetch with method DELETE."""
-    load_idx = HTML_TEMPLATE.index('async function psLoadGallery()')
-    delete_idx = HTML_TEMPLATE.find("method: 'DELETE'", load_idx)
-    assert delete_idx > load_idx, 'psLoadGallery delete does not use fetch method DELETE'
 
 
 # ── Task 12: Settings → Branding panel ──────────────────────────────────────
