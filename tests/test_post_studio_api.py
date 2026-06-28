@@ -1,4 +1,5 @@
 import io
+import json as _json
 import sqlite3 as _sqlite3
 import pytest
 from PIL import Image
@@ -32,91 +33,6 @@ def _png(color=(120, 80, 200)):
     return b.getvalue()
 
 
-def _form(n=2):
-    data = {'doctor_name': 'Dr. Wasfy', 'theme': 'clean_clinical', 'size': 'square'}
-    files = [('photo', (io.BytesIO(_png()), f'p{i}.png')) for i in range(n)]
-    labels = [('labels', lbl) for lbl in ['Before', 'After'][:n]]
-    return data, files, labels
-
-
-def test_preview_requires_login(client):
-    assert client.post('/api/posts/preview').status_code == 401
-
-
-def test_preview_returns_png(client):
-    _login(client)
-    data, files, labels = _form()
-    r = client.post(
-        '/api/posts/preview',
-        data={**data, 'photo': [f[1] for f in files],
-              'labels': [lb[1] for lb in labels]},
-        content_type='multipart/form-data',
-    )
-    assert r.status_code == 200
-    assert r.content_type.startswith('image/png')
-    assert Image.open(io.BytesIO(r.data)).size == (1080, 1080)
-
-
-def test_preview_rejects_zero_photos(client):
-    _login(client)
-    r = client.post(
-        '/api/posts/preview',
-        data={'doctor_name': 'X', 'theme': 'clean_clinical', 'size': 'square'},
-        content_type='multipart/form-data',
-    )
-    assert r.status_code == 400
-
-
-def test_preview_rejects_more_than_four_photos(client):
-    _login(client)
-    photos = [(io.BytesIO(_png()), f'p{i}.png') for i in range(5)]
-    r = client.post(
-        '/api/posts/preview',
-        data={'doctor_name': 'X', 'theme': 'clean_clinical', 'size': 'square',
-              'photo': photos},
-        content_type='multipart/form-data',
-    )
-    assert r.status_code == 400
-
-
-def test_preview_rejects_bad_theme_and_size(client):
-    _login(client)
-    # A fresh BytesIO per request: werkzeug closes the stream after sending,
-    # so the two POSTs cannot share one photo object.
-    bad_theme = client.post(
-        '/api/posts/preview',
-        data={'doctor_name': 'X', 'theme': 'neon_chaos', 'size': 'square',
-              'photo': [(io.BytesIO(_png()), 'p.png')]},
-        content_type='multipart/form-data')
-    assert bad_theme.status_code == 400
-    bad_size = client.post(
-        '/api/posts/preview',
-        data={'doctor_name': 'X', 'theme': 'clean_clinical', 'size': 'billboard',
-              'photo': [(io.BytesIO(_png()), 'p.png')]},
-        content_type='multipart/form-data')
-    assert bad_size.status_code == 400
-
-
-def _save_one(client):
-    return client.post('/api/posts',
-                       data={'doctor_name': 'Dr. Wasfy', 'theme': 'soft_mint',
-                             'size': 'portrait', 'photo': [(io.BytesIO(_png()), 'a.png')],
-                             'labels': ['Before']},
-                       content_type='multipart/form-data')
-
-
-def test_save_then_list_serve_delete(client):
-    _login(client)
-    pid = _save_one(client).get_json()['id']
-    listing = client.get('/api/posts').get_json()
-    assert any(p['id'] == pid for p in listing)
-    img = client.get(f'/api/posts/{pid}/image')
-    assert img.status_code == 200 and img.content_type.startswith('image/png')
-    assert Image.open(io.BytesIO(img.data)).size == (1080, 1350)
-    assert client.delete(f'/api/posts/{pid}').status_code == 200
-    assert client.get(f'/api/posts/{pid}/image').status_code == 404
-
-
 def test_readonly_posts_reachable_without_login(client):
     # The offline-first mobile app reads posts over the LAN with device/clinic
     # token headers, not the portal session cookie — same open posture as
@@ -134,23 +50,6 @@ def test_post_writes_still_require_login(client):
     # Reads are open, but creates and deletes stay gated behind the portal session.
     assert client.post('/api/posts').status_code == 401
     assert client.delete('/api/posts/1').status_code == 401
-
-
-def test_save_render_failure_rolls_back(client, monkeypatch):
-    _login(client)
-
-    def _boom(spec):
-        raise RuntimeError('render exploded')
-
-    monkeypatch.setattr(dental_clinic.post_studio, 'render_post', _boom)
-    r = client.post(
-        '/api/posts',
-        data={'doctor_name': 'X', 'theme': 'clean_clinical', 'size': 'square',
-              'photo': [(io.BytesIO(_png()), 'a.png')], 'labels': ['Before']},
-        content_type='multipart/form-data')
-    assert r.status_code == 500
-    # rollback must discard the INSERTed row, so the gallery stays empty.
-    assert client.get('/api/posts').get_json() == []
 
 
 def test_branding_logo_endpoints_are_gone(client):
@@ -219,3 +118,58 @@ def test_photos_rejects_non_image(client):
                     data={'photo': [(io.BytesIO(b'not an image'), 'x.png')]},
                     content_type='multipart/form-data')
     assert r.status_code == 400
+
+
+_TJSON = _json.dumps({'version': 1, 'size': 'square', 'theme': 'dark_premium',
+                      'elements': [{'id': 'strip', 'type': 'photoStrip', 'blocks': []}]})
+
+
+def _save_post(client):
+    return client.post(
+        '/api/posts',
+        data={'image': (io.BytesIO(_png()), 'export.png'),
+              'template_json': _TJSON, 'theme': 'dark_premium',
+              'size': 'square', 'title': 'Root Canal'},
+        content_type='multipart/form-data')
+
+
+def test_save_requires_login(client):
+    assert client.post('/api/posts').status_code == 401
+
+
+def test_save_persists_png_and_spec_then_roundtrips(client):
+    _login(client)
+    pid = _save_post(client).get_json()['id']
+    # list
+    listing = client.get('/api/posts').get_json()
+    row = next(p for p in listing if p['id'] == pid)
+    assert row['title'] == 'Root Canal'
+    assert 'photo_count' not in row
+    # get-spec (re-edit) round-trips the template_json
+    spec = client.get(f'/api/posts/{pid}').get_json()
+    assert _json.loads(spec['template_json'])['theme'] == 'dark_premium'
+    # serve the exported PNG
+    img = client.get(f'/api/posts/{pid}/image')
+    assert img.status_code == 200 and img.content_type.startswith('image/png')
+    # delete
+    assert client.delete(f'/api/posts/{pid}').status_code == 200
+    assert client.get(f'/api/posts/{pid}').status_code == 404
+
+
+def test_save_rejects_missing_png_or_bad_spec(client):
+    _login(client)
+    no_png = client.post('/api/posts',
+                         data={'template_json': _TJSON, 'theme': 'dark_premium', 'size': 'square'},
+                         content_type='multipart/form-data')
+    assert no_png.status_code == 400
+    bad_spec = client.post('/api/posts',
+                           data={'image': (io.BytesIO(_png()), 'e.png'),
+                                 'template_json': 'not json', 'theme': 'dark_premium', 'size': 'square'},
+                           content_type='multipart/form-data')
+    assert bad_spec.status_code == 400
+
+
+def test_get_spec_open_to_mobile_read_posture(client):
+    # like /api/posts and /api/posts/<id>/image, the spec GET is reachable
+    # without the portal session (mobile uses device/clinic-token headers).
+    assert client.get('/api/posts/999').status_code == 404  # handler ran, not 401

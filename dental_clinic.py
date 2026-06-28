@@ -2062,7 +2062,7 @@ def _require_login_for_portal():
     # than the portal session cookie — same open posture as /api/patients and
     # /api/medical-images. Writes (POST/DELETE/preview) and branding stay gated.
     if request.method == 'GET' and (path == '/api/posts'
-                                    or re.match(r'^/api/posts/\d+/image$', path)):
+                                    or re.match(r'^/api/posts/\d+(/image)?$', path)):
         return None
     if session.get('uid'):
         return None
@@ -4831,39 +4831,69 @@ def posts_photos():
 
 @app.route('/api/posts', methods=['GET', 'POST'])
 def posts_collection():
+    import json as _json
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     if request.method == 'GET':
-        cur.execute('''SELECT id, theme, size, doctor_name, created_at
+        cur.execute('''SELECT id, title, theme, size, doctor_name, created_at
                        FROM marketing_posts ORDER BY created_at DESC''')
-        rows = [{'id': r[0], 'theme': r[1], 'size': r[2], 'doctor_name': r[3],
-                 'created_at': r[4]} for r in cur.fetchall()]
+        rows = [{'id': r[0], 'title': r[1], 'theme': r[2], 'size': r[3],
+                 'doctor_name': r[4], 'created_at': r[5]} for r in cur.fetchall()]
         conn.close()
         return jsonify(rows)
 
-    spec, err = _build_spec_from_request()
-    if err:
+    # POST: persist the client-exported PNG + the editable spec.
+    png = request.files.get('image')
+    if not png or not png.filename:
         conn.close()
-        return jsonify({'error': err}), 400
-    cur.execute('''INSERT INTO marketing_posts
-                   (theme, size, doctor_name)
-                   VALUES (?,?,?)''',
-                (spec.theme, spec.size, spec.doctor_name))
-    new_id = cur.lastrowid
-    posts_dir = UPLOAD_FOLDER / 'posts'
-    posts_dir.mkdir(parents=True, exist_ok=True)
-    dest = posts_dir / f'{new_id}.png'
+        return jsonify({'error': 'No exported image'}), 400
+    template_json = request.form.get('template_json') or ''
     try:
-        post_studio.render_post(spec).save(dest, 'PNG')
+        _json.loads(template_json)
+    except (ValueError, TypeError):
+        conn.close()
+        return jsonify({'error': 'Invalid template_json'}), 400
+    theme = request.form.get('theme') or ''
+    size = request.form.get('size') or ''
+    title = request.form.get('title') or ''
+    doctor = read_app_setting(cur, 'doctor_name', '') or ''
+
+    cur.execute('''INSERT INTO marketing_posts (title, theme, size, doctor_name, template_json)
+                   VALUES (?,?,?,?,?)''', (title, theme, size, doctor, template_json))
+    new_id = cur.lastrowid
+    post_dir = UPLOAD_FOLDER / 'posts' / str(new_id)
+    post_dir.mkdir(parents=True, exist_ok=True)
+    dest = post_dir / f'{new_id}.png'
+    try:
+        png.save(str(dest))
+        # Move any staged source photos into the post's own dir (best-effort).
+        for ref in request.form.getlist('photos'):
+            src = UPLOAD_FOLDER / ref
+            if str(src).startswith(str(UPLOAD_FOLDER / 'posts' / '_staging')) and src.exists():
+                src.replace(post_dir / src.name)
         cur.execute('UPDATE marketing_posts SET file_name=?, file_path=? WHERE id=?',
                     (f'{new_id}.png', str(dest), new_id))
         conn.commit()
-    except Exception:  # noqa: BLE001 - never leak the connection or persist a half-written row
+    except Exception:  # noqa: BLE001 — never leak the connection or persist a half-written row
         conn.rollback()
         conn.close()
-        return jsonify({'error': 'Failed to render the post'}), 500
+        return jsonify({'error': 'Failed to save the post'}), 500
     conn.close()
     return jsonify({'success': True, 'id': new_id})
+
+
+@app.route('/api/posts/<int:post_id>', methods=['GET'])
+def posts_get(post_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute('''SELECT id, title, theme, size, doctor_name, template_json, created_at
+                   FROM marketing_posts WHERE id=?''', (post_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'id': row[0], 'title': row[1], 'theme': row[2], 'size': row[3],
+                    'doctor_name': row[4], 'template_json': row[5], 'created_at': row[6]})
 
 
 @app.route('/api/posts/<int:post_id>/image')
@@ -4884,11 +4914,10 @@ def posts_delete(post_id):
     cur = conn.cursor()
     cur.execute('SELECT file_path FROM marketing_posts WHERE id=?', (post_id,))
     row = cur.fetchone()
-    if row and row[0] and Path(row[0]).exists():
-        try:
-            Path(row[0]).unlink()
-        except OSError:
-            pass
+    if row and row[0]:
+        post_dir = Path(row[0]).parent
+        if post_dir.name == str(post_id) and post_dir.exists():
+            shutil.rmtree(post_dir, ignore_errors=True)
     cur.execute('DELETE FROM marketing_posts WHERE id=?', (post_id,))
     conn.commit()
     conn.close()
