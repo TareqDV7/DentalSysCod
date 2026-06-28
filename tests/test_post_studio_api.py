@@ -173,3 +173,14 @@ def test_get_spec_open_to_mobile_read_posture(client):
     # like /api/posts and /api/posts/<id>/image, the spec GET is reachable
     # without the portal session (mobile uses device/clinic-token headers).
     assert client.get('/api/posts/999').status_code == 404  # handler ran, not 401
+
+
+def test_pillow_engine_is_retired():
+    import importlib.util
+    assert importlib.util.find_spec('post_studio') is None
+    assert importlib.util.find_spec('post_themes') is None
+
+
+def test_preview_route_is_gone(client):
+    _login(client)
+    assert client.post('/api/posts/preview').status_code == 404

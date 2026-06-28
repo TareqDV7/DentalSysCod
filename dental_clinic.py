@@ -73,7 +73,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from markupsafe import escape
 from PIL import Image
 from PIL import Image as _PILImage
-import post_studio
 
 # Werkzeug 3's default generate_password_hash method is scrypt
 # (scrypt:32768:8:1$...). scrypt needs OpenSSL scrypt support plus a ~32 MB
@@ -4753,47 +4752,6 @@ def branding():
     conn.commit()
     conn.close()
     return jsonify({'success': True})
-
-
-_VALID_POST_SIZES = ('square', 'portrait', 'story')
-
-
-def _build_spec_from_request():
-    files = request.files.getlist('photo')
-    if not files or len(files) > 4:
-        return None, 'Add 1 to 4 photos'
-    labels = request.form.getlist('labels')
-    theme = request.form.get('theme', 'clean_clinical')
-    size = request.form.get('size', 'square')
-    if theme not in _VALID_POST_THEMES or size not in _VALID_POST_SIZES:
-        return None, 'Bad theme or size'
-    photos = []
-    for i, f in enumerate(files):
-        try:
-            img = _PILImage.open(f.stream).convert('RGB')
-            img.load()
-        except Exception:  # noqa: BLE001
-            return None, 'One of the photos is not a valid image'
-        photos.append(post_studio.Photo(img, labels[i] if i < len(labels) else ''))
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    doctor = request.form.get('doctor_name') or read_app_setting(cur, 'doctor_name', '') or ''
-    conn.close()
-    spec = post_studio.PostSpec(photos=photos, doctor_name=doctor,
-                                theme=theme, size=size)
-    return spec, None
-
-
-@app.route('/api/posts/preview', methods=['POST'])
-def posts_preview():
-    spec, err = _build_spec_from_request()
-    if err:
-        return jsonify({'error': err}), 400
-    img = post_studio.render_post(spec)
-    buf = io.BytesIO()
-    img.save(buf, 'PNG')
-    buf.seek(0)
-    return send_file(buf, mimetype='image/png')
 
 
 _MAX_POST_PHOTOS = 6

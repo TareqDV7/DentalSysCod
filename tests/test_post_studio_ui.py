@@ -15,28 +15,27 @@ def test_post_studio_panel_present():
     assert 'class="tab-content"' in HTML_TEMPLATE
 
 
-def test_post_studio_key_ui_elements():
-    assert 'id="ps-photo-input"' in HTML_TEMPLATE
-    assert 'id="ps-doctor-name"' in HTML_TEMPLATE
-    assert 'id="ps-theme"' in HTML_TEMPLATE
-    assert 'id="ps-size"' in HTML_TEMPLATE
-    assert 'id="psPreview"' in HTML_TEMPLATE
+def test_post_studio_old_generator_form_removed():
+    # P2a retires the Pillow generator; the old server-render form (photo picker,
+    # theme/size selects, live preview) is gone. The tab shell + saved-posts
+    # gallery remain; P2b rebuilds the editor body.
+    for old_id in ('id="ps-photo-input"', 'id="ps-doctor-name"',
+                   'id="ps-theme"', 'id="ps-size"', 'id="psPreview"'):
+        assert old_id not in HTML_TEMPLATE
 
 
 def test_post_studio_theme_options():
+    # Theme values survive via the Settings → Branding default-theme select.
     for value in ('dark_premium', 'clean_clinical', 'soft_mint', 'bold_editorial'):
         assert f'value="{value}"' in HTML_TEMPLATE
 
 
-def test_post_studio_size_options():
-    for value in ('square', 'portrait', 'story'):
-        assert f'value="{value}"' in HTML_TEMPLATE
-
-
 def test_post_studio_js_functions_present():
-    assert 'function psSave()' in HTML_TEMPLATE
-    assert 'function psDownload()' in HTML_TEMPLATE
+    # P2a removed the Pillow-era generator JS; psSave/psDownload are gone, the
+    # gallery + tab-open hook stay.
     assert 'function psOnTabOpen()' in HTML_TEMPLATE
+    assert 'function psSave()' not in HTML_TEMPLATE
+    assert 'function psDownload()' not in HTML_TEMPLATE
 
 
 def test_post_studio_translation_keys_in_en():
