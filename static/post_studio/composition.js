@@ -1,0 +1,81 @@
+// Pure, DOM-free composition state for Post Studio.
+// Single source of truth for the template_json shape. ESM so it loads in
+// node --test AND in the WebView (<script type="module">). Never mutates inputs.
+
+export const MAX_BLOCKS = 6;
+export const SIZES = ['square', 'portrait', 'story'];
+export const TEMPLATES = ['before_after', 'multi_phase', 'quad_grid', 'single_feature'];
+
+const DEFAULT_THEME = 'dark_premium';
+
+// Element factory helpers — geometry/typography here are structural defaults
+// only; P3 themes restyle them. Positions are fractional (0–1), size-independent.
+function titleElement() {
+  return {
+    id: 'title', type: 'title', x: 0.5, y: 0.10, align: 'center',
+    headline: { text: 'Procedure Title', font: 'playfair', size: 64, weight: 700, color: '#ffffff', letterSpacing: 0 },
+    subline: { text: 'Subtitle', font: 'manrope', size: 40, weight: 500, color: '#5fd3c8', letterSpacing: 0 },
+    icon: null,
+  };
+}
+
+function block(label) {
+  return { photo: null, badge: 0, label };
+}
+
+function stripElement(labels, layout) {
+  const blocks = labels.map((label) => block(label));
+  return renumber({
+    id: 'strip', type: 'photoStrip', layout: layout || 'row',
+    blocks,
+    labelStyle: { font: 'manrope', size: 28, weight: 600, color: '#cfd8e3' },
+  });
+}
+
+function doctorElement(doctorName) {
+  return {
+    id: 'doctor', type: 'doctorName', x: 0.5, y: 0.93, align: 'center',
+    text: doctorName || '',
+    font: 'manrope', size: 34, weight: 700, color: '#c9a227', letterSpacing: 4,
+  };
+}
+
+// Returns a NEW strip whose blocks are renumbered 1..n (badges follow order).
+export function renumber(strip) {
+  const next = structuredClone(strip);
+  next.blocks = next.blocks.map((b, i) => ({ ...b, badge: i + 1 }));
+  return next;
+}
+
+const SEEDS = {
+  before_after: { labels: ['Before Treatment', 'After Treatment'], layout: 'row' },
+  multi_phase: { labels: ['Before', 'During', 'After'], layout: 'row' },
+  quad_grid: { labels: ['Angle 1', 'Angle 2', 'Angle 3', 'Angle 4'], layout: 'grid' },
+  single_feature: { labels: ['Result'], layout: 'row' },
+};
+
+export function defaultComposition(template, opts = {}) {
+  const seed = SEEDS[template];
+  if (!seed) throw new Error(`unknown template: ${template}`);
+  return {
+    version: 1,
+    size: 'square',
+    theme: DEFAULT_THEME,
+    elements: [
+      titleElement(),
+      stripElement(seed.labels, seed.layout),
+      doctorElement(opts.doctorName),
+    ],
+  };
+}
+
+export function serialize(comp) {
+  return JSON.stringify(comp);
+}
+
+export function deserialize(json) {
+  const c = typeof json === 'string' ? JSON.parse(json) : json;
+  if (c.version !== 1) throw new Error(`unsupported version: ${c.version}`);
+  if (!SIZES.includes(c.size)) throw new Error(`invalid size: ${c.size}`);
+  return structuredClone(c);
+}
