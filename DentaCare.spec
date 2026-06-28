@@ -63,6 +63,8 @@ COMMON_DATAS = [
     ('DentaCare.PNG', '.'),
     # Post Studio fonts (Latin + Arabic) loaded by post_studio.render_post.
     ('fonts', 'fonts'),
+    # Post Studio client-side editor ESM bundle (served by /post_studio/<file>).
+    ('static', 'static'),
 ]
 
 # The window launcher additionally bundles its HTML / tray icon assets.

@@ -184,3 +184,28 @@ def test_pillow_engine_is_retired():
 def test_preview_route_is_gone(client):
     _login(client)
     assert client.post('/api/posts/preview').status_code == 404
+
+
+def test_post_studio_module_served(client):
+    # composition.js (created in P2a) must be served same-origin with a JS mimetype.
+    r = client.get('/post_studio/composition.js')
+    assert r.status_code == 200
+    assert r.content_type.startswith('text/javascript') or 'javascript' in r.content_type
+    assert b'defaultComposition' in r.data
+
+
+def test_post_studio_module_served_without_login(client):
+    # It is a public asset (the logged-in portal page references it, but the
+    # asset route itself must not require the portal session).
+    r = client.get('/post_studio/composition.js')
+    assert r.status_code == 200
+
+
+def test_post_studio_module_missing_is_404(client):
+    assert client.get('/post_studio/does-not-exist.js').status_code == 404
+
+
+def test_post_studio_module_rejects_traversal(client):
+    # Must not escape static/post_studio/.
+    r = client.get('/post_studio/..%2f..%2fdental_clinic.py')
+    assert r.status_code in (403, 404)

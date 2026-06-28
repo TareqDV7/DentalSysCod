@@ -2056,6 +2056,9 @@ def _require_login_for_portal():
     path = request.path or '/'
     if path not in _AUTH_REQUIRED_EXACT and not path.startswith(_AUTH_REQUIRED_PREFIXES):
         return None
+    # Editor ESM bundle is a public same-origin asset (served to the portal page).
+    if request.method == 'GET' and path.startswith('/post_studio/'):
+        return None
     # Read-only marketing-post endpoints stay reachable for the offline-first
     # mobile app, which authenticates with device/clinic-token headers rather
     # than the portal session cookie — same open posture as /api/patients and
@@ -4756,6 +4759,20 @@ def branding():
 
 _MAX_POST_PHOTOS = 6
 _POST_PHOTO_MAX_EDGE = 2000  # px; downscale longer edge to keep files sane
+
+_POST_STUDIO_DIR = (_BUNDLE_DIR / 'static' / 'post_studio').resolve()
+_POST_STUDIO_MIME = {'.js': 'text/javascript', '.mjs': 'text/javascript',
+                     '.json': 'application/json', '.css': 'text/css'}
+
+
+@app.route('/post_studio/<path:filename>')
+def post_studio_asset(filename):
+    target = (_POST_STUDIO_DIR / filename).resolve()
+    # Path-traversal guard: the resolved target must stay inside the dir.
+    if _POST_STUDIO_DIR not in target.parents or not target.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    mimetype = _POST_STUDIO_MIME.get(target.suffix.lower(), 'application/octet-stream')
+    return send_file(str(target), mimetype=mimetype)
 
 
 @app.route('/api/posts/photos', methods=['POST'])
