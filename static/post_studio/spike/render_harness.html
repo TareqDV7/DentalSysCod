@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Post Studio render + rasterize harness</title>
+</head>
+<body>
+<div id="mount"></div>
+<script type="module">
+  import { renderComposition } from '../render.js';
+  import { rasterizeToPngBlob } from '../rasterize.js';
+
+  // Build a composition node on demand (Task 3 exercises renderComposition;
+  // Task 2 needs any inline-styled node — renderComposition supplies one).
+  window.__buildStage = function (comp) {
+    const mount = document.getElementById('mount');
+    mount.innerHTML = '';
+    const stage = renderComposition(comp);
+    mount.appendChild(stage);
+    window.__stage = stage;
+    return stage.outerHTML.length;
+  };
+
+  window.__rasterizeError = null;
+  window.__rasterize = async function () {
+    try {
+      const blob = await rasterizeToPngBlob(window.__stage, 2);
+      const buf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      // return a base64 data URL the Python side can decode
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return 'data:image/png;base64,' + btoa(bin);
+    } catch (e) {
+      window.__rasterizeError = String(e);
+      throw e;
+    }
+  };
+
+  window.__describe = function (comp) {
+    const stage = window.__buildStage(comp) && window.__stage;
+    return {
+      size: [stage.offsetWidth, stage.offsetHeight],
+      titles: stage.querySelectorAll('[data-ps-stage] > div')[0]
+        ? stage.children[0].textContent : '',
+      imgs: stage.querySelectorAll('img').length,
+      badges: Array.from(stage.querySelectorAll('div'))
+        .filter((d) => /^[0-9]+$/.test(d.textContent.trim()) && d.style.borderRadius === '50%')
+        .map((d) => d.textContent.trim()),
+      hasDoctor: stage.textContent.includes('DR.'),
+    };
+  };
+
+  // Signal that all hooks are registered (modules are async — tests must wait for this).
+  window.__harnessReady = true;
+</script>
+</body>
+</html>
