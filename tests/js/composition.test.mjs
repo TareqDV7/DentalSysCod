@@ -46,3 +46,44 @@ test('deserialize rejects wrong version and bad size', () => {
   assert.throws(() => deserialize(JSON.stringify({ version: 2, size: 'square', theme: 't', elements: [] })), /version/i);
   assert.throws(() => deserialize(JSON.stringify({ version: 1, size: 'wat', theme: 't', elements: [] })), /size/i);
 });
+
+import { addBlock, removeBlock, reorderBlock, insertBlock } from '../../static/post_studio/composition.js';
+
+function strip(c) { return c.elements.find((e) => e.id === 'strip'); }
+
+test('addBlock appends and renumbers', () => {
+  const c = addBlock(defaultComposition('before_after'), 'Follow-up');
+  assert.deepEqual(strip(c).blocks.map((b) => b.badge), [1, 2, 3]);
+  assert.equal(strip(c).blocks[2].label, 'Follow-up');
+});
+
+test('addBlock enforces the 6-block cap', () => {
+  let c = defaultComposition('quad_grid'); // 4 blocks
+  c = addBlock(c); c = addBlock(c);          // 6
+  assert.equal(strip(c).blocks.length, MAX_BLOCKS);
+  assert.throws(() => addBlock(c), /max|cap|6/i);
+});
+
+test('removeBlock drops one and renumbers', () => {
+  const c = removeBlock(defaultComposition('multi_phase'), 1); // drop 'During'
+  assert.deepEqual(strip(c).blocks.map((b) => b.label), ['Before', 'After']);
+  assert.deepEqual(strip(c).blocks.map((b) => b.badge), [1, 2]);
+});
+
+test('reorderBlock moves and renumbers', () => {
+  const c = reorderBlock(defaultComposition('multi_phase'), 2, 0); // After -> front
+  assert.deepEqual(strip(c).blocks.map((b) => b.label), ['After', 'Before', 'During']);
+  assert.deepEqual(strip(c).blocks.map((b) => b.badge), [1, 2, 3]);
+});
+
+test('insertBlock inserts between and renumbers', () => {
+  const c = insertBlock(defaultComposition('before_after'), 1, 'Mid');
+  assert.deepEqual(strip(c).blocks.map((b) => b.label), ['Before Treatment', 'Mid', 'After Treatment']);
+  assert.deepEqual(strip(c).blocks.map((b) => b.badge), [1, 2, 3]);
+});
+
+test('mutators do not mutate their input', () => {
+  const base = defaultComposition('before_after');
+  addBlock(base, 'x');
+  assert.equal(strip(base).blocks.length, 2);
+});

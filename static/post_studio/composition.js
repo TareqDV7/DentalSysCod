@@ -79,3 +79,52 @@ export function deserialize(json) {
   if (!SIZES.includes(c.size)) throw new Error(`invalid size: ${c.size}`);
   return structuredClone(c);
 }
+
+// Returns a NEW composition with `mutate(blocks)` applied to a copy of the
+// strip's blocks, then badges renumbered. Never touches the input.
+function withBlocks(comp, mutate) {
+  const next = structuredClone(comp);
+  const strip = next.elements.find((e) => e.id === 'strip');
+  if (!strip) throw new Error('composition has no photoStrip');
+  const blocks = strip.blocks.slice();
+  mutate(blocks);
+  strip.blocks = blocks;
+  const renumbered = renumber(strip);
+  next.elements = next.elements.map((e) => (e.id === 'strip' ? renumbered : e));
+  return next;
+}
+
+function freshBlock(label) {
+  return { photo: null, badge: 0, label: label || 'New' };
+}
+
+export function addBlock(comp, label) {
+  return withBlocks(comp, (blocks) => {
+    if (blocks.length >= MAX_BLOCKS) throw new Error(`max ${MAX_BLOCKS} blocks`);
+    blocks.push(freshBlock(label));
+  });
+}
+
+export function insertBlock(comp, index, label) {
+  return withBlocks(comp, (blocks) => {
+    if (blocks.length >= MAX_BLOCKS) throw new Error(`max ${MAX_BLOCKS} blocks`);
+    const i = Math.max(0, Math.min(index, blocks.length));
+    blocks.splice(i, 0, freshBlock(label));
+  });
+}
+
+export function removeBlock(comp, index) {
+  return withBlocks(comp, (blocks) => {
+    if (index < 0 || index >= blocks.length) throw new Error(`bad index ${index}`);
+    blocks.splice(index, 1);
+  });
+}
+
+export function reorderBlock(comp, from, to) {
+  return withBlocks(comp, (blocks) => {
+    if (from < 0 || from >= blocks.length) throw new Error(`bad from ${from}`);
+    const [moved] = blocks.splice(from, 1);
+    const dest = Math.max(0, Math.min(to, blocks.length));
+    blocks.splice(dest, 0, moved);
+  });
+}
