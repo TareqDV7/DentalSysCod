@@ -57,34 +57,18 @@
     return !!(document.fonts && document.fonts.check(spec));
   };
 
-  // Create hidden elements for each font and weight combination to trigger loading.
-  const hiddenContainer = document.createElement('div');
-  hiddenContainer.style.display = 'none';
-  const specs = [
-    { family: "'Playfair Display'", weight: '700' },
-    { family: "'Manrope'", weight: '400' },
-    { family: "'Manrope'", weight: '700' },
-    { family: "'Manrope'", weight: '800' },
-    { family: "'Cairo'", weight: '400' },
+  // @font-face rules are NOT loaded until used by rendered content, and a
+  // display:none element does not trigger loading. Force-load each bundled
+  // face via the CSS Font Loading API, then signal readiness — only then does
+  // document.fonts.check() report a face as loaded.
+  const __faceSpecs = [
+    "700 40px 'Playfair Display'",
+    "400 40px 'Manrope'", "700 40px 'Manrope'", "800 40px 'Manrope'",
+    "400 40px 'Cairo'", "700 40px 'Cairo'",
   ];
-  specs.forEach(({family, weight}) => {
-    const el = document.createElement('span');
-    el.style.fontFamily = family;
-    el.style.fontWeight = weight;
-    el.textContent = 'Test';
-    hiddenContainer.appendChild(el);
-  });
-  document.body.appendChild(hiddenContainer);
-
-  // Wait for fonts to be ready, then signal that all hooks are registered.
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => {
-      // Add a delay to ensure fonts are truly available for checking.
-      // Some fonts may take additional time to load beyond document.fonts.ready.
-      setTimeout(() => {
-        window.__harnessReady = true;
-      }, 500);
-    });
+  if (document.fonts && document.fonts.load) {
+    Promise.all(__faceSpecs.map((s) => document.fonts.load(s).catch(() => null)))
+      .then(() => { window.__harnessReady = true; });
   } else {
     window.__harnessReady = true;
   }
