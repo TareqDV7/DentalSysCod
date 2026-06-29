@@ -2,21 +2,23 @@
 // (template pick + add photos) over the structural renderer + client export +
 // host adapter. Deep editing (text/drag/typography/phases) is P4; premium themes
 // are P3. EN/AR via the STR map keyed off <html lang>.
-import { TEMPLATES, defaultComposition, serialize, deserialize } from './composition.js';
+import { TEMPLATES, defaultComposition, serialize, deserialize, applyTheme } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
+import { THEME_OPTIONS } from './themes.js';
+import { FONT_OPTIONS, ensureFontsLoaded } from './fonts.js';
 
 const STR = {
   en: { templates: 'Template', add_photos: 'Add photos', download: 'Download',
         save: 'Save to Gallery', gallery: 'Saved posts', empty: 'No saved posts yet.',
         reopen: 'Edit', del: 'Delete', saved: 'Saved.', save_failed: 'Save failed',
         dl_failed: 'Download failed', open_failed: 'Could not open post',
-        del_confirm: 'Delete this post?' },
+        del_confirm: 'Delete this post?', theme: 'Theme', headline_font: 'Headline font' },
   ar: { templates: 'القالب', add_photos: 'إضافة صور', download: 'تنزيل',
         save: 'حفظ في المعرض', gallery: 'المنشورات المحفوظة', empty: 'لا توجد منشورات بعد.',
         reopen: 'تعديل', del: 'حذف', saved: 'تم الحفظ.', save_failed: 'فشل الحفظ',
         dl_failed: 'فشل التنزيل', open_failed: 'تعذر فتح المنشور',
-        del_confirm: 'حذف هذا المنشور؟' },
+        del_confirm: 'حذف هذا المنشور؟', theme: 'القالب اللوني', headline_font: 'خط العنوان' },
 };
 const TPL_LABEL = {
   en: { before_after: 'Before / After', multi_phase: 'Multi-Phase',
@@ -38,6 +40,7 @@ function el(tag, attrs = {}, styles = {}) {
 }
 
 export function mountEditor(rootEl, host) {
+  ensureFontsLoaded();
   const lang = document.documentElement.lang === 'ar' ? 'ar' : 'en';
   const s = STR[lang];
   const tl = TPL_LABEL[lang];
@@ -75,7 +78,35 @@ export function mountEditor(rootEl, host) {
   actions.appendChild(saveBtn);
   actions.appendChild(dlBtn);
 
+  // ── Theme picker ──
+  const themeGroup = el('div', {});
+  themeGroup.appendChild(el('label', { text: s.theme }, { display: 'block', marginBottom: '6px', fontWeight: '600' }));
+  const themeRow = el('div', {}, { display: 'flex', flexWrap: 'wrap', gap: '8px' });
+  for (const opt of THEME_OPTIONS) {
+    const b = el('button', { type: 'button', 'data-ps-theme': opt.id,
+      text: lang === 'ar' ? opt.label_ar : opt.label }, {});
+    b.className = 'btn';
+    b.addEventListener('click', () => { state.comp = applyTheme(state.comp, opt.id); renderPreview(); });
+    themeRow.appendChild(b);
+  }
+  themeGroup.appendChild(themeRow);
+
+  // ── Headline font picker (the element the user chooses at creation) ──
+  const fontGroup = el('div', {});
+  fontGroup.appendChild(el('label', { text: s.headline_font }, { display: 'block', marginBottom: '6px', fontWeight: '600' }));
+  const fontRow = el('div', {}, { display: 'flex', flexWrap: 'wrap', gap: '8px' });
+  for (const opt of FONT_OPTIONS) {
+    const b = el('button', { type: 'button', 'data-ps-fontopt': opt.id,
+      text: lang === 'ar' ? opt.label_ar : opt.label }, {});
+    b.className = 'btn';
+    b.addEventListener('click', () => { setHeadlineFont(opt.family); });
+    fontRow.appendChild(b);
+  }
+  fontGroup.appendChild(fontRow);
+
   controls.appendChild(tplGroup);
+  controls.appendChild(themeGroup);
+  controls.appendChild(fontGroup);
   controls.appendChild(addBtn);
   controls.appendChild(actions);
 
@@ -111,6 +142,14 @@ export function mountEditor(rootEl, host) {
     scaler.appendChild(stage);
     previewBox.appendChild(scaler);
     previewBox._stage = stage; // native-size node for export
+  }
+
+  function setHeadlineFont(family) {
+    const next = structuredClone(state.comp);
+    const title = next.elements.find((e) => e.id === 'title');
+    if (title && title.headline) title.headline = { ...title.headline, font: family };
+    state.comp = next;
+    renderPreview();
   }
 
   async function onAddPhotos() {

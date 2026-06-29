@@ -35,3 +35,32 @@ def test_editor_template_addphotos_save_reopen():
         page.click("[data-ps-action='reopen']")
         page.wait_for_selector("[data-ps-stage]")
         browser.close()
+
+
+def test_editor_theme_and_headline_font_switch():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        # default theme is dark_premium -> radial-gradient background
+        bg0 = page.evaluate(
+            "() => getComputedStyle(document.querySelector('[data-ps-stage]')).backgroundImage"
+        )
+        assert "gradient" in bg0
+        # switch to light_luxury -> solid cream background (no gradient image)
+        page.click("[data-ps-theme='light_luxury']")
+        page.wait_for_function(
+            "() => getComputedStyle(document.querySelector('[data-ps-stage]'))"
+            ".backgroundImage === 'none'"
+        )
+        # pick Manrope for the headline -> headline font-family updates
+        # (light_luxury default is Playfair Display, so Manrope proves the picker
+        # actually overrides the theme default — a vacuous Playfair pick would not)
+        page.click("[data-ps-fontopt='manrope']")
+        page.wait_for_function(
+            "() => /Manrope/.test("
+            "getComputedStyle(document.querySelector('[data-ps-headline]')).fontFamily)"
+        )
+        browser.close()
