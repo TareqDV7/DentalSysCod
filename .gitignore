@@ -116,3 +116,6 @@ service.port
 **/ios/.symlinks/
 
 .superpowers/
+
+# E2E test artifacts (not source code)
+tests/e2e/_artifacts/
