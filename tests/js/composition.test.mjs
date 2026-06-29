@@ -87,3 +87,40 @@ test('mutators do not mutate their input', () => {
   addBlock(base, 'x');
   assert.equal(strip(base).blocks.length, 2);
 });
+
+import { applyTheme } from '../../static/post_studio/composition.js';
+
+test('applyTheme stamps per-element typography from the theme, preserves content', () => {
+  const c0 = defaultComposition('before_after', { doctorName: 'DR. X' });
+  const c = applyTheme(c0, 'light_luxury');
+  assert.equal(c.theme, 'light_luxury');
+  const title = c.elements.find((e) => e.id === 'title');
+  assert.equal(title.headline.font, 'Playfair Display');   // serif headline
+  assert.equal(title.headline.text, 'Procedure Title');    // content preserved
+  const doctor = c.elements.find((e) => e.id === 'doctor');
+  assert.equal(doctor.text, 'DR. X');                      // content preserved
+  assert.equal(doctor.color, '#b08d3c');                  // restyled by theme
+});
+
+test('defaultComposition applies dark_premium (go.png) by default: Manrope sans headline', () => {
+  const c = defaultComposition('before_after');
+  assert.equal(c.theme, 'dark_premium');
+  const title = c.elements.find((e) => e.id === 'title');
+  assert.equal(title.headline.font, 'Manrope');
+  assert.equal(title.headline.color, '#ffffff');
+});
+
+test('applyTheme preserves strip blocks (photos/badges/labels)', () => {
+  let c = addBlock(defaultComposition('before_after'), 'Follow-up'); // 3 blocks
+  c = applyTheme(c, 'clinical_premium');
+  const s = c.elements.find((e) => e.id === 'strip');
+  assert.deepEqual(s.blocks.map((b) => b.badge), [1, 2, 3]);
+  assert.deepEqual(s.blocks.map((b) => b.label), ['Before Treatment', 'After Treatment', 'Follow-up']);
+});
+
+test('applyTheme does not mutate its input', () => {
+  const c0 = defaultComposition('before_after');
+  const before = JSON.stringify(c0);
+  applyTheme(c0, 'bold_editorial');
+  assert.equal(JSON.stringify(c0), before);
+});

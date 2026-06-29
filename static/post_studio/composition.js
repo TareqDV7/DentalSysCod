@@ -2,6 +2,8 @@
 // Single source of truth for the template_json shape. ESM so it loads in
 // node --test AND in the WebView (<script type="module">). Never mutates inputs.
 
+import { themeTokens } from './themes.js';
+
 export const MAX_BLOCKS = 6;
 export const SIZES = ['square', 'portrait', 'story'];
 export const TEMPLATES = ['before_after', 'multi_phase', 'quad_grid', 'single_feature'];
@@ -13,8 +15,8 @@ const DEFAULT_THEME = 'dark_premium';
 function titleElement() {
   return {
     id: 'title', type: 'title', x: 0.5, y: 0.10, align: 'center',
-    headline: { text: 'Procedure Title', font: 'playfair', size: 64, weight: 700, color: '#ffffff', letterSpacing: 0 },
-    subline: { text: 'Subtitle', font: 'manrope', size: 40, weight: 500, color: '#5fd3c8', letterSpacing: 0 },
+    headline: { text: 'Procedure Title', font: 'Playfair Display', size: 64, weight: 700, color: '#ffffff', letterSpacing: 0 },
+    subline: { text: 'Subtitle', font: 'Manrope', size: 40, weight: 500, color: '#5fd3c8', letterSpacing: 0 },
     icon: null,
   };
 }
@@ -28,7 +30,7 @@ function stripElement(labels, layout) {
   return renumber({
     id: 'strip', type: 'photoStrip', layout: layout || 'row',
     blocks,
-    labelStyle: { font: 'manrope', size: 28, weight: 600, color: '#cfd8e3' },
+    labelStyle: { font: 'Manrope', size: 28, weight: 600, color: '#cfd8e3' },
   });
 }
 
@@ -36,7 +38,7 @@ function doctorElement(doctorName) {
   return {
     id: 'doctor', type: 'doctorName', x: 0.5, y: 0.93, align: 'center',
     text: doctorName || '',
-    font: 'manrope', size: 34, weight: 700, color: '#c9a227', letterSpacing: 4,
+    font: 'Manrope', size: 34, weight: 700, color: '#c9a227', letterSpacing: 4,
   };
 }
 
@@ -57,7 +59,7 @@ const SEEDS = {
 export function defaultComposition(template, opts = {}) {
   const seed = SEEDS[template];
   if (!seed) throw new Error(`unknown template: ${template}`);
-  return {
+  const base = {
     version: 1,
     size: 'square',
     theme: DEFAULT_THEME,
@@ -67,6 +69,7 @@ export function defaultComposition(template, opts = {}) {
       doctorElement(opts.doctorName),
     ],
   };
+  return applyTheme(base, opts.theme || DEFAULT_THEME);
 }
 
 export function serialize(comp) {
@@ -78,6 +81,26 @@ export function deserialize(json) {
   if (c.version !== 1) throw new Error(`unsupported version: ${c.version}`);
   if (!SIZES.includes(c.size)) throw new Error(`invalid size: ${c.size}`);
   return structuredClone(c);
+}
+
+// Returns a NEW comp with `themeName` applied: each element's typography fields
+// are set from the theme tokens; text, photos, positions, badges, labels are
+// preserved. v1 behavior: switching themes resets per-element typography.
+export function applyTheme(comp, themeName) {
+  const t = themeTokens(themeName);
+  const next = structuredClone(comp);
+  next.theme = themeName;
+  for (const el of next.elements) {
+    if (el.type === 'title') {
+      el.headline = { ...el.headline, ...t.headline };
+      el.subline = { ...el.subline, ...t.subline };
+    } else if (el.type === 'photoStrip') {
+      el.labelStyle = { ...el.labelStyle, ...t.label };
+    } else if (el.type === 'doctorName') {
+      Object.assign(el, t.doctor);
+    }
+  }
+  return next;
 }
 
 // Returns a NEW composition with `mutate(blocks)` applied to a copy of the
