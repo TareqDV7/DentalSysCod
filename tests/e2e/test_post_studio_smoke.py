@@ -13,6 +13,22 @@ _portal = pytest.importorskip(
 )
 
 
+def _one_png_path():
+    """Write a tiny throwaway PNG and return its path for the file input.
+    Defined so the file-chooser callback below has a real upload target if a
+    portal harness is ever added (until then this module skips at collection)."""
+    import base64
+    import tempfile
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HBwCAAAAC0lEQVR4"
+        "2mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    fh = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    fh.write(png)
+    fh.close()
+    return fh.name
+
+
 def test_post_studio_create_save_reopen(live_portal_page):
     page = live_portal_page                      # logged-in portal page fixture
     page.click("[data-tab='poststudio']")

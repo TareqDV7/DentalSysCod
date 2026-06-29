@@ -10,10 +10,12 @@ const STR = {
   en: { templates: 'Template', add_photos: 'Add photos', download: 'Download',
         save: 'Save to Gallery', gallery: 'Saved posts', empty: 'No saved posts yet.',
         reopen: 'Edit', del: 'Delete', saved: 'Saved.', save_failed: 'Save failed',
+        dl_failed: 'Download failed', open_failed: 'Could not open post',
         del_confirm: 'Delete this post?' },
   ar: { templates: 'القالب', add_photos: 'إضافة صور', download: 'تنزيل',
         save: 'حفظ في المعرض', gallery: 'المنشورات المحفوظة', empty: 'لا توجد منشورات بعد.',
         reopen: 'تعديل', del: 'حذف', saved: 'تم الحفظ.', save_failed: 'فشل الحفظ',
+        dl_failed: 'فشل التنزيل', open_failed: 'تعذر فتح المنشور',
         del_confirm: 'حذف هذا المنشور؟' },
 };
 const TPL_LABEL = {
@@ -137,13 +139,17 @@ export function mountEditor(rootEl, host) {
   }
 
   async function onDownload() {
-    const blob = await exportBlob();
-    const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: 'post.png' }, {});
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    try {
+      const blob = await exportBlob();
+      const url = URL.createObjectURL(blob);
+      const a = el('a', { href: url, download: 'post.png' }, {});
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify(s.dl_failed + ': ' + e.message);
+    }
   }
 
   async function onSave() {
@@ -190,11 +196,15 @@ export function mountEditor(rootEl, host) {
   }
 
   async function reopen(id) {
-    const post = await host.getPost(id);
-    if (post && post.template_json) {
-      state.comp = deserialize(post.template_json);
-      renderPreview();
-      previewBox.scrollIntoView({ block: 'center' });
+    try {
+      const post = await host.getPost(id);
+      if (post && post.template_json) {
+        state.comp = deserialize(post.template_json);
+        renderPreview();
+        previewBox.scrollIntoView({ block: 'center' });
+      }
+    } catch (e) {
+      notify(s.open_failed + ': ' + e.message);
     }
   }
 
