@@ -89,3 +89,34 @@ def test_render_story_size():
         info = page.evaluate("(c) => window.__describe(c)", comp)
         browser.close()
     assert info["size"] == [1080, 1920]
+
+
+def test_theme_changes_background_and_divider():
+    dark = _COMP
+    light = dict(_COMP, theme="light_luxury")
+    clinical = dict(_COMP, theme="clinical_premium")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        d = page.evaluate("(c) => window.__describe(c)", dark)
+        l = page.evaluate("(c) => window.__describe(c)", light)
+        c = page.evaluate("(c) => window.__describe(c)", clinical)
+        browser.close()
+    assert d["bg"] != l["bg"], "themes must produce different backgrounds"
+    assert d["hasDivider"] is True            # dark_premium has the tooth divider
+    assert c["hasDivider"] is False           # clinical_premium has none
+    assert "gradient" in d["bg"]              # navy radial glow, not a flat fill
+
+
+def test_headline_uses_theme_font_family():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        page.evaluate("(c) => window.__buildStage(c)", dict(_COMP, theme="light_luxury"))
+        fam = page.evaluate(
+            "() => getComputedStyle(document.querySelector('[data-ps-headline]')).fontFamily"
+        )
+        browser.close()
+    assert "Playfair Display" in fam

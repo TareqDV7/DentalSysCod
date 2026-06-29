@@ -9,6 +9,8 @@
 <script type="module">
   import { renderComposition } from '../render.js';
   import { rasterizeToPngBlob } from '../rasterize.js';
+  import { ensureFontsLoaded } from '../fonts.js';
+  ensureFontsLoaded();
 
   // Build a composition node on demand (Task 3 exercises renderComposition;
   // Task 2 needs any inline-styled node — renderComposition supplies one).
@@ -41,8 +43,8 @@
     const stage = window.__buildStage(comp) && window.__stage;
     return {
       size: [stage.offsetWidth, stage.offsetHeight],
-      titles: stage.querySelectorAll('[data-ps-stage] > div')[0]
-        ? stage.children[0].textContent : '',
+      bg: stage.style.background || stage.style.backgroundImage || '',
+      hasDivider: !!stage.querySelector('svg'),
       imgs: stage.querySelectorAll('img').length,
       badges: Array.from(stage.querySelectorAll('div'))
         .filter((d) => /^[0-9]+$/.test(d.textContent.trim()) && d.style.borderRadius === '50%')
