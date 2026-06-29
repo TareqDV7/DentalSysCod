@@ -4,6 +4,8 @@
 // visual styles MUST be inline (the SVG render context cannot reach external
 // stylesheets), which render.js guarantees.
 
+import { FONT_FACE_CSS } from './fonts.js';
+
 export async function rasterizeToPngBlob(node, scale = 2) {
   if (document.fonts && document.fonts.ready) {
     await document.fonts.ready;
@@ -12,10 +14,13 @@ export async function rasterizeToPngBlob(node, scale = 2) {
   const w = Math.round(node.offsetWidth || rect.width);
   const h = Math.round(node.offsetHeight || rect.height);
   const xhtml = new XMLSerializer().serializeToString(node);
+  // Custom fonts only rasterize if their @font-face rules (with base64 src) live
+  // INSIDE the foreignObject — a data:-URL SVG image does not inherit page fonts.
+  const fontStyle = '<style>' + FONT_FACE_CSS + '</style>';
   const svg =
     '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
       '<foreignObject x="0" y="0" width="100%" height="100%">' +
-        '<div xmlns="http://www.w3.org/1999/xhtml">' + xhtml + '</div>' +
+        '<div xmlns="http://www.w3.org/1999/xhtml">' + fontStyle + xhtml + '</div>' +
       '</foreignObject>' +
     '</svg>';
   const svgUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);

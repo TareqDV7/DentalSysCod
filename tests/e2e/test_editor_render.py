@@ -120,3 +120,24 @@ def test_headline_uses_theme_font_family():
         )
         browser.close()
     assert "Playfair Display" in fam
+
+
+def test_custom_fonts_available_and_export_still_untainted():
+    themed = dict(_COMP, theme="light_luxury")   # serif headline -> needs Playfair
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page(device_scale_factor=2)
+        _goto_ready(page, HARNESS.as_uri())
+        playfair = page.evaluate("() => window.__fontLoaded(\"700 40px 'Playfair Display'\")")
+        manrope = page.evaluate("() => window.__fontLoaded(\"800 40px 'Manrope'\")")
+        page.evaluate("(c) => window.__buildStage(c)", themed)
+        data_url = page.evaluate("() => window.__rasterize()")
+        err = page.evaluate("() => window.__rasterizeError")
+        browser.close()
+    assert playfair is True, "Playfair @font-face did not load in the document"
+    assert manrope is True, "Manrope @font-face did not load in the document"
+    assert err is None, f"rasterizer threw: {err}"
+    assert data_url.startswith("data:image/png;base64,")
+    raw = base64.b64decode(data_url.split(",", 1)[1])
+    assert raw[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(raw) > 20_000
