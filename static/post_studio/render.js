@@ -132,9 +132,11 @@ function buildTitle(el, theme) {
   });
   const head = document.createElement('div');
   head.setAttribute('data-ps-headline', '');
+  head.setAttribute('data-ps-el', 'title.headline');
   head.textContent = el.headline ? (el.headline.text || '') : '';
   setStyle(head, typoStyle({ ...theme.headline, ...el.headline }, head.textContent));
   const sub = document.createElement('div');
+  sub.setAttribute('data-ps-el', 'title.subline');
   sub.textContent = el.subline ? (el.subline.text || '') : '';
   setStyle(sub, typoStyle({ ...theme.subline, ...el.subline }, sub.textContent));
   box.appendChild(head);
@@ -143,7 +145,7 @@ function buildTitle(el, theme) {
   return box;
 }
 
-function buildPill(b, theme) {
+function buildPill(b, el, theme) {
   const pill = document.createElement('div');
   pill.setAttribute('data-ps-pill', '');
   setStyle(pill, {
@@ -162,7 +164,7 @@ function buildPill(b, theme) {
   const text = document.createElement('div');
   text.textContent = b.label || '';
   setStyle(text, {
-    ...typoStyle({ ...theme.label, color: theme.pill.color || theme.label.color }, b.label),
+    ...typoStyle({ ...theme.label, ...el.labelStyle, color: theme.pill.color || theme.label.color }, b.label),
     flex: '1 1 auto', textAlign: 'left',
   });
   pill.appendChild(circle);
@@ -170,9 +172,10 @@ function buildPill(b, theme) {
   return pill;
 }
 
-function buildCard(b, el, theme) {
+function buildCard(b, el, theme, index) {
   const isPill = theme.label && theme.label.style === 'pill';
   const card = document.createElement('div');
+  card.setAttribute('data-ps-block', String(index));
   setStyle(card, {
     position: 'relative', flex: '1 1 0', display: 'flex',
     flexDirection: 'column', gap: '14px', alignItems: 'center', minWidth: '0',
@@ -206,7 +209,7 @@ function buildCard(b, el, theme) {
   }
   card.appendChild(frame);
   if (isPill) {
-    card.appendChild(buildPill(b, theme));
+    card.appendChild(buildPill(b, el, theme));
   } else {
     const label = document.createElement('div');
     label.textContent = b.label || '';
@@ -227,13 +230,14 @@ function buildStrip(el, theme) {
     gridTemplateColumns: isGrid ? 'repeat(2, minmax(0, 1fr))' : '',
     gap: '32px', justifyItems: 'stretch', alignItems: 'stretch',
   });
-  for (const b of blocks) wrap.appendChild(buildCard(b, el, theme));
+  blocks.forEach((b, i) => wrap.appendChild(buildCard(b, el, theme, i)));
   return wrap;
 }
 
 function buildDoctor(el, theme) {
   const t = { ...theme.doctor, ...el };   // theme defaults; element values override
   const box = document.createElement('div');
+  box.setAttribute('data-ps-el', 'doctor');
   box.textContent = el.text || '';
   setStyle(box, {
     position: 'absolute', left: '0', right: '0',

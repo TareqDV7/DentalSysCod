@@ -50,6 +50,12 @@
         return r ? r.style.width : null;
       })(),
       pills: stage.querySelectorAll('[data-ps-pill]').length,
+      psEls: Array.from(stage.querySelectorAll('[data-ps-el]')).map((n) => n.getAttribute('data-ps-el')),
+      blockCount: stage.querySelectorAll('[data-ps-block]').length,
+      pillLabelSize: (() => {
+        const t = stage.querySelector('[data-ps-pill] > div:last-child');
+        return t ? t.style.fontSize : null;
+      })(),
       hasWave: !!stage.querySelector('[data-ps-wave]'),
       wavePaths: stage.querySelectorAll('[data-ps-wave] path').length,
       imgs: stage.querySelectorAll('img').length,

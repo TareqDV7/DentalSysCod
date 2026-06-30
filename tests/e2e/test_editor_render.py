@@ -210,3 +210,30 @@ def test_wave_footer_present_for_dark_premium_only():
     assert dark["hasWave"] is True, "dark_premium must render the wave footer"
     assert dark["wavePaths"] == 3, "wave footer has 3 sine layers"
     assert clinical["hasWave"] is False, "themes without waveFooter.enabled render no wave"
+
+
+def test_identity_hooks_and_pill_labelstyle_override():
+    comp = {
+        "version": 1, "size": "square", "theme": "dark_premium",
+        "elements": [
+            {"id": "title", "type": "title", "x": 0.5, "y": 0.15, "align": "center",
+             "headline": {"text": "Root Canal"}, "subline": {"text": "Lower Molar"}},
+            {"id": "strip", "type": "photoStrip", "layout": "row",
+             "labelStyle": {"font": "Poppins", "size": 44, "weight": 400, "color": "#F5F5F0"},
+             "blocks": [{"photo": None, "badge": 1, "label": "Before"},
+                        {"photo": None, "badge": 2, "label": "After"}]},
+            {"id": "doctor", "type": "doctorName", "x": 0.5, "y": 0.93, "align": "center",
+             "text": "DR. WASFY"},
+        ],
+    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__harnessReady === true")
+        info = page.evaluate("(c) => window.__describe(c)", comp)
+        browser.close()
+    assert set(info["psEls"]) == {"title.headline", "title.subline", "doctor"}, info
+    assert info["blockCount"] == 2, info
+    # pill label honors the overridden shared labelStyle size (proves buildPill merge)
+    assert info["pillLabelSize"] == "44px", info
