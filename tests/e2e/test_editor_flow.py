@@ -37,32 +37,30 @@ def test_editor_template_addphotos_save_reopen():
         browser.close()
 
 
-def test_editor_theme_and_headline_font_switch():
+def test_headline_font_via_inspector_and_text_edit():
     with sync_playwright() as p:
         browser = p.chromium.launch(args=_LAUNCH_ARGS)
         page = browser.new_page()
         page.goto(HARNESS.as_uri())
         page.wait_for_function("() => window.__ready === true")
         page.wait_for_selector("[data-ps-stage]")
-        # default theme is dark_premium -> radial-gradient background
-        bg0 = page.evaluate(
-            "() => getComputedStyle(document.querySelector('[data-ps-stage]')).backgroundImage"
-        )
-        assert "gradient" in bg0
-        # switch to light_luxury -> solid cream background (no gradient image)
+        # switch to light_luxury (Playfair default) so a Manrope pick is non-vacuous
         page.click("[data-ps-theme='light_luxury']")
         page.wait_for_function(
-            "() => getComputedStyle(document.querySelector('[data-ps-stage]'))"
-            ".backgroundImage === 'none'"
-        )
-        # pick Manrope for the headline -> headline font-family updates
-        # (light_luxury default is Playfair Display, so Manrope proves the picker
-        # actually overrides the theme default — a vacuous Playfair pick would not)
-        page.click("[data-ps-fontopt='manrope']")
+            "() => getComputedStyle(document.querySelector('[data-ps-stage]')).backgroundImage === 'none'")
+        # select the headline -> text inspector appears
+        page.click("[data-ps-el='title.headline']")
+        page.wait_for_selector("[data-ps-inspector-text]")
+        # pick Manrope in the inspector font dropdown -> headline font-family updates
+        page.select_option("[data-ps-inspector-text] [data-ps-field='font']", "Manrope")
         page.wait_for_function(
-            "() => /Manrope/.test("
-            "getComputedStyle(document.querySelector('[data-ps-headline]')).fontFamily)"
-        )
+            "() => /Manrope/.test(getComputedStyle(document.querySelector('[data-ps-headline]')).fontFamily)")
+        # edit the headline text -> the rendered headline updates
+        page.fill("[data-ps-inspector-text] [data-ps-field='text']", "Veneers")
+        page.wait_for_function(
+            "() => document.querySelector('[data-ps-headline]').textContent === 'Veneers'")
+        # the global font picker is gone
+        assert page.query_selector("[data-ps-fontopt]") is None
         browser.close()
 
 

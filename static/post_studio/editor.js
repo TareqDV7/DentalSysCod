@@ -2,23 +2,27 @@
 // (template pick + add photos) over the structural renderer + client export +
 // host adapter. Deep editing (text/drag/typography/phases) is P4; premium themes
 // are P3. EN/AR via the STR map keyed off <html lang>.
-import { TEMPLATES, defaultComposition, serialize, deserialize, applyTheme } from './composition.js';
+import { TEMPLATES, defaultComposition, serialize, deserialize, applyTheme,
+         setText, setTypography } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
-import { THEME_OPTIONS } from './themes.js';
-import { FONT_OPTIONS, ensureFontsLoaded } from './fonts.js';
+import { THEME_OPTIONS, themePalette } from './themes.js';
+import { ensureFontsLoaded } from './fonts.js';
+import { buildTextInspector, weightsFor } from './inspector.js';
 
 const STR = {
   en: { templates: 'Template', add_photos: 'Add photos', download: 'Download',
         save: 'Save to Gallery', gallery: 'Saved posts', empty: 'No saved posts yet.',
         reopen: 'Edit', del: 'Delete', saved: 'Saved.', save_failed: 'Save failed',
         dl_failed: 'Download failed', open_failed: 'Could not open post',
-        del_confirm: 'Delete this post?', theme: 'Theme', headline_font: 'Headline font' },
+        del_confirm: 'Delete this post?', theme: 'Theme',
+        select_hint: 'Select an element to edit.' },
   ar: { templates: 'القالب', add_photos: 'إضافة صور', download: 'تنزيل',
         save: 'حفظ في المعرض', gallery: 'المنشورات المحفوظة', empty: 'لا توجد منشورات بعد.',
         reopen: 'تعديل', del: 'حذف', saved: 'تم الحفظ.', save_failed: 'فشل الحفظ',
         dl_failed: 'فشل التنزيل', open_failed: 'تعذر فتح المنشور',
-        del_confirm: 'حذف هذا المنشور؟', theme: 'القالب اللوني', headline_font: 'خط العنوان' },
+        del_confirm: 'حذف هذا المنشور؟', theme: 'القالب اللوني',
+        select_hint: 'اختر عنصرًا لتعديله.' },
 };
 const TPL_LABEL = {
   en: { before_after: 'Before / After', multi_phase: 'Multi-Phase',
@@ -91,19 +95,6 @@ export function mountEditor(rootEl, host) {
   }
   themeGroup.appendChild(themeRow);
 
-  // ── Headline font picker (the element the user chooses at creation) ──
-  const fontGroup = el('div', {});
-  fontGroup.appendChild(el('label', { text: s.headline_font }, { display: 'block', marginBottom: '6px', fontWeight: '600' }));
-  const fontRow = el('div', {}, { display: 'flex', flexWrap: 'wrap', gap: '8px' });
-  for (const opt of FONT_OPTIONS) {
-    const b = el('button', { type: 'button', 'data-ps-fontopt': opt.id,
-      text: lang === 'ar' ? opt.label_ar : opt.label }, {});
-    b.className = 'btn';
-    b.addEventListener('click', () => { setHeadlineFont(opt.family); });
-    fontRow.appendChild(b);
-  }
-  fontGroup.appendChild(fontRow);
-
   // ── Contextual inspector slot (filled by renderInspector) ──
   const inspectorSlot = el('div', { 'data-ps-inspector': '' }, {
     display: 'flex', flexDirection: 'column', gap: '10px',
@@ -112,7 +103,6 @@ export function mountEditor(rootEl, host) {
   controls.appendChild(tplGroup);
   controls.appendChild(themeGroup);
   controls.appendChild(inspectorSlot);
-  controls.appendChild(fontGroup);
   controls.appendChild(addBtn);
   controls.appendChild(actions);
 
@@ -171,21 +161,41 @@ export function mountEditor(rootEl, host) {
     renderInspector();
   }
 
+  function currentRun(ref) {
+    const title = state.comp.elements.find((e) => e.id === 'title');
+    const doctor = state.comp.elements.find((e) => e.id === 'doctor');
+    if (ref === 'title.headline') return title && title.headline;
+    if (ref === 'title.subline') return title && title.subline;
+    if (ref === 'doctor') return doctor;
+    return null;
+  }
+
   function renderInspector() {
     inspectorSlot.innerHTML = '';
     inspectorSlot.dataset.psSelected = state.selectedRef || '';
-    if (!state.selectedRef) {
-      inspectorSlot.appendChild(el('p', { text: 'Select an element to edit.' },
+    const ref = state.selectedRef;
+    if (!ref) {
+      inspectorSlot.appendChild(el('p', { text: s.select_hint },
         { margin: '0', opacity: '0.7', fontSize: '0.9em' }));
+      return;
     }
-  }
-
-  function setHeadlineFont(family) {
-    const next = structuredClone(state.comp);
-    const title = next.elements.find((e) => e.id === 'title');
-    if (title && title.headline) title.headline = { ...title.headline, font: family };
-    state.comp = next;
-    renderPreview();
+    if (ref.startsWith('block:')) return;   // block inspector arrives in Task 6
+    const run = currentRun(ref);
+    if (!run) return;
+    inspectorSlot.appendChild(buildTextInspector(
+      { text: run.text, font: run.font, size: run.size, weight: run.weight, color: run.color },
+      {
+        lang,
+        palette: themePalette(state.comp.theme),
+        onText: (v) => { state.comp = setText(state.comp, ref, v); renderPreview(); },
+        onTypography: (patch) => { state.comp = setTypography(state.comp, ref, patch); renderPreview(); },
+        onFont: (family) => {
+          const allowed = weightsFor(family);
+          const w = allowed.includes(run.weight) ? run.weight : allowed[0];
+          state.comp = setTypography(state.comp, ref, { font: family, weight: w });
+          renderPreview(); renderInspector();
+        },
+      }));
   }
 
   async function onAddPhotos() {
