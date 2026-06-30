@@ -13,10 +13,22 @@ export const EXPORT_PX = {
 const px = (n) => `${n}px`;
 const setStyle = (el, styles) => { Object.assign(el.style, styles); return el; };
 
-function typoStyle(t) {
+// Arabic-script ranges: any run containing these must render in Cairo (the only
+// bundled face with Arabic glyphs) regardless of the theme's Latin display font.
+const ARABIC_RE = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
+const FONT_FALLBACK = 'system-ui, "Segoe UI", sans-serif';
+
+function fontStack(font, text) {
+  if (text && ARABIC_RE.test(text)) {
+    return font ? `"Cairo", "${font}", ${FONT_FALLBACK}` : `"Cairo", ${FONT_FALLBACK}`;
+  }
+  return font ? `"${font}", ${FONT_FALLBACK}` : 'inherit';
+}
+
+function typoStyle(t, text) {
   if (!t) return {};
   return {
-    fontFamily: t.font ? `"${t.font}", system-ui, "Segoe UI", sans-serif` : 'inherit',
+    fontFamily: fontStack(t.font, text),
     color: t.color || '#ffffff',
     fontSize: px(t.size || 32),
     fontWeight: String(t.weight || 600),
@@ -75,10 +87,10 @@ function buildTitle(el, theme) {
   const head = document.createElement('div');
   head.setAttribute('data-ps-headline', '');
   head.textContent = el.headline ? (el.headline.text || '') : '';
-  setStyle(head, typoStyle({ ...theme.headline, ...el.headline }));
+  setStyle(head, typoStyle({ ...theme.headline, ...el.headline }, head.textContent));
   const sub = document.createElement('div');
   sub.textContent = el.subline ? (el.subline.text || '') : '';
-  setStyle(sub, typoStyle({ ...theme.subline, ...el.subline }));
+  setStyle(sub, typoStyle({ ...theme.subline, ...el.subline }, sub.textContent));
   box.appendChild(head);
   box.appendChild(sub);
   if (theme.divider && theme.divider.enabled) box.appendChild(buildDivider(theme));
@@ -117,7 +129,7 @@ function buildCard(b, el, theme) {
   frame.appendChild(badge);
   const label = document.createElement('div');
   label.textContent = b.label || '';
-  setStyle(label, { ...typoStyle({ ...theme.label, ...el.labelStyle }), textAlign: 'center' });
+  setStyle(label, { ...typoStyle({ ...theme.label, ...el.labelStyle }, label.textContent), textAlign: 'center' });
   card.appendChild(frame);
   card.appendChild(label);
   return card;
@@ -146,7 +158,7 @@ function buildDoctor(el, theme) {
     position: 'absolute', left: '0', right: '0',
     top: `${(el.y ?? 0.93) * 100}%`, transform: 'translateY(-50%)',
     textAlign: el.align || 'center', textTransform: 'uppercase',
-    fontFamily: t.font ? `"${t.font}", system-ui, "Segoe UI", sans-serif` : 'inherit',
+    fontFamily: fontStack(t.font, box.textContent),
     color: t.color || '#c9a86a',
     fontSize: px(t.size || 34),
     fontWeight: String(t.weight || 700),

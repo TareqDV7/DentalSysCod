@@ -141,3 +141,35 @@ def test_custom_fonts_available_and_export_still_untainted():
     raw = base64.b64decode(data_url.split(",", 1)[1])
     assert raw[:8] == b"\x89PNG\r\n\x1a\n"
     assert len(raw) > 20_000
+
+
+def test_arabic_headline_resolves_to_cairo_font():
+    ar = {
+        "version": 1, "size": "square", "theme": "dark_premium",
+        "elements": [
+            {"id": "title", "type": "title", "x": 0.5, "y": 0.10, "align": "center",
+             "headline": {"text": "علاج عصب الجذر"},
+             "subline": {"text": "للضرس السفلي"}},
+        ],
+    }
+    latin = {
+        "version": 1, "size": "square", "theme": "dark_premium",
+        "elements": [
+            {"id": "title", "type": "title", "x": 0.5, "y": 0.10, "align": "center",
+             "headline": {"text": "Root Canal Treatment"}},
+        ],
+    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        page.evaluate("(c) => window.__buildStage(c)", ar)
+        ar_fam = page.evaluate(
+            "() => getComputedStyle(document.querySelector('[data-ps-headline]')).fontFamily")
+        page.evaluate("(c) => window.__buildStage(c)", latin)
+        latin_fam = page.evaluate(
+            "() => getComputedStyle(document.querySelector('[data-ps-headline]')).fontFamily")
+        browser.close()
+    assert "Cairo" in ar_fam, f"Arabic headline must resolve to Cairo, got {ar_fam}"
+    assert "Cairo" not in latin_fam, f"Latin headline must not use Cairo, got {latin_fam}"
+    assert "Poppins" in latin_fam, f"Latin headline must use the theme font, got {latin_fam}"
