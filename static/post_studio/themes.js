@@ -94,3 +94,28 @@ export const THEMES = {
 export function themeTokens(name) {
   return THEMES[name] || THEMES.dark_premium;
 }
+
+// Curated color swatches for the editor inspector, derived (read-only) from a
+// theme's own role colors. Non-hex values (gradients/rgba) are skipped.
+export function themePalette(name) {
+  const t = themeTokens(name);
+  const candidates = [
+    t.accent,
+    t.headline && t.headline.color,
+    t.subline && t.subline.color,
+    t.doctor && t.doctor.color,
+    t.label && t.label.color,
+    t.card && t.card.background,
+  ];
+  const seen = new Set();
+  const out = [];
+  for (const c of candidates) {
+    if (!c) continue;
+    const hex = String(c).toUpperCase();
+    if (!/^#[0-9A-F]{6}$/.test(hex)) continue;
+    if (seen.has(hex)) continue;
+    seen.add(hex);
+    out.push(hex);
+  }
+  return out;
+}

@@ -64,3 +64,25 @@ test('themeTokens falls back to dark_premium for unknown names', () => {
   assert.equal(themeTokens('nope'), THEMES.dark_premium);
   assert.equal(themeTokens('clinical_premium'), THEMES.clinical_premium);
 });
+
+test('themePalette derives deduped hex swatches from theme tokens', async () => {
+  const { themePalette } = await import('../../static/post_studio/themes.js');
+  // dark_premium: gold (accent/subline/doctor), white (headline/label), navy (card bg)
+  assert.deepEqual(themePalette('dark_premium'), ['#C6A274', '#F5F5F0', '#08162C']);
+});
+
+test('themePalette skips non-hex values and dedupes per theme', async () => {
+  const { themePalette } = await import('../../static/post_studio/themes.js');
+  const light = themePalette('light_luxury');
+  assert.ok(light.includes('#B08D3C'));   // accent/subline/doctor gold
+  assert.ok(light.includes('#FFFFFF'));   // card background
+  // all entries are 6-digit uppercase hex, no duplicates
+  const set = new Set(light);
+  assert.equal(set.size, light.length);
+  for (const c of light) assert.match(c, /^#[0-9A-F]{6}$/);
+});
+
+test('themePalette falls back to dark_premium for unknown names', async () => {
+  const { themePalette } = await import('../../static/post_studio/themes.js');
+  assert.deepEqual(themePalette('nope'), themePalette('dark_premium'));
+});
