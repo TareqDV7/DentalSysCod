@@ -84,3 +84,28 @@ def test_selection_outline_and_inspector_slot():
         page.wait_for_function(
             "() => document.querySelector('[data-ps-inspector]').dataset.psSelected === 'block:1'")
         browser.close()
+
+
+def test_block_inspector_label_move_add_remove():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        # select block 0 -> block inspector
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-inspector-block]")
+        # edit its label -> the rendered label/pill text updates
+        page.fill("[data-ps-inspector-block] [data-ps-field='label']", "Day 1")
+        page.wait_for_function(
+            "() => document.querySelector('[data-ps-stage]').textContent.includes('Day 1')")
+        # add a block -> 3 blocks, badges renumber 1..3
+        page.click("[data-ps-inspector-block] [data-ps-action='add-block']")
+        page.wait_for_function("() => document.querySelectorAll('[data-ps-block]').length === 3")
+        # remove the currently selected block -> back to 2
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-inspector-block]")
+        page.click("[data-ps-inspector-block] [data-ps-action='remove']")
+        page.wait_for_function("() => document.querySelectorAll('[data-ps-block]').length === 2")
+        browser.close()

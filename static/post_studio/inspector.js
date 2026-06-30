@@ -90,3 +90,50 @@ export function buildTextInspector(run, opts) {
 
   return root;
 }
+
+function actionBtn(label, action, disabled, onClick) {
+  const b = elt('button', { type: 'button', 'data-ps-action': action, text: label });
+  b.className = 'btn';
+  if (disabled) { b.disabled = true; b.style.opacity = '0.5'; }
+  else b.addEventListener('click', onClick);
+  return b;
+}
+
+// block: { photo, badge, label }; labelStyle: shared { font,size,weight,color }
+// opts: { lang, palette, index, count, maxBlocks,
+//         onLabel, onLabelTypography, onLabelFont, onReplace, onRemove,
+//         onMoveLeft, onMoveRight, onAdd }
+export function buildBlockInspector(block, labelStyle, opts) {
+  const ar = opts.lang === 'ar';
+  const root = elt('div', { 'data-ps-inspector-block': '' },
+    { display: 'flex', flexDirection: 'column', gap: '10px' });
+
+  const label = elt('input', { type: 'text', 'data-ps-field': 'label', value: block.label || '' }, { width: '100%' });
+  label.addEventListener('input', () => opts.onLabel(label.value));
+  const labelWrap = elt('div');
+  labelWrap.appendChild(fieldLabel(ar ? 'التسمية' : 'Label'));
+  labelWrap.appendChild(label);
+  root.appendChild(labelWrap);
+
+  // shared label typography (applies to ALL labels)
+  const note = elt('div', { text: ar ? '(يطبَّق على كل التسميات)' : '(applies to all labels)' },
+    { fontSize: '0.75em', opacity: '0.6' });
+  root.appendChild(note);
+  root.appendChild(buildTextInspector(
+    { text: undefined, font: labelStyle.font, size: labelStyle.size, weight: labelStyle.weight, color: labelStyle.color },
+    { lang: opts.lang, palette: opts.palette,
+      onText: () => {}, onTypography: opts.onLabelTypography, onFont: opts.onLabelFont }));
+
+  const photoRow = elt('div', {}, { display: 'flex', gap: '8px' });
+  photoRow.appendChild(actionBtn(ar ? 'استبدال الصورة' : 'Replace photo', 'replace', false, opts.onReplace));
+  photoRow.appendChild(actionBtn(ar ? 'حذف' : 'Remove', 'remove', opts.count <= 1, opts.onRemove));
+  root.appendChild(photoRow);
+
+  const moveRow = elt('div', {}, { display: 'flex', gap: '8px' });
+  moveRow.appendChild(actionBtn('◄', 'move-left', opts.index <= 0, opts.onMoveLeft));
+  moveRow.appendChild(actionBtn('►', 'move-right', opts.index >= opts.count - 1, opts.onMoveRight));
+  moveRow.appendChild(actionBtn(ar ? '+ كتلة' : '+ Add block', 'add-block', opts.count >= opts.maxBlocks, opts.onAdd));
+  root.appendChild(moveRow);
+
+  return root;
+}

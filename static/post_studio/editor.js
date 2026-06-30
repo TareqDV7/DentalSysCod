@@ -2,13 +2,14 @@
 // (template pick + add photos) over the structural renderer + client export +
 // host adapter. Deep editing (text/drag/typography/phases) is P4; premium themes
 // are P3. EN/AR via the STR map keyed off <html lang>.
-import { TEMPLATES, defaultComposition, serialize, deserialize, applyTheme,
-         setText, setTypography } from './composition.js';
+import { TEMPLATES, MAX_BLOCKS, defaultComposition, serialize, deserialize, applyTheme,
+         setText, setTypography, setBlockLabel, setBlockPhoto,
+         addBlock, removeBlock, reorderBlock } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
 import { THEME_OPTIONS, themePalette } from './themes.js';
 import { ensureFontsLoaded } from './fonts.js';
-import { buildTextInspector, weightsFor } from './inspector.js';
+import { buildTextInspector, buildBlockInspector, weightsFor } from './inspector.js';
 
 const STR = {
   en: { templates: 'Template', add_photos: 'Add photos', download: 'Download',
@@ -179,7 +180,32 @@ export function mountEditor(rootEl, host) {
         { margin: '0', opacity: '0.7', fontSize: '0.9em' }));
       return;
     }
-    if (ref.startsWith('block:')) return;   // block inspector arrives in Task 6
+    if (ref.startsWith('block:')) {
+      const i = Number(ref.slice(6));
+      const strip = state.comp.elements.find((e) => e.id === 'strip');
+      if (!strip || i < 0 || i >= strip.blocks.length) { state.selectedRef = null; inspectorSlot.dataset.psSelected = ''; return; }
+      inspectorSlot.appendChild(buildBlockInspector(strip.blocks[i], strip.labelStyle, {
+        lang, palette: themePalette(state.comp.theme),
+        index: i, count: strip.blocks.length, maxBlocks: MAX_BLOCKS,
+        onLabel: (v) => { state.comp = setBlockLabel(state.comp, i, v); renderPreview(); },
+        onLabelTypography: (patch) => { state.comp = setTypography(state.comp, 'strip.label', patch); renderPreview(); },
+        onLabelFont: (family) => {
+          const allowed = weightsFor(family);
+          const w = allowed.includes(strip.labelStyle.weight) ? strip.labelStyle.weight : allowed[0];
+          state.comp = setTypography(state.comp, 'strip.label', { font: family, weight: w });
+          renderPreview(); renderInspector();
+        },
+        onReplace: async () => {
+          const picked = await host.pickPhotos();
+          if (picked && picked.length) { state.comp = setBlockPhoto(state.comp, i, picked[0].dataUrl); renderPreview(); renderInspector(); }
+        },
+        onRemove: () => { state.comp = removeBlock(state.comp, i); selectRef(null); },
+        onMoveLeft: () => { state.comp = reorderBlock(state.comp, i, i - 1); selectRef('block:' + (i - 1)); },
+        onMoveRight: () => { state.comp = reorderBlock(state.comp, i, i + 1); selectRef('block:' + (i + 1)); },
+        onAdd: () => { state.comp = addBlock(state.comp); renderPreview(); renderInspector(); },
+      }));
+      return;
+    }
     const run = currentRun(ref);
     if (!run) return;
     inspectorSlot.appendChild(buildTextInspector(
@@ -203,10 +229,11 @@ export function mountEditor(rootEl, host) {
     if (!picked || !picked.length) return;
     const strip = state.comp.elements.find((e) => e.id === 'strip');
     if (!strip) return;
-    let i = 0;
-    for (const block of strip.blocks) {
-      if (!block.photo && i < picked.length) { block.photo = picked[i++].dataUrl; }
-    }
+    let next = state.comp; let pi = 0;
+    strip.blocks.forEach((b, i) => {
+      if (!b.photo && pi < picked.length) { next = setBlockPhoto(next, i, picked[pi++].dataUrl); }
+    });
+    state.comp = next;
     renderPreview();
   }
 
