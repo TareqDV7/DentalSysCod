@@ -102,12 +102,12 @@ test('applyTheme stamps per-element typography from the theme, preserves content
   assert.equal(doctor.color, '#b08d3c');                  // restyled by theme
 });
 
-test('defaultComposition applies dark_premium (go.png) by default: Manrope sans headline', () => {
+test('defaultComposition applies dark_premium (Navy & Gold) by default: Poppins headline', () => {
   const c = defaultComposition('before_after');
   assert.equal(c.theme, 'dark_premium');
   const title = c.elements.find((e) => e.id === 'title');
-  assert.equal(title.headline.font, 'Manrope');
-  assert.equal(title.headline.color, '#ffffff');
+  assert.equal(title.headline.font, 'Poppins');
+  assert.equal(title.headline.color, '#F5F5F0');
 });
 
 test('applyTheme preserves strip blocks (photos/badges/labels)', () => {

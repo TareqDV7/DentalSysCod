@@ -11,21 +11,36 @@ export const THEME_OPTIONS = [
 ];
 
 export const THEMES = {
-  // The reference (go.png): navy radial glow, white sans headline, gold subline +
-  // doctor name, gold-bordered glowing cards, gold circle badges, tooth divider.
+  // The reference (Navy & Gold / go.png): navy radial glow, white Poppins headline,
+  // gold subline + doctor, gold-rim portrait panels, number-in-pill labels, tooth
+  // divider, 3-layer gold sine wave footer.
   dark_premium: {
-    bg: 'radial-gradient(62% 52% at 50% 34%, #163a59 0%, #0c2336 52%, #060f1c 100%)',
-    headline: { font: 'Manrope', size: 88, weight: 800, color: '#ffffff', letterSpacing: 0 },
-    subline: { font: 'Manrope', size: 52, weight: 700, color: '#c9a86a', letterSpacing: 0 },
-    label: { font: 'Manrope', size: 30, weight: 600, color: '#cdd6e0', letterSpacing: 0 },
-    doctor: { font: 'Manrope', size: 40, weight: 800, color: '#c9a86a', letterSpacing: 6 },
+    bg: 'radial-gradient(circle at 50% 44%, #0C1E3A 0%, #040E20 100%)',
+    headline: { font: 'Poppins', size: 78, weight: 700, color: '#F5F5F0', letterSpacing: 0 },
+    subline: { font: 'Poppins', size: 58, weight: 700, color: '#C6A274', letterSpacing: 0 },
+    label: { font: 'Poppins', size: 20, weight: 400, color: '#F5F5F0', letterSpacing: 0, style: 'pill' },
+    doctor: { font: 'Poppins', size: 52, weight: 700, color: '#C6A274', letterSpacing: 2 },
     card: {
-      borderRadius: 28, border: '1px solid rgba(201,168,106,.55)',
-      boxShadow: '0 0 42px rgba(40,90,120,.25) inset', background: 'rgba(255,255,255,.04)',
+      borderRadius: 14, aspect: '250 / 320',
+      border: '1px solid rgba(198,162,116,.92)',
+      boxShadow: 'none', background: '#08162C',
     },
-    badge: { shape: 'circle', background: 'transparent', color: '#c9a86a', border: '2px solid #c9a86a' },
-    divider: { enabled: true, color: '#c9a86a', icon: 'tooth' },
-    accent: '#c9a86a',
+    badge: { shape: 'circle', background: 'transparent', color: '#F5F5F0', border: '2px solid rgba(198,162,116,.86)' },
+    pill: {
+      border: '2px solid rgba(198,162,116,.86)',
+      circleBorder: '2px solid rgba(198,162,116,.86)',
+      color: '#F5F5F0',
+    },
+    divider: { enabled: true, color: 'rgba(198,162,116,.86)', icon: 'tooth' },
+    waveFooter: {
+      enabled: true, color: '#C6A274',
+      layers: [
+        { amp: 14, freq: 0.012, opacity: 0.15 },
+        { amp: 18, freq: 0.009, opacity: 0.12 },
+        { amp: 11, freq: 0.015, opacity: 0.086 },
+      ],
+    },
+    accent: '#C6A274',
   },
   // Warm cream, ink + gold, serif headline, soft-shadow white cards, thin gold badges.
   light_luxury: {
