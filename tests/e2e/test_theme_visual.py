@@ -27,15 +27,16 @@ def _comp(theme, headline="Root Canal Treatment", subline="for Lower Molar",
     return {
         "version": 1, "size": "square", "theme": theme,
         "elements": [
-            {"id": "title", "type": "title", "x": 0.5, "y": 0.12, "align": "center",
-             "headline": {"text": headline, "size": 84, "weight": 800, "color": "#fff", "letterSpacing": 0},
-             "subline": {"text": subline, "size": 48, "weight": 700, "color": "#c9a86a", "letterSpacing": 0}},
+            # text only — let each theme's own tokens drive typography so the
+            # screenshots are an honest fidelity check (no hardcoded size/color overrides)
+            {"id": "title", "type": "title", "x": 0.5, "y": 0.15, "align": "center",
+             "headline": {"text": headline},
+             "subline": {"text": subline}},
             {"id": "strip", "type": "photoStrip", "layout": "row",
              "blocks": [{"photo": _DATA_PNG, "badge": 1, "label": "Before Treatment"},
-                        {"photo": _DATA_PNG, "badge": 2, "label": "After Treatment"}],
-             "labelStyle": {"size": 28, "weight": 600, "color": "#cfd8e3"}},
+                        {"photo": _DATA_PNG, "badge": 2, "label": "After Treatment"}]},
             {"id": "doctor", "type": "doctorName", "x": 0.5, "y": 0.93, "align": "center",
-             "text": doctor, "size": 36, "weight": 800, "color": "#c9a86a", "letterSpacing": 6},
+             "text": doctor},
         ],
     }
 
@@ -50,13 +51,24 @@ def test_each_theme_renders_distinctly_with_screenshots():
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         page.goto(HARNESS.as_uri())
         page.wait_for_function("() => window.__harnessReady === true")
+        infos = {}
         for theme in THEMES:
             info = page.evaluate("(c) => window.__describe(c)", _comp(theme))
+            infos[theme] = info
             backgrounds[theme] = info["bg"]
             assert info["imgs"] == 2, f"{theme}: expected 2 photos"
             assert info["hasDoctor"] is True, f"{theme}: doctor name missing"
             # screenshot the native-size stage element for human fidelity review
             page.locator("[data-ps-stage]").screenshot(path=str(_ARTIFACTS / f"theme_{theme}.png"))
+        # Navy & Gold flagship: pill labels + tooth divider + wave footer all present
+        dark_info = infos["dark_premium"]
+        assert dark_info["pills"] == 2, dark_info
+        assert dark_info["hasDivider"] is True, dark_info
+        assert dark_info["hasWave"] is True, dark_info
+        # the pill + wave treatments are flagship-only — the other three themes opt out
+        for theme in ("light_luxury", "clinical_premium", "bold_editorial"):
+            assert infos[theme]["pills"] == 0, (theme, infos[theme])
+            assert infos[theme]["hasWave"] is False, (theme, infos[theme])
         # Arabic sanity: render with Arabic copy, no crash, doctor still present
         ar = _comp("dark_premium", headline="علاج عصب الجذر", subline="للضرس السفلي",
                    doctor="د. وصفي برزق")
