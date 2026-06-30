@@ -44,12 +44,12 @@ function el(tag, attrs = {}, styles = {}) {
   return node;
 }
 
-export function mountEditor(rootEl, host) {
+export function mountEditor(rootEl, host, opts = {}) {
   ensureFontsLoaded();
   const lang = document.documentElement.lang === 'ar' ? 'ar' : 'en';
   const s = STR[lang];
   const tl = TPL_LABEL[lang];
-  const state = { comp: defaultComposition('before_after'), selectedRef: null };
+  const state = { comp: opts.initialComp || defaultComposition('before_after'), selectedRef: null };
 
   rootEl.innerHTML = '';
   const layout = el('div', {}, { display: 'flex', gap: '24px', flexWrap: 'wrap', alignItems: 'flex-start' });
@@ -332,6 +332,19 @@ export function mountEditor(rootEl, host) {
   function notify(msg) {
     if (typeof window.showToast === 'function') window.showToast(msg);
   }
+
+  // Live EN/AR re-render: re-mount in the new language, preserving the composition.
+  if (rootEl._psLangObserver) { rootEl._psLangObserver.disconnect(); rootEl._psLangObserver = null; }
+  const langObserver = new MutationObserver(() => {
+    const cur = document.documentElement.lang === 'ar' ? 'ar' : 'en';
+    if (cur !== lang) {
+      langObserver.disconnect();
+      rootEl._psLangObserver = null;
+      mountEditor(rootEl, host, { initialComp: state.comp });
+    }
+  });
+  langObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+  rootEl._psLangObserver = langObserver;
 
   // init
   renderPreview();

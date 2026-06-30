@@ -109,3 +109,24 @@ def test_block_inspector_label_move_add_remove():
         page.click("[data-ps-inspector-block] [data-ps-action='remove']")
         page.wait_for_function("() => document.querySelectorAll('[data-ps-block]').length === 2")
         browser.close()
+
+
+def test_language_toggle_rerenders_and_preserves_comp():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        # set a custom headline via the inspector
+        page.click("[data-ps-el='title.headline']")
+        page.wait_for_selector("[data-ps-inspector-text]")
+        page.fill("[data-ps-inspector-text] [data-ps-field='text']", "Implants")
+        page.wait_for_function("() => document.querySelector('[data-ps-headline]').textContent === 'Implants'")
+        # flip the document language to Arabic
+        page.evaluate("() => document.documentElement.setAttribute('lang', 'ar')")
+        # editor re-mounts in Arabic (a known Arabic chrome string appears) ...
+        page.wait_for_function("() => document.body.textContent.includes('القالب اللوني')")
+        # ... and the custom composition survives the re-mount
+        page.wait_for_function("() => document.querySelector('[data-ps-headline]').textContent === 'Implants'")
+        browser.close()
