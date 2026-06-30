@@ -46,6 +46,8 @@
       bg: stage.style.background || stage.style.backgroundImage || '',
       hasDivider: !!stage.querySelector('[data-ps-divider]'),
       pills: stage.querySelectorAll('[data-ps-pill]').length,
+      hasWave: !!stage.querySelector('[data-ps-wave]'),
+      wavePaths: stage.querySelectorAll('[data-ps-wave] path').length,
       imgs: stage.querySelectorAll('img').length,
       badges: Array.from(stage.querySelectorAll('div'))
         .filter((d) => /^[0-9]+$/.test(d.textContent.trim()) && d.style.borderRadius === '50%')

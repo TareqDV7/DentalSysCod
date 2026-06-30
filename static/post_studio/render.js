@@ -78,6 +78,43 @@ function buildDivider(theme) {
   return row;
 }
 
+const WAVE_BAND = 140;        // px tall band anchored to the stage bottom
+const WAVE_WIDTH = 1080;      // canvas reference width (all sizes are 1080 wide)
+
+function sinePath(baseY, amp, freq, step = 8) {
+  let d = `M 0 ${(baseY).toFixed(1)}`;
+  for (let x = step; x <= WAVE_WIDTH; x += step) {
+    const y = baseY + amp * Math.sin(freq * x);
+    d += ` L ${x} ${y.toFixed(1)}`;
+  }
+  return d;
+}
+
+function buildWaveFooter(theme) {
+  const wf = theme.waveFooter;
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('data-ps-wave', '');
+  svg.setAttribute('viewBox', `0 0 ${WAVE_WIDTH} ${WAVE_BAND}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  setStyle(svg, {
+    position: 'absolute', left: '0', bottom: '0',
+    width: '100%', height: px(WAVE_BAND), pointerEvents: 'none',
+  });
+  // Spec offsets (985/1015/1045 in a 1080 canvas) measured from the bottom,
+  // mapped into the local band so the wave is bottom-anchored at any size.
+  const baseYs = [45, 75, 105];
+  wf.layers.forEach((layer, i) => {
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', sinePath(baseYs[i] ?? 75, layer.amp, layer.freq));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', wf.color);
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('opacity', String(layer.opacity));
+    svg.appendChild(path);
+  });
+  return svg;
+}
+
 function buildTitle(el, theme) {
   const box = document.createElement('div');
   setStyle(box, {
@@ -218,5 +255,6 @@ export function renderComposition(comp) {
     else if (el.type === 'photoStrip') stage.appendChild(buildStrip(el, theme));
     else if (el.type === 'doctorName') stage.appendChild(buildDoctor(el, theme));
   }
+  if (theme.waveFooter && theme.waveFooter.enabled) stage.appendChild(buildWaveFooter(theme));
   return stage;
 }

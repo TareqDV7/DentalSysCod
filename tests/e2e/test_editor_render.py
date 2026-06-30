@@ -197,3 +197,16 @@ def test_pill_labels_for_dark_premium_and_corner_badge_for_clinical():
     assert dark["badges"] == ["1", "2"], "pill number circles still detected as numbered badges"
     assert all("Treatment" in t for t in dark_pills), dark_pills   # label text inside the pill
     assert "320" in aspect and "250" in aspect, f"portrait panel aspect expected, got {aspect}"
+
+
+def test_wave_footer_present_for_dark_premium_only():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        dark = page.evaluate("(c) => window.__describe(c)", _COMP)
+        clinical = page.evaluate("(c) => window.__describe(c)", dict(_COMP, theme="clinical_premium"))
+        browser.close()
+    assert dark["hasWave"] is True, "dark_premium must render the wave footer"
+    assert dark["wavePaths"] == 3, "wave footer has 3 sine layers"
+    assert clinical["hasWave"] is False, "themes without waveFooter.enabled render no wave"
