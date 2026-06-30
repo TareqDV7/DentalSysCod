@@ -151,3 +151,71 @@ export function reorderBlock(comp, from, to) {
     blocks.splice(dest, 0, moved);
   });
 }
+
+export const SIZE_MIN = 16;
+export const SIZE_MAX = 160;
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function clampSize(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return null;
+  return Math.max(SIZE_MIN, Math.min(SIZE_MAX, v));
+}
+
+// A selectable text run (has its own .text): headline, subline, doctor.
+function textRunTarget(comp, ref) {
+  const title = comp.elements.find((e) => e.id === 'title');
+  const doctor = comp.elements.find((e) => e.id === 'doctor');
+  if (ref === 'title.headline') return title && title.headline;
+  if (ref === 'title.subline') return title && title.subline;
+  if (ref === 'doctor') return doctor;
+  return null;
+}
+
+// A typography target — text runs plus the shared label style.
+function typoTarget(comp, ref) {
+  if (ref === 'strip.label') {
+    const strip = comp.elements.find((e) => e.id === 'strip');
+    return strip && strip.labelStyle;
+  }
+  return textRunTarget(comp, ref);
+}
+
+export function setText(comp, ref, value) {
+  const next = structuredClone(comp);
+  const target = textRunTarget(next, ref);
+  if (!target) throw new Error(`bad text ref: ${ref}`);
+  target.text = String(value);
+  return next;
+}
+
+export function setTypography(comp, ref, patch) {
+  const next = structuredClone(comp);
+  const target = typoTarget(next, ref);
+  if (!target) throw new Error(`bad typography ref: ${ref}`);
+  if (patch.font != null) target.font = String(patch.font);
+  if (patch.weight != null) target.weight = Number(patch.weight);
+  if (patch.size != null) {
+    const v = clampSize(patch.size);
+    if (v != null) target.size = v;
+  }
+  if (patch.color != null && HEX_RE.test(patch.color)) target.color = patch.color;
+  return next;
+}
+
+function updateBlock(comp, index, patch) {
+  const next = structuredClone(comp);
+  const strip = next.elements.find((e) => e.id === 'strip');
+  if (!strip) throw new Error('composition has no photoStrip');
+  if (index < 0 || index >= strip.blocks.length) throw new Error(`bad index ${index}`);
+  strip.blocks[index] = { ...strip.blocks[index], ...patch };
+  return next;
+}
+
+export function setBlockLabel(comp, index, value) {
+  return updateBlock(comp, index, { label: String(value) });
+}
+
+export function setBlockPhoto(comp, index, photo) {
+  return updateBlock(comp, index, { photo });
+}

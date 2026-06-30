@@ -124,3 +124,57 @@ test('applyTheme does not mutate its input', () => {
   applyTheme(c0, 'bold_editorial');
   assert.equal(JSON.stringify(c0), before);
 });
+
+import {
+  setText, setTypography, setBlockLabel, setBlockPhoto, SIZE_MIN, SIZE_MAX,
+} from '../../static/post_studio/composition.js';
+
+function comp() { return defaultComposition('before_after'); }
+
+test('setText sets the run text immutably', () => {
+  const c0 = comp();
+  const c1 = setText(c0, 'title.headline', 'Whitening');
+  const t0 = c0.elements.find((e) => e.id === 'title');
+  const t1 = c1.elements.find((e) => e.id === 'title');
+  assert.equal(t1.headline.text, 'Whitening');
+  assert.notEqual(t0.headline.text, 'Whitening');   // input not mutated
+});
+
+test('setText supports subline and doctor, rejects bad refs', () => {
+  const c = comp();
+  assert.equal(setText(c, 'title.subline', 'Sub').elements.find((e) => e.id === 'title').subline.text, 'Sub');
+  assert.equal(setText(c, 'doctor', 'DR. X').elements.find((e) => e.id === 'doctor').text, 'DR. X');
+  assert.throws(() => setText(c, 'strip.label', 'no'));
+});
+
+test('setTypography merges font/weight, clamps size, validates hex', () => {
+  const c = comp();
+  const out = setTypography(c, 'title.headline',
+    { font: 'Cairo', weight: 800, size: 999, color: '#abcdef' });
+  const h = out.elements.find((e) => e.id === 'title').headline;
+  assert.equal(h.font, 'Cairo');
+  assert.equal(h.weight, 800);
+  assert.equal(h.size, SIZE_MAX);                 // 999 clamped to 160
+  assert.equal(h.color, '#abcdef');
+  // below-min clamps up; invalid hex ignored (keeps prior color)
+  const out2 = setTypography(out, 'title.headline', { size: 2, color: 'red' });
+  const h2 = out2.elements.find((e) => e.id === 'title').headline;
+  assert.equal(h2.size, SIZE_MIN);
+  assert.equal(h2.color, '#abcdef');
+});
+
+test('setTypography on strip.label writes the shared labelStyle', () => {
+  const c = comp();
+  const out = setTypography(c, 'strip.label', { size: 44 });
+  assert.equal(out.elements.find((e) => e.id === 'strip').labelStyle.size, 44);
+});
+
+test('setBlockLabel and setBlockPhoto are immutable per-block updates', () => {
+  const c = comp();
+  const c1 = setBlockLabel(c, 0, 'Day 1');
+  assert.equal(c1.elements.find((e) => e.id === 'strip').blocks[0].label, 'Day 1');
+  assert.equal(c.elements.find((e) => e.id === 'strip').blocks[0].label, 'Before Treatment');
+  const c2 = setBlockPhoto(c, 1, 'data:image/png;base64,AAAA');
+  assert.equal(c2.elements.find((e) => e.id === 'strip').blocks[1].photo, 'data:image/png;base64,AAAA');
+  assert.equal(c.elements.find((e) => e.id === 'strip').blocks[1].photo, null);
+});
