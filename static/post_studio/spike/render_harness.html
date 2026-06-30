@@ -44,7 +44,8 @@
     return {
       size: [stage.offsetWidth, stage.offsetHeight],
       bg: stage.style.background || stage.style.backgroundImage || '',
-      hasDivider: !!stage.querySelector('svg'),
+      hasDivider: !!stage.querySelector('[data-ps-divider]'),
+      pills: stage.querySelectorAll('[data-ps-pill]').length,
       imgs: stage.querySelectorAll('img').length,
       badges: Array.from(stage.querySelectorAll('div'))
         .filter((d) => /^[0-9]+$/.test(d.textContent.trim()) && d.style.borderRadius === '50%')

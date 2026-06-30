@@ -173,3 +173,27 @@ def test_arabic_headline_resolves_to_cairo_font():
     assert "Cairo" in ar_fam, f"Arabic headline must resolve to Cairo, got {ar_fam}"
     assert "Cairo" not in latin_fam, f"Latin headline must not use Cairo, got {latin_fam}"
     assert "Poppins" in latin_fam, f"Latin headline must use the theme font, got {latin_fam}"
+
+
+def test_pill_labels_for_dark_premium_and_corner_badge_for_clinical():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        dark = page.evaluate("(c) => window.__describe(c)", _COMP)
+        clinical = page.evaluate("(c) => window.__describe(c)", dict(_COMP, theme="clinical_premium"))
+        # dark_premium pills carry their number + label text
+        dark_pills = page.evaluate(
+            "(c) => { window.__buildStage(c);"
+            "  return Array.from(document.querySelectorAll('[data-ps-pill]'))"
+            "    .map(p => p.textContent); }", _COMP)
+        # frame aspect comes from the theme token
+        page.evaluate("(c) => window.__buildStage(c)", _COMP)
+        aspect = page.evaluate(
+            "() => getComputedStyle(document.querySelector('[data-ps-frame]')).aspectRatio")
+        browser.close()
+    assert dark["pills"] == 2, "dark_premium renders one pill per block"
+    assert clinical["pills"] == 0, "clinical_premium keeps corner-badge labels (no pills)"
+    assert dark["badges"] == ["1", "2"], "pill number circles still detected as numbered badges"
+    assert all("Treatment" in t for t in dark_pills), dark_pills   # label text inside the pill
+    assert "320" in aspect and "250" in aspect, f"portrait panel aspect expected, got {aspect}"

@@ -62,13 +62,14 @@ function toothIcon(color) {
 
 function buildDivider(theme) {
   const row = document.createElement('div');
+  row.setAttribute('data-ps-divider', '');
   setStyle(row, {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     gap: '20px', marginTop: '20px',
   });
   const rule = () => {
     const r = document.createElement('div');
-    setStyle(r, { height: '1px', width: '130px', background: theme.divider.color, opacity: '.75' });
+    setStyle(r, { height: '2px', width: '32%', background: theme.divider.color, opacity: '0.86' });
     return r;
   };
   row.appendChild(rule());
@@ -97,15 +98,44 @@ function buildTitle(el, theme) {
   return box;
 }
 
+function buildPill(b, theme) {
+  const pill = document.createElement('div');
+  pill.setAttribute('data-ps-pill', '');
+  setStyle(pill, {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    width: '100%', height: '56px', padding: '0 16px', boxSizing: 'border-box',
+    borderRadius: '28px', border: theme.pill.border,
+  });
+  const circle = document.createElement('div');
+  circle.textContent = String(b.badge || 0);
+  setStyle(circle, {
+    flex: '0 0 auto', width: '26px', height: '26px', borderRadius: '50%',
+    border: theme.pill.circleBorder, color: theme.label.color || '#F5F5F0',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontFamily: fontStack(theme.label.font, ''), fontWeight: '700', fontSize: '19px',
+  });
+  const text = document.createElement('div');
+  text.textContent = b.label || '';
+  setStyle(text, {
+    ...typoStyle({ ...theme.label, color: theme.pill.color || theme.label.color }, b.label),
+    flex: '1 1 auto', textAlign: 'left',
+  });
+  pill.appendChild(circle);
+  pill.appendChild(text);
+  return pill;
+}
+
 function buildCard(b, el, theme) {
+  const isPill = theme.label && theme.label.style === 'pill';
   const card = document.createElement('div');
   setStyle(card, {
     position: 'relative', flex: '1 1 0', display: 'flex',
     flexDirection: 'column', gap: '14px', alignItems: 'center', minWidth: '0',
   });
   const frame = document.createElement('div');
+  frame.setAttribute('data-ps-frame', '');
   setStyle(frame, {
-    position: 'relative', width: '100%', aspectRatio: '1 / 1',
+    position: 'relative', width: '100%', aspectRatio: theme.card.aspect || '1 / 1',
     borderRadius: px(theme.card.borderRadius), overflow: 'hidden',
     border: theme.card.border, boxShadow: theme.card.boxShadow,
     background: theme.card.background,
@@ -117,21 +147,27 @@ function buildCard(b, el, theme) {
     setStyle(img, { width: '100%', height: '100%', objectFit: 'cover', display: 'block' });
     frame.appendChild(img);
   }
-  const badge = document.createElement('div');
-  badge.textContent = String(b.badge || 0);
-  setStyle(badge, {
-    position: 'absolute', top: '14px', left: '14px', width: '52px', height: '52px',
-    borderRadius: theme.badge.shape === 'circle' ? '50%' : '10px',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: theme.badge.background, color: theme.badge.color,
-    border: theme.badge.border, fontWeight: '700', fontSize: '26px',
-  });
-  frame.appendChild(badge);
-  const label = document.createElement('div');
-  label.textContent = b.label || '';
-  setStyle(label, { ...typoStyle({ ...theme.label, ...el.labelStyle }, label.textContent), textAlign: 'center' });
+  if (!isPill) {
+    const badge = document.createElement('div');
+    badge.textContent = String(b.badge || 0);
+    setStyle(badge, {
+      position: 'absolute', top: '14px', left: '14px', width: '52px', height: '52px',
+      borderRadius: theme.badge.shape === 'circle' ? '50%' : '10px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: theme.badge.background, color: theme.badge.color,
+      border: theme.badge.border, fontWeight: '700', fontSize: '26px',
+    });
+    frame.appendChild(badge);
+  }
   card.appendChild(frame);
-  card.appendChild(label);
+  if (isPill) {
+    card.appendChild(buildPill(b, theme));
+  } else {
+    const label = document.createElement('div');
+    label.textContent = b.label || '';
+    setStyle(label, { ...typoStyle({ ...theme.label, ...el.labelStyle }, label.textContent), textAlign: 'center' });
+    card.appendChild(label);
+  }
   return card;
 }
 
