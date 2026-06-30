@@ -16,6 +16,8 @@ FACES = [
     ("Playfair Display", 700, "PlayfairDisplay-Bold.ttf"),
     ("Cairo", 400, "Cairo-Regular.ttf"),
     ("Cairo", 700, "Cairo-Bold.ttf"),
+    ("Poppins", 400, "Poppins-Regular.ttf"),
+    ("Poppins", 700, "Poppins-Bold.ttf"),
 ]
 
 
@@ -39,6 +41,7 @@ def main() -> None:
         "  { id: 'manrope', label: 'Manrope', label_ar: 'مانروب', family: 'Manrope' },\n"
         "  { id: 'playfair', label: 'Playfair', label_ar: 'بلايفير', family: 'Playfair Display' },\n"
         "  { id: 'cairo', label: 'Cairo', label_ar: 'القاهرة', family: 'Cairo' },\n"
+        "  { id: 'poppins', label: 'Poppins', label_ar: 'بوبينس', family: 'Poppins' },\n"
         "];\n\n"
         "let _injected = false;\n"
         "export function ensureFontsLoaded(doc = document) {\n"

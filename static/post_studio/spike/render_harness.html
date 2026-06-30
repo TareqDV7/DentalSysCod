@@ -65,6 +65,7 @@
     "700 40px 'Playfair Display'",
     "400 40px 'Manrope'", "700 40px 'Manrope'", "800 40px 'Manrope'",
     "400 40px 'Cairo'", "700 40px 'Cairo'",
+    "400 40px 'Poppins'", "700 40px 'Poppins'",
   ];
   if (document.fonts && document.fonts.load) {
     Promise.all(__faceSpecs.map((s) => document.fonts.load(s).catch(() => null)))
