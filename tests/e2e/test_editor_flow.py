@@ -64,3 +64,25 @@ def test_editor_theme_and_headline_font_switch():
             "getComputedStyle(document.querySelector('[data-ps-headline]')).fontFamily)"
         )
         browser.close()
+
+
+def test_selection_outline_and_inspector_slot():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        # nothing selected initially
+        assert page.get_attribute("[data-ps-inspector]", "data-ps-selected") == ""
+        # click the headline -> it becomes selected and gets an outline
+        page.click("[data-ps-el='title.headline']")
+        page.wait_for_function(
+            "() => document.querySelector('[data-ps-inspector]').dataset.psSelected === 'title.headline'")
+        assert page.evaluate(
+            "() => /solid/.test(document.querySelector('[data-ps-el=\"title.headline\"]').style.outline)")
+        # click a photo block -> block selection
+        page.click("[data-ps-block='1']")
+        page.wait_for_function(
+            "() => document.querySelector('[data-ps-inspector]').dataset.psSelected === 'block:1'")
+        browser.close()

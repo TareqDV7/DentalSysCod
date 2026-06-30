@@ -44,7 +44,7 @@ export function mountEditor(rootEl, host) {
   const lang = document.documentElement.lang === 'ar' ? 'ar' : 'en';
   const s = STR[lang];
   const tl = TPL_LABEL[lang];
-  const state = { comp: defaultComposition('before_after') };
+  const state = { comp: defaultComposition('before_after'), selectedRef: null };
 
   rootEl.innerHTML = '';
   const layout = el('div', {}, { display: 'flex', gap: '24px', flexWrap: 'wrap', alignItems: 'flex-start' });
@@ -104,8 +104,14 @@ export function mountEditor(rootEl, host) {
   }
   fontGroup.appendChild(fontRow);
 
+  // ── Contextual inspector slot (filled by renderInspector) ──
+  const inspectorSlot = el('div', { 'data-ps-inspector': '' }, {
+    display: 'flex', flexDirection: 'column', gap: '10px',
+    padding: '12px', border: '1px solid rgba(0,0,0,.12)', borderRadius: '8px' });
+
   controls.appendChild(tplGroup);
   controls.appendChild(themeGroup);
+  controls.appendChild(inspectorSlot);
   controls.appendChild(fontGroup);
   controls.appendChild(addBtn);
   controls.appendChild(actions);
@@ -115,6 +121,15 @@ export function mountEditor(rootEl, host) {
     flexDirection: 'column', alignItems: 'center', gap: '12px' });
   const previewBox = el('div', { 'data-ps-preview': '' }, { position: 'relative', overflow: 'hidden' });
   previewCol.appendChild(previewBox);
+
+  // Delegated click-to-select on the on-screen stage (editor-only; never serialized).
+  previewBox.addEventListener('click', (e) => {
+    const elNode = e.target.closest('[data-ps-el]');
+    if (elNode) { selectRef(elNode.getAttribute('data-ps-el')); return; }
+    const blockNode = e.target.closest('[data-ps-block]');
+    if (blockNode) { selectRef('block:' + blockNode.getAttribute('data-ps-block')); return; }
+    selectRef(null);
+  });
 
   layout.appendChild(controls);
   layout.appendChild(previewCol);
@@ -142,6 +157,27 @@ export function mountEditor(rootEl, host) {
     scaler.appendChild(stage);
     previewBox.appendChild(scaler);
     previewBox._stage = stage; // native-size node for export
+    if (state.selectedRef) {
+      const sel = state.selectedRef.startsWith('block:')
+        ? stage.querySelector(`[data-ps-block="${state.selectedRef.slice(6)}"]`)
+        : stage.querySelector(`[data-ps-el="${state.selectedRef}"]`);
+      if (sel) { sel.style.outline = '3px solid #38bdf8'; sel.style.outlineOffset = '4px'; }
+    }
+  }
+
+  function selectRef(ref) {
+    state.selectedRef = ref;
+    renderPreview();
+    renderInspector();
+  }
+
+  function renderInspector() {
+    inspectorSlot.innerHTML = '';
+    inspectorSlot.dataset.psSelected = state.selectedRef || '';
+    if (!state.selectedRef) {
+      inspectorSlot.appendChild(el('p', { text: 'Select an element to edit.' },
+        { margin: '0', opacity: '0.7', fontSize: '0.9em' }));
+    }
   }
 
   function setHeadlineFont(family) {
@@ -262,6 +298,7 @@ export function mountEditor(rootEl, host) {
 
   // init
   renderPreview();
+  renderInspector();
   refreshGallery();
   rootEl.dataset.psReady = '1';
 }
