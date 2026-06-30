@@ -69,7 +69,15 @@ function buildDivider(theme) {
   });
   const rule = () => {
     const r = document.createElement('div');
-    setStyle(r, { height: '2px', width: '32%', background: theme.divider.color, opacity: '0.86' });
+    // Geometry is token-driven so retuning one theme's divider never leaks into
+    // another. Defaults reproduce the original 1px/130px/.75 line for any theme
+    // that doesn't override them (e.g. light_luxury).
+    setStyle(r, {
+      height: theme.divider.thickness || '1px',
+      width: theme.divider.lineWidth || '130px',
+      background: theme.divider.color,
+      opacity: theme.divider.lineOpacity || '.75',
+    });
     return r;
   };
   row.appendChild(rule());

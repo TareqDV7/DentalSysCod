@@ -45,6 +45,10 @@
       size: [stage.offsetWidth, stage.offsetHeight],
       bg: stage.style.background || stage.style.backgroundImage || '',
       hasDivider: !!stage.querySelector('[data-ps-divider]'),
+      dividerLineWidth: (() => {
+        const r = stage.querySelector('[data-ps-divider] > div');
+        return r ? r.style.width : null;
+      })(),
       pills: stage.querySelectorAll('[data-ps-pill]').length,
       hasWave: !!stage.querySelector('[data-ps-wave]'),
       wavePaths: stage.querySelectorAll('[data-ps-wave] path').length,

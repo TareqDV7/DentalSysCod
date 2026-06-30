@@ -65,6 +65,12 @@ def test_each_theme_renders_distinctly_with_screenshots():
         assert dark_info["pills"] == 2, dark_info
         assert dark_info["hasDivider"] is True, dark_info
         assert dark_info["hasWave"] is True, dark_info
+        # Regression guard: buildDivider geometry is token-driven, so retuning the
+        # flagship divider must NOT leak into light_luxury (the only other theme with
+        # a divider). dark_premium overrides to 32%; light_luxury keeps the original
+        # 130px line. (A boolean hasDivider check can't catch a geometry regression.)
+        assert dark_info["dividerLineWidth"] == "32%", dark_info
+        assert infos["light_luxury"]["dividerLineWidth"] == "130px", infos["light_luxury"]
         # the pill + wave treatments are flagship-only — the other three themes opt out
         for theme in ("light_luxury", "clinical_premium", "bold_editorial"):
             assert infos[theme]["pills"] == 0, (theme, infos[theme])

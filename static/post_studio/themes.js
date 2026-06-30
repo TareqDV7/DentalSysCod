@@ -31,7 +31,9 @@ export const THEMES = {
       circleBorder: '2px solid rgba(198,162,116,.86)',
       color: '#F5F5F0',
     },
-    divider: { enabled: true, color: 'rgba(198,162,116,.86)', icon: 'tooth' },
+    // thickness/lineWidth/lineOpacity override the render defaults; lineOpacity '1'
+    // lets the color's own .86 alpha carry the spec's "86%" (matches the tooth icon).
+    divider: { enabled: true, color: 'rgba(198,162,116,.86)', icon: 'tooth', thickness: '2px', lineWidth: '32%', lineOpacity: '1' },
     waveFooter: {
       enabled: true, color: '#C6A274',
       layers: [
