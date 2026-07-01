@@ -2,7 +2,7 @@
 // Single source of truth for the template_json shape. ESM so it loads in
 // node --test AND in the WebView (<script type="module">). Never mutates inputs.
 
-import { themeTokens } from './themes.js';
+import { themeTokens, themeLayout } from './themes.js';
 
 export const MAX_BLOCKS = 6;
 export const SIZES = ['square', 'portrait', 'story'];
@@ -40,6 +40,62 @@ function doctorElement(doctorName) {
     text: doctorName || '',
     font: 'Manrope', size: 34, weight: 700, color: '#c9a227', letterSpacing: 4,
   };
+}
+
+// Canvas pixel dims per size (mirrors render.EXPORT_PX; kept here so the DOM-free
+// layout engine has no dependency on render.js).
+export const CANVAS_DIMS = { square: [1080, 1080], portrait: [1080, 1350], story: [1080, 1920] };
+
+function parseAspect(card) {
+  // card.aspect like '250 / 320' (W / H); default square 1:1.
+  if (!card || !card.aspect) return { w: 1, h: 1 };
+  const parts = String(card.aspect).split('/').map((s) => parseFloat(s.trim()));
+  if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) return { w: parts[0], h: parts[1] };
+  return { w: 1, h: 1 };
+}
+
+// Returns a NEW comp with every positionable element's coordinates recomputed
+// from the active theme's layout tokens. Single centered row for all panel counts.
+export function seedLayout(comp) {
+  const next = structuredClone(comp);
+  const L = themeLayout(next.theme);
+  const [W, H] = CANVAS_DIMS[next.size] || CANVAS_DIMS.square;
+  const title = next.elements.find((e) => e.id === 'title');
+  const strip = next.elements.find((e) => e.id === 'strip');
+  const doctor = next.elements.find((e) => e.id === 'doctor');
+  if (title) title.pos = { x: 0.5, y: L.titleY };
+  if (doctor) doctor.pos = { x: 0.5, y: L.doctorY };
+  if (strip) {
+    const n = strip.blocks.length || 1;
+    const asp = parseAspect(themeTokens(next.theme).card);
+    const panelW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (n - 1) * L.gap) / n;
+    const panelH = L.panelH != null ? L.panelH : panelW * (W / H) * (asp.h / asp.w);
+    const rowW = n * panelW + (n - 1) * L.gap;
+    // When panelW is explicit (theme-authored), L.margin is the canonical startX
+    // and avoids floating-point drift from (1 - rowW) / 2.
+    const startX = L.panelW != null ? L.margin : (1 - rowW) / 2;
+    const panelY = L.panelRowY != null ? L.panelRowY : 0.5 - panelH / 2;
+    const pillY = L.pillRowY != null ? L.pillRowY : panelY + panelH + L.gap;
+    strip.panelW = panelW;
+    strip.panelH = panelH;
+    strip.gap = L.gap;
+    strip.blocks = strip.blocks.map((b, i) => ({
+      ...b,
+      panelPos: { x: startX + i * (panelW + L.gap), y: panelY },
+      pillPos: { x: startX + i * (panelW + L.gap), y: pillY },
+      pill: { width: (b.pill && b.pill.width) || 'single' },
+    }));
+  }
+  return next;
+}
+
+export function hasLayout(comp) {
+  const title = (comp.elements || []).find((e) => e.id === 'title');
+  return !!(title && title.pos);
+}
+
+export function ensureLayout(comp) {
+  return hasLayout(comp) ? comp : seedLayout(comp);
 }
 
 // Returns a NEW strip whose blocks are renumbered 1..n (badges follow order).
@@ -80,7 +136,7 @@ export function deserialize(json) {
   const c = typeof json === 'string' ? JSON.parse(json) : json;
   if (c.version !== 1) throw new Error(`unsupported version: ${c.version}`);
   if (!SIZES.includes(c.size)) throw new Error(`invalid size: ${c.size}`);
-  return structuredClone(c);
+  return ensureLayout(structuredClone(c));
 }
 
 // Returns a NEW comp with `themeName` applied: each element's typography fields
@@ -100,7 +156,7 @@ export function applyTheme(comp, themeName) {
       Object.assign(el, t.doctor);
     }
   }
-  return next;
+  return seedLayout(next);
 }
 
 // Returns a NEW composition with `mutate(blocks)` applied to a copy of the

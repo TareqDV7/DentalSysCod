@@ -178,3 +178,60 @@ test('setBlockLabel and setBlockPhoto are immutable per-block updates', () => {
   assert.equal(c2.elements.find((e) => e.id === 'strip').blocks[1].photo, 'data:image/png;base64,AAAA');
   assert.equal(c.elements.find((e) => e.id === 'strip').blocks[1].photo, null);
 });
+
+import {
+  seedLayout, ensureLayout, hasLayout, CANVAS_DIMS,
+} from '../../static/post_studio/composition.js';
+
+test('defaultComposition seeds positions for every element', () => {
+  const c = defaultComposition('before_after');   // dark_premium default
+  const title = c.elements.find((e) => e.id === 'title');
+  const strip = c.elements.find((e) => e.id === 'strip');
+  const doctor = c.elements.find((e) => e.id === 'doctor');
+  assert.ok(title.pos && strip.blocks[0].panelPos && strip.blocks[0].pillPos && doctor.pos);
+  assert.equal(hasLayout(c), true);
+});
+
+test('dark_premium seeds the exact go.png grid', () => {
+  // 4-panel dark_premium comp (quad_grid) -> the go.png panel row + pills
+  const c = defaultComposition('quad_grid');
+  const strip = c.elements.find((e) => e.id === 'strip');
+  const doctor = c.elements.find((e) => e.id === 'doctor');
+  assert.equal(strip.panelW, 250 / 1080);
+  assert.equal(strip.panelH, 320 / 1080);
+  assert.equal(strip.blocks[0].panelPos.y, 360 / 1080);
+  assert.equal(strip.blocks[0].panelPos.x, 16 / 1080);           // centered row: 4*250+3*16=1048 -> start 16
+  assert.equal(strip.blocks[1].panelPos.x, (16 + 266) / 1080);   // panelW+gap = 266
+  assert.equal(strip.blocks[0].pillPos.y, 708 / 1080);
+  assert.equal(doctor.pos.y, 920 / 1080);
+});
+
+test('a generic theme derives a centered, row-filling layout', () => {
+  const c = applyTheme(defaultComposition('before_after'), 'light_luxury');
+  const strip = c.elements.find((e) => e.id === 'strip');
+  // 2 panels, margin .06, gap .03 -> panelW = (1 - .12 - .03)/2 = .425
+  assert.ok(Math.abs(strip.panelW - 0.425) < 1e-9);
+  assert.ok(strip.blocks[0].panelPos.y > 0 && strip.blocks[0].panelPos.y < 0.5);  // centered
+});
+
+test('seedLayout is deterministic and preserves a double pill', () => {
+  let c = defaultComposition('before_after');
+  c = structuredClone(c);
+  c.elements.find((e) => e.id === 'strip').blocks[0].pill = { width: 'double' };
+  const s1 = seedLayout(c);
+  const s2 = seedLayout(s1);
+  assert.deepEqual(s1, s2);                                          // idempotent shape
+  assert.equal(s1.elements.find((e) => e.id === 'strip').blocks[0].pill.width, 'double');
+});
+
+test('ensureLayout only seeds when positions are absent', () => {
+  const raw = { version: 1, size: 'square', theme: 'dark_premium', elements: [
+    { id: 'title', type: 'title', headline: { text: 'X' }, subline: { text: 'Y' } },
+    { id: 'strip', type: 'photoStrip', blocks: [{ photo: null, badge: 1, label: 'A' }] },
+    { id: 'doctor', type: 'doctorName', text: 'DR. Z' },
+  ] };
+  assert.equal(hasLayout(raw), false);
+  const seeded = ensureLayout(raw);
+  assert.equal(hasLayout(seeded), true);
+  assert.equal(ensureLayout(seeded), seeded);                        // no re-seed (same reference)
+});
