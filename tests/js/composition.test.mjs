@@ -236,3 +236,32 @@ test('ensureLayout only seeds when positions are absent', () => {
   assert.equal(hasLayout(seeded), true);
   assert.equal(ensureLayout(seeded), seeded);                        // no re-seed (same reference)
 });
+
+import { getPosition, setPosition, nudgePosition } from '../../static/post_studio/composition.js';
+
+test('setPosition writes each ref field immutably and clamps to [0,1]', () => {
+  const c = defaultComposition('before_after');
+  const t = setPosition(c, 'title', { x: 0.4, y: 0.2 });
+  assert.deepEqual(t.elements.find((e) => e.id === 'title').pos, { x: 0.4, y: 0.2 });
+  assert.notDeepEqual(c.elements.find((e) => e.id === 'title').pos, { x: 0.4, y: 0.2 }); // input intact
+  const p = setPosition(c, 'panel:1', { x: 1.5, y: -0.3 });                              // clamps
+  assert.deepEqual(p.elements.find((e) => e.id === 'strip').blocks[1].panelPos, { x: 1, y: 0 });
+  const q = setPosition(c, 'pill:0', { x: 0.1, y: 0.7 });
+  assert.deepEqual(q.elements.find((e) => e.id === 'strip').blocks[0].pillPos, { x: 0.1, y: 0.7 });
+  assert.throws(() => setPosition(c, 'nope:9', { x: 0, y: 0 }));
+});
+
+test('nudgePosition adds a pixel delta as a canvas fraction', () => {
+  const c = setPosition(defaultComposition('before_after'), 'doctor', { x: 0.5, y: 0.5 });
+  const n = nudgePosition(c, 'doctor', 10, -20, [1080, 1080]);
+  const pos = n.elements.find((e) => e.id === 'doctor').pos;
+  assert.ok(Math.abs(pos.x - (0.5 + 10 / 1080)) < 1e-9);
+  assert.ok(Math.abs(pos.y - (0.5 - 20 / 1080)) < 1e-9);
+});
+
+test('getPosition reads the correct field per ref', () => {
+  const c = defaultComposition('before_after');
+  assert.deepEqual(getPosition(c, 'panel:0'),
+    c.elements.find((e) => e.id === 'strip').blocks[0].panelPos);
+  assert.deepEqual(getPosition(c, 'title'), c.elements.find((e) => e.id === 'title').pos);
+});

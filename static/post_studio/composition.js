@@ -273,3 +273,45 @@ export function setBlockLabel(comp, index, value) {
 export function setBlockPhoto(comp, index, photo) {
   return updateBlock(comp, index, { photo });
 }
+
+// Position helpers for immutable coordinate updates with clamping to [0,1].
+const clamp01 = (n) => Math.max(0, Math.min(1, Number(n)));
+
+// Which field holds coordinates for a given ref scheme.
+function posField(ref) {
+  if (ref.startsWith('panel:')) return 'panelPos';
+  if (ref.startsWith('pill:')) return 'pillPos';
+  return 'pos';
+}
+
+// Resolve a positionable target (element or block) and its field name from a ref.
+function posTarget(comp, ref) {
+  if (ref === 'title') return comp.elements.find((e) => e.id === 'title');
+  if (ref === 'doctor') return comp.elements.find((e) => e.id === 'doctor');
+  if (ref.startsWith('panel:') || ref.startsWith('pill:')) {
+    const strip = comp.elements.find((e) => e.id === 'strip');
+    const i = Number(ref.slice(ref.indexOf(':') + 1));
+    return strip && strip.blocks[i];
+  }
+  return null;
+}
+
+export function getPosition(comp, ref) {
+  const t = posTarget(comp, ref);
+  if (!t) return { x: 0, y: 0 };
+  return t[posField(ref)] || { x: 0, y: 0 };
+}
+
+export function setPosition(comp, ref, xy) {
+  const next = structuredClone(comp);
+  const t = posTarget(next, ref);
+  if (!t) throw new Error(`bad pos ref: ${ref}`);
+  t[posField(ref)] = { x: clamp01(xy.x), y: clamp01(xy.y) };
+  return next;
+}
+
+export function nudgePosition(comp, ref, dxPx, dyPx, canvas) {
+  const [W, H] = canvas || CANVAS_DIMS.square;
+  const cur = getPosition(comp, ref);
+  return setPosition(comp, ref, { x: cur.x + dxPx / W, y: cur.y + dyPx / H });
+}
