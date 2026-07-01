@@ -83,11 +83,22 @@ the box.
 - **The model is always fully explicit.** `render.js` becomes a single
   absolute-placement path (no flex/grid auto-centering). To preserve visual
   continuity, a deterministic `seedLayout(comp)` materializes every element's
-  `pos` from a formula that mirrors today's row/grid intent — so a fresh
-  non-flagship post looks the same as P4a until dragged. The navy_gold default
-  seeds the **exact reference coordinates** instead. Saved posts that predate
-  `pos` are seeded on `deserialize` (backward compatibility).
-- **Seed geometry (formula, non-flagship):** side margin `m = 0.06`; content
+  `pos` from a formula driven by the **active theme's layout tokens** (panel
+  size, row y-positions, margins, gaps, title/doctor y). A generic theme's
+  tokens mirror today's row/grid intent — so a fresh non-flagship post looks the
+  same as P4a until dragged. **`dark_premium`'s layout tokens carry go.png's
+  exact geometry**, so every dark_premium post lays out on the reference grid.
+  Saved posts that predate `pos` are seeded on `deserialize` (backward
+  compatibility).
+- **go.png fidelity = grid-as-theme-tokens (user decision 2026-07-01).** The
+  exact reference geometry lives as `dark_premium` layout tokens (below), applied
+  to whatever template is chosen. Every dark_premium post snaps to the go.png
+  grid; **literal go.png is reproduced by choosing the 4-panel template +
+  dark_premium + setting the spanning pill to `double`.** The out-of-box default
+  stays `before_after` (2 panels) on the same grid. A one-piece "clone go.png"
+  preset (needs a suppressed-pill state for the 4-panel/3-pill artwork) is *not*
+  in this slice.
+- **Seed geometry (formula, generic theme):** side margin `m = 0.06`; content
   width `cw = 1 − 2m`; for `n` panels in a row, `panelW = (cw − (n−1)·gap) / n`
   (fractional gap ≈ `0.03`). The theme card aspect (width:height, e.g. `250:320`)
   gives the fractional height `panelH = panelW · (canvasW / canvasH) · (aspH /
@@ -98,14 +109,14 @@ the box.
   center `(0.5, templateTitleY)`; doctor center `(0.5, templateDoctorY)`. Grid
   templates (>3 blocks) seed a 2-column arrangement analogously. The plan pins
   exact constants.
-- **Flagship exact override (navy_gold / dark_premium default):** all values as
+- **`dark_premium` layout tokens (exact go.png geometry):** all values as
   `px / 1080` since the flagship targets the 1080² square (see the navy_gold
-  spec §4): panels `250×320` at `y=360`, `panelX_i = (16 + i·266)/1080`; pills
-  `y=708`, single width `250/1080`, double width `516/1080`; **the spanning pair
-  is a double-width pill** (per the reference "[pill] [pill] [ pill spans 2 ]");
-  doctor center `y=920/1080`; title unit positioned so its stacked headline/
-  subline/divider reproduce the accepted navy_gold placement (center ≈
-  `172/1080`). The plan pins the full table.
+  spec §4): panel size `250×320` (`panelW=250/1080`, `panelH=320/1080`), panel
+  row `y=360/1080`, `panelX_i = (16 + i·266)/1080` centered for the panel count;
+  pill row `y=708/1080`, single width `250/1080`, double width `516/1080`;
+  doctor center `y=920/1080`; title unit center ≈ `172/1080` (its stacked
+  headline/subline/divider reproduce the accepted navy_gold placement); margin
+  `16/1080`, gap `16/1080`. The plan pins the full token table.
 
 ### What's draggable
 
@@ -153,14 +164,18 @@ carry their own positions: `blocks[i].panelPos` and `blocks[i].pillPos`
 
 ## Files
 
-- **`static/post_studio/composition.js`** — add `pos` to the element model;
-  `seedLayout(comp)` (deterministic position materialization, called from
-  `defaultComposition`/`applyTheme` and `deserialize` for legacy posts); immutable
+- **`static/post_studio/themes.js`** — add a `layout` token block to each theme
+  (generic default + `dark_premium`'s exact go.png geometry: panel size, row
+  y-positions, margins/gaps, title/doctor y). Consumed by `seedLayout`. Consistent
+  with the existing color/typography token pattern (single source of truth).
+- **`static/post_studio/composition.js`** — add `pos` to the element model +
+  shared `strip.panelW`/`strip.panelH` (fractional) + per-block `panelPos`/`pillPos`
+  + `pill.width` (`'single' | 'double'`, default `'single'`); `seedLayout(comp)`
+  (deterministic position materialization from the active theme's `layout` tokens,
+  called from `applyTheme` and `deserialize` for legacy posts); immutable
   `setPosition(comp, ref, {x,y})` and `nudgePosition(comp, ref, dxPx, dyPx, canvas)`
-  (clamped, `structuredClone`, never mutate input); a `pill.width`
-  (`'single' | 'double'`) property with the flagship default marking the spanning
-  pill `double`. `ref` extends the P4a scheme to address panels/pills
-  (`title`, `doctor`, `panel:N`, `pill:N`).
+  (clamped, `structuredClone`, never mutate input). `ref` extends the P4a scheme to
+  address panels/pills (`title`, `doctor`, `panel:N`, `pill:N`).
 - **`static/post_studio/render.js`** — replace the hardcoded strip flex/center
   with a single absolute-placement path driven by each element's `pos`; keep
   `data-ps-block="<i>"` on panels and add an indexed pill hook
