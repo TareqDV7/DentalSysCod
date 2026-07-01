@@ -63,6 +63,18 @@
         .filter((d) => /^[0-9]+$/.test(d.textContent.trim()) && d.style.borderRadius === '50%')
         .map((d) => d.textContent.trim()),
       hasDoctor: stage.textContent.includes('DR.'),
+      rects: (() => {
+        const s = stage.getBoundingClientRect();
+        const r = (n) => { if (!n) return null; const b = n.getBoundingClientRect();
+          return { left: Math.round(b.left - s.left), top: Math.round(b.top - s.top),
+                   w: Math.round(b.width), h: Math.round(b.height) }; };
+        return {
+          panels: Array.from(stage.querySelectorAll('[data-ps-block]')).map(r),
+          pills: Array.from(stage.querySelectorAll('[data-ps-pill-block]')).map(r),
+          doctor: r(stage.querySelector('[data-ps-el="doctor"]')),
+        };
+      })(),
+      pillWidths: Array.from(stage.querySelectorAll('[data-ps-pill]')).map((p) => Math.round(p.getBoundingClientRect().width)),
     };
   };
 

@@ -3,6 +3,7 @@
 // Theme tokens (bg, card, badge, divider, fonts) applied via themeTokens().
 
 import { themeTokens } from './themes.js';
+import { ensureLayout } from './composition.js';
 
 export const EXPORT_PX = {
   square: [1080, 1080],
@@ -123,12 +124,13 @@ function buildWaveFooter(theme) {
   return svg;
 }
 
-function buildTitle(el, theme) {
+function buildTitle(el, theme, W, H) {
+  const pos = el.pos || { x: 0.5, y: 0.1 };
   const box = document.createElement('div');
   setStyle(box, {
-    position: 'absolute', left: '0', right: '0',
-    top: `${(el.y ?? 0.10) * 100}%`, transform: 'translateY(-50%)',
-    textAlign: el.align || 'center', padding: '0 6%', boxSizing: 'border-box',
+    position: 'absolute', left: px(pos.x * W), top: px(pos.y * H),
+    transform: 'translate(-50%, -50%)', maxWidth: px(0.88 * W),
+    textAlign: el.align || 'center', boxSizing: 'border-box',
   });
   const head = document.createElement('div');
   head.setAttribute('data-ps-headline', '');
@@ -145,40 +147,44 @@ function buildTitle(el, theme) {
   return box;
 }
 
-function buildPill(b, el, theme) {
-  const pill = document.createElement('div');
-  pill.setAttribute('data-ps-pill', '');
-  setStyle(pill, {
-    display: 'flex', alignItems: 'center', gap: '10px',
-    width: '100%', height: '56px', padding: '0 16px', boxSizing: 'border-box',
-    borderRadius: '28px', border: theme.pill.border,
+function buildDoctor(el, theme, W, H) {
+  const t = { ...theme.doctor, ...el };
+  const pos = el.pos || { x: 0.5, y: 0.93 };
+  const box = document.createElement('div');
+  box.setAttribute('data-ps-el', 'doctor');
+  box.textContent = el.text || '';
+  setStyle(box, {
+    position: 'absolute', left: px(pos.x * W), top: px(pos.y * H),
+    transform: 'translate(-50%, -50%)', textAlign: el.align || 'center',
+    textTransform: 'uppercase',
+    fontFamily: fontStack(t.font, box.textContent),
+    color: t.color || '#c9a86a',
+    fontSize: px(t.size || 34),
+    fontWeight: String(t.weight || 700),
+    letterSpacing: px(t.letterSpacing || 4),
   });
-  const circle = document.createElement('div');
-  circle.textContent = String(b.badge || 0);
-  setStyle(circle, {
-    flex: '0 0 auto', width: '26px', height: '26px', borderRadius: '50%',
-    border: theme.pill.circleBorder, color: theme.label.color || '#F5F5F0',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontFamily: fontStack(theme.label.font, ''), fontWeight: '700', fontSize: '19px',
-  });
-  const text = document.createElement('div');
-  text.textContent = b.label || '';
-  setStyle(text, {
-    ...typoStyle({ ...theme.label, ...el.labelStyle, color: theme.pill.color || theme.label.color }, b.label),
-    flex: '1 1 auto', textAlign: 'left',
-  });
-  pill.appendChild(circle);
-  pill.appendChild(text);
-  return pill;
+  return box;
 }
 
-function buildCard(b, el, theme, index) {
+function buildStrip(el, theme, W, H) {
+  const wrap = document.createElement('div');
+  setStyle(wrap, { position: 'absolute', left: '0', top: '0', width: '100%', height: '100%' });
   const isPill = theme.label && theme.label.style === 'pill';
+  (el.blocks || []).forEach((b, i) => {
+    wrap.appendChild(buildPanel(b, el, theme, i, W, H, isPill));
+    if (isPill) wrap.appendChild(buildPill(b, el, theme, i, W, H));
+  });
+  return wrap;
+}
+
+function buildPanel(b, el, theme, index, W, H, isPill) {
+  const pos = b.panelPos || { x: 0, y: 0 };
   const card = document.createElement('div');
   card.setAttribute('data-ps-block', String(index));
   setStyle(card, {
-    position: 'relative', flex: '1 1 0', display: 'flex',
-    flexDirection: 'column', gap: '14px', alignItems: 'center', minWidth: '0',
+    position: 'absolute', left: px(pos.x * W), top: px(pos.y * H),
+    width: px((el.panelW || 0.2) * W),
+    display: 'flex', flexDirection: 'column', gap: '14px', alignItems: 'center',
   });
   const frame = document.createElement('div');
   frame.setAttribute('data-ps-frame', '');
@@ -190,8 +196,7 @@ function buildCard(b, el, theme, index) {
   });
   if (b.photo) {
     const img = document.createElement('img');
-    img.src = b.photo;
-    img.alt = '';
+    img.src = b.photo; img.alt = '';
     setStyle(img, { width: '100%', height: '100%', objectFit: 'cover', display: 'block' });
     frame.appendChild(img);
   }
@@ -208,9 +213,7 @@ function buildCard(b, el, theme, index) {
     frame.appendChild(badge);
   }
   card.appendChild(frame);
-  if (isPill) {
-    card.appendChild(buildPill(b, el, theme));
-  } else {
+  if (!isPill) {
     const label = document.createElement('div');
     label.textContent = b.label || '';
     setStyle(label, { ...typoStyle({ ...theme.label, ...el.labelStyle }, label.textContent), textAlign: 'center' });
@@ -219,40 +222,42 @@ function buildCard(b, el, theme, index) {
   return card;
 }
 
-function buildStrip(el, theme) {
-  const wrap = document.createElement('div');
-  const blocks = el.blocks || [];
-  const isGrid = el.layout === 'grid' || blocks.length > 3;
-  setStyle(wrap, {
-    position: 'absolute', left: '6%', right: '6%', top: '50%',
-    transform: 'translateY(-50%)',
-    display: isGrid ? 'grid' : 'flex',
-    gridTemplateColumns: isGrid ? 'repeat(2, minmax(0, 1fr))' : '',
-    gap: '32px', justifyItems: 'stretch', alignItems: 'stretch',
+function buildPill(b, el, theme, index, W, H) {
+  const pos = b.pillPos || { x: 0, y: 0 };
+  const single = (el.panelW || 0.2) * W;
+  const gapPx = (el.gap || 0) * W;
+  const isDouble = b.pill && b.pill.width === 'double';
+  const pillW = isDouble ? 2 * single + gapPx : single;
+  const pill = document.createElement('div');
+  pill.setAttribute('data-ps-pill', '');
+  pill.setAttribute('data-ps-pill-block', String(index));
+  setStyle(pill, {
+    position: 'absolute', left: px(pos.x * W), top: px(pos.y * H),
+    width: px(pillW), height: '56px',
+    display: 'flex', alignItems: 'center', gap: '10px', padding: '0 16px',
+    boxSizing: 'border-box', borderRadius: '28px', border: theme.pill.border,
   });
-  blocks.forEach((b, i) => wrap.appendChild(buildCard(b, el, theme, i)));
-  return wrap;
-}
-
-function buildDoctor(el, theme) {
-  const t = { ...theme.doctor, ...el };   // theme defaults; element values override
-  const box = document.createElement('div');
-  box.setAttribute('data-ps-el', 'doctor');
-  box.textContent = el.text || '';
-  setStyle(box, {
-    position: 'absolute', left: '0', right: '0',
-    top: `${(el.y ?? 0.93) * 100}%`, transform: 'translateY(-50%)',
-    textAlign: el.align || 'center', textTransform: 'uppercase',
-    fontFamily: fontStack(t.font, box.textContent),
-    color: t.color || '#c9a86a',
-    fontSize: px(t.size || 34),
-    fontWeight: String(t.weight || 700),
-    letterSpacing: px(t.letterSpacing || 4),
+  const circle = document.createElement('div');
+  circle.textContent = String(b.badge || 0);
+  setStyle(circle, {
+    flex: '0 0 auto', width: '26px', height: '26px', borderRadius: '50%',
+    border: theme.pill.circleBorder, color: theme.label.color || '#F5F5F0',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontFamily: fontStack(theme.label.font, ''), fontWeight: '700', fontSize: '19px',
   });
-  return box;
+  const text = document.createElement('div');
+  text.textContent = b.label || '';
+  setStyle(text, {
+    ...typoStyle({ ...theme.label, ...el.labelStyle, color: theme.pill.color || theme.label.color }, b.label),
+    flex: '1 1 auto', textAlign: isDouble ? 'center' : 'left',
+  });
+  pill.appendChild(circle);
+  pill.appendChild(text);
+  return pill;
 }
 
 export function renderComposition(comp) {
+  comp = ensureLayout(comp);
   const [w, h] = EXPORT_PX[comp.size] || EXPORT_PX.square;
   const theme = themeTokens(comp.theme);
   const stage = document.createElement('div');
@@ -263,9 +268,9 @@ export function renderComposition(comp) {
     fontFamily: 'system-ui, "Segoe UI", sans-serif',
   });
   for (const el of (comp.elements || [])) {
-    if (el.type === 'title') stage.appendChild(buildTitle(el, theme));
-    else if (el.type === 'photoStrip') stage.appendChild(buildStrip(el, theme));
-    else if (el.type === 'doctorName') stage.appendChild(buildDoctor(el, theme));
+    if (el.type === 'title') stage.appendChild(buildTitle(el, theme, w, h));
+    else if (el.type === 'photoStrip') stage.appendChild(buildStrip(el, theme, w, h));
+    else if (el.type === 'doctorName') stage.appendChild(buildDoctor(el, theme, w, h));
   }
   if (theme.waveFooter && theme.waveFooter.enabled) stage.appendChild(buildWaveFooter(theme));
   return stage;

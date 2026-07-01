@@ -237,3 +237,42 @@ def test_identity_hooks_and_pill_labelstyle_override():
     assert info["blockCount"] == 2, info
     # pill label honors the overridden shared labelStyle size (proves buildPill merge)
     assert info["pillLabelSize"] == "44px", info
+
+
+_QUAD = {
+    "version": 1, "size": "square", "theme": "dark_premium",
+    "elements": [
+        {"id": "title", "type": "title",
+         "headline": {"text": "Case"}, "subline": {"text": "Study"}},
+        {"id": "strip", "type": "photoStrip",
+         "blocks": [{"photo": None, "badge": 1, "label": "One"},
+                    {"photo": None, "badge": 2, "label": "Two"},
+                    {"photo": None, "badge": 3, "label": "Three", "pill": {"width": "double"}},
+                    {"photo": None, "badge": 4, "label": "Four"}]},
+        {"id": "doctor", "type": "doctorName", "text": "DR. WASFY BARZAQ"},
+    ],
+}
+
+
+def test_dark_premium_seeds_exact_gopng_grid():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        info = page.evaluate("(c) => window.__describe(c)", _QUAD)
+        browser.close()
+    panels = info["rects"]["panels"]
+    assert len(panels) == 4, info
+    # panel row at y=360, size 250x320, first panel x=16 (centered 4-up row)
+    assert abs(panels[0]["top"] - 360) <= 2, panels
+    assert abs(panels[0]["w"] - 250) <= 2 and abs(panels[0]["h"] - 320) <= 2, panels
+    assert abs(panels[0]["left"] - 16) <= 2, panels
+    assert abs(panels[1]["left"] - (16 + 266)) <= 2, panels
+    # pill row at y=708
+    assert abs(info["rects"]["pills"][0]["top"] - 708) <= 2, info["rects"]["pills"]
+    # doctor centered at y=920
+    d = info["rects"]["doctor"]
+    assert abs((d["top"] + d["h"] / 2) - 920) <= 4, d
+    # the 3rd pill is double-width (516), others single (250)
+    assert abs(info["pillWidths"][2] - 516) <= 2, info["pillWidths"]
+    assert abs(info["pillWidths"][0] - 250) <= 2, info["pillWidths"]
