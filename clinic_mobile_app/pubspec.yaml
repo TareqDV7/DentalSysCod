@@ -56,6 +56,7 @@ dependencies:
   provider: ^6.1.2
   pdf: ^3.11.1
   printing: ^5.13.2
+  share_plus: ^11.0.0
 
 dev_dependencies:
   flutter_test:

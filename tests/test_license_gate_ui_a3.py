@@ -27,7 +27,10 @@ def test_template_scripts_pass_node_check():
     # Guards the templates.py JS-escaping trap: a literal '\n' inside HTML_TEMPLATE
     # collapses to a real newline and breaks the inline script. node --check catches it.
     html = templates.HTML_TEMPLATE
-    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+    # Exclude type="module" blocks — those use ES import syntax which node --check
+    # only accepts when the file extension is .mjs; they are checked separately
+    # by tests/test_post_studio_ui.py::test_template_module_scripts_pass_node_check.
+    scripts = re.findall(r'<script(?![^>]*type=["\']module["\'])[^>]*>(.*?)</script>', html, re.DOTALL)
     assert scripts, 'no inline <script> blocks found'
     blob = '\n;\n'.join(scripts)
     with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as fh:

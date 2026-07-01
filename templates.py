@@ -2235,6 +2235,10 @@ HTML_TEMPLATE = '''
                 <span class="tab-icon"><svg class="ic"><use href="#i-gear"/></svg></span>
                 <span data-en="Settings" data-ar="الإعدادات">Settings</span>
             </button>
+            <button class="nav-tab" data-tab="poststudio" onclick="switchTab('poststudio', this)">
+                <span class="tab-icon"><svg class="ic"><use href="#i-image"/></svg></span>
+                <span data-en="Post Studio" data-ar="استوديو المنشورات">Post Studio</span>
+            </button>
         </div>
 
         <div class="content">
@@ -2998,6 +3002,28 @@ HTML_TEMPLATE = '''
                   </div>
                 </details>
 
+                <h3 class="settings-group" data-en="Branding" data-ar="العلامة التجارية">Branding</h3>
+                <div class="section-card" id="branding-card" style="max-width:560px;margin-bottom:18px;">
+                    <div class="form-group">
+                        <label data-i18n="ps_doctor_name">Doctor name</label>
+                        <input type="text" id="branding-doctor-name" autocomplete="off" placeholder="Dr. …">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="ps_branding_name_ar">Doctor name (Arabic)</label>
+                        <input type="text" id="branding-doctor-name-ar" autocomplete="off" dir="rtl" placeholder="د. …">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="ps_branding_default_theme">Default post theme</label>
+                        <select id="branding-default-theme">
+                            <option value="dark_premium" data-i18n="ps_theme_dark_premium">Dark Premium</option>
+                            <option value="clean_clinical" data-i18n="ps_theme_clean_clinical">Clean Clinical</option>
+                            <option value="soft_mint" data-i18n="ps_theme_soft_mint">Soft Mint</option>
+                            <option value="bold_editorial" data-i18n="ps_theme_bold_editorial">Bold Editorial</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" type="button" onclick="brandingSave()" data-i18n="ps_branding_save">Save branding</button>
+                </div>
+
                 <h3 class="settings-group" data-en="License" data-ar="الترخيص">License</h3>
                 <div class="section-card" id="license-card" style="max-width:460px;margin-bottom:18px;">
                     <div class="license-preview__grid" id="license-card-grid"></div>
@@ -3006,6 +3032,21 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
         </div>
+
+            <!-- Post Studio Tab -->
+            <div id="poststudio" class="tab-content">
+                <div class="screen-shell">
+                    <div class="section-card-header">
+                        <div>
+                            <h2 data-i18n="post_studio_title">Post Studio</h2>
+                            <p data-i18n="post_studio_subtitle">Create branded social-media posts from patient photos.</p>
+                        </div>
+                    </div>
+
+                    <div id="ps-editor-root" class="section-card" style="padding:20px;"></div>
+                </div>
+            </div>
+
         </div><!-- end app-body -->
     </div>
 
@@ -3287,6 +3328,7 @@ HTML_TEMPLATE = '''
             </div>
         </div>
     </div>
+
 
     <script>
         // CSRF: attach the per-session token to same-origin unsafe requests.
@@ -3754,7 +3796,43 @@ HTML_TEMPLATE = '''
                 name_ar: 'Arabic name',
                 plan_pick_hint: 'Enter a number, or a new plan name:',
                 plan_new_name: 'New plan name:',
-                plan: 'Plan'
+                plan: 'Plan',
+                post_studio_title: 'Post Studio',
+                post_studio_subtitle: 'Create branded social-media posts from patient photos.',
+                ps_photos: 'Photos',
+                ps_photos_hint: '(up to 4)',
+                ps_doctor_name: 'Doctor name',
+                ps_theme: 'Theme',
+                ps_theme_dark_premium: 'Dark Premium',
+                ps_theme_clean_clinical: 'Clean Clinical',
+                ps_theme_soft_mint: 'Soft Mint',
+                ps_theme_bold_editorial: 'Bold Editorial',
+                ps_size: 'Size',
+                ps_size_square: 'Square (1:1)',
+                ps_size_portrait: 'Portrait (4:5)',
+                ps_size_story: 'Story (9:16)',
+                ps_save: 'Save to Gallery',
+                ps_download: 'Download',
+                ps_preview_label: 'Preview',
+                ps_preview_hint: 'Add photos to generate a preview.',
+                ps_generating: 'Generating…',
+                ps_saved: 'Post saved to gallery',
+                ps_save_failed: 'Could not save post: ',
+                ps_preview_failed: 'Could not generate preview: ',
+                ps_too_many_photos: 'Maximum 4 photos allowed',
+                ps_label_photo: 'Label for photo',
+                ps_gallery: 'Saved Posts',
+                ps_gallery_empty: 'No saved posts yet.',
+                ps_delete: 'Delete',
+                ps_delete_confirm: 'Delete this post permanently?',
+                ps_delete_ok: 'Post deleted',
+                ps_delete_failed: 'Could not delete post',
+                ps_branding: 'Branding',
+                ps_branding_name_ar: 'Doctor name (Arabic)',
+                ps_branding_default_theme: 'Default post theme',
+                ps_branding_save: 'Save branding',
+                ps_branding_saved: 'Branding saved',
+                ps_branding_save_failed: 'Could not save branding: ',
             },
             ar: {
                 undo: 'تراجع',
@@ -4174,7 +4252,43 @@ HTML_TEMPLATE = '''
                 name_ar: 'الاسم بالعربية',
                 plan_pick_hint: 'أدخل رقمًا، أو اسم خطة جديدة:',
                 plan_new_name: 'اسم الخطة الجديدة:',
-                plan: 'خطة'
+                plan: 'خطة',
+                post_studio_title: 'استوديو المنشورات',
+                post_studio_subtitle: 'أنشئ منشورات مميزة لوسائل التواصل من صور المرضى.',
+                ps_photos: 'الصور',
+                ps_photos_hint: '(حتى 4)',
+                ps_doctor_name: 'اسم الطبيب',
+                ps_theme: 'الثيم',
+                ps_theme_dark_premium: 'داكن فاخر',
+                ps_theme_clean_clinical: 'طبي نظيف',
+                ps_theme_soft_mint: 'نعناعي ناعم',
+                ps_theme_bold_editorial: 'تحريري جريء',
+                ps_size: 'الحجم',
+                ps_size_square: 'مربع (1:1)',
+                ps_size_portrait: 'عمودي (4:5)',
+                ps_size_story: 'ستوري (9:16)',
+                ps_save: 'حفظ في المعرض',
+                ps_download: 'تحميل',
+                ps_preview_label: 'معاينة',
+                ps_preview_hint: 'أضف صوراً لإنشاء معاينة.',
+                ps_generating: 'جارٍ الإنشاء…',
+                ps_saved: 'تم حفظ المنشور في المعرض',
+                ps_save_failed: 'تعذّر حفظ المنشور: ',
+                ps_preview_failed: 'تعذّر إنشاء المعاينة: ',
+                ps_too_many_photos: 'الحد الأقصى 4 صور',
+                ps_label_photo: 'تسمية الصورة',
+                ps_gallery: 'المنشورات المحفوظة',
+                ps_gallery_empty: 'لا توجد منشورات محفوظة بعد.',
+                ps_delete: 'حذف',
+                ps_delete_confirm: 'حذف هذا المنشور نهائياً؟',
+                ps_delete_ok: 'تم حذف المنشور',
+                ps_delete_failed: 'تعذّر حذف المنشور',
+                ps_branding: 'العلامة التجارية',
+                ps_branding_name_ar: 'اسم الطبيب (بالعربية)',
+                ps_branding_default_theme: 'ثيم المنشور الافتراضي',
+                ps_branding_save: 'حفظ العلامة التجارية',
+                ps_branding_saved: 'تم حفظ العلامة التجارية',
+                ps_branding_save_failed: 'تعذّر حفظ العلامة التجارية: ',
             }
         };
 
@@ -4707,6 +4821,7 @@ HTML_TEMPLATE = '''
             else if (tabName === 'reports')      loadReportsSection();
             else if (tabName === 'financial')    loadFinancialSection();
             else if (tabName === 'support')      loadSupportSection();
+            else if (tabName === 'poststudio')   { if (window.PostStudioMount) window.PostStudioMount(); }
         }
 
         function switchReportsSubTab(tabName, clickedBtn = null, shouldLoad = true) {
@@ -5916,6 +6031,41 @@ HTML_TEMPLATE = '''
             loadBluetoothSyncSettings();
             bindBluetoothSyncControls();
             loadLicenseCard();
+            loadBranding();
+        }
+
+        async function loadBranding() {
+            try {
+                const data = await fetch('/api/branding').then(function(r) { return r.json(); });
+                const nameEl = document.getElementById('branding-doctor-name');
+                const nameArEl = document.getElementById('branding-doctor-name-ar');
+                const themeEl = document.getElementById('branding-default-theme');
+                if (nameEl) nameEl.value = data.doctor_name || '';
+                if (nameArEl) nameArEl.value = data.doctor_name_ar || '';
+                if (themeEl && data.default_theme) themeEl.value = data.default_theme;
+            } catch (_) {}
+        }
+
+        async function brandingSave() {
+            const nameEl = document.getElementById('branding-doctor-name');
+            const nameArEl = document.getElementById('branding-doctor-name-ar');
+            const themeEl = document.getElementById('branding-default-theme');
+            const payload = {
+                doctor_name: nameEl ? nameEl.value.trim() : '',
+                doctor_name_ar: nameArEl ? nameArEl.value.trim() : '',
+                default_theme: themeEl ? themeEl.value : 'clean_clinical'
+            };
+            try {
+                const res = await fetch('/api/branding', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error(res.status);
+                showToast(t('ps_branding_saved', 'Branding saved'), 'success');
+            } catch (err) {
+                showToast(t('ps_branding_save_failed', 'Could not save branding: ') + err, 'error');
+            }
         }
 
         async function loadReceivables() {
@@ -8719,6 +8869,20 @@ HTML_TEMPLATE = '''
         document.addEventListener('DOMContentLoaded', loadLicenseCard);
     </script>
 
+    <script type="module">
+        // Post Studio editor (ESM, served same-origin by /post_studio/<file>).
+        import { mountEditor } from '/post_studio/editor.js';
+        import { createDesktopHost } from '/post_studio/host.js';
+        let _psMounted = false;
+        window.PostStudioMount = function () {
+            if (_psMounted) return;
+            const root = document.getElementById('ps-editor-root');
+            if (!root) return;
+            mountEditor(root, createDesktopHost());
+            _psMounted = true;
+        };
+    </script>
+
     <!-- Doctor name edit popover: direct body child to escape backdrop-filter containment -->
     <div class="doctor-edit-popover" id="doctor-edit-popover" onclick="event.stopPropagation()">
         <div class="doctor-edit-popover-title" data-i18n="edit_doctor_name">Edit Doctor Name</div>
@@ -8735,6 +8899,10 @@ HTML_TEMPLATE = '''
             <button class="doctor-edit-cancel" onclick="toggleDoctorEditPopover()" data-i18n="cancel">Cancel</button>
         </div>
     </div>
+
+    <script>
+
+    </script>
 
 </body>
 </html>

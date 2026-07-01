@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Post Studio editor harness</title></head>
+<body>
+<div id="root"></div>
+<script type="module">
+  import { mountEditor } from '../editor.js';
+
+  const TINY = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEUlEQVR4nGNkYPjPgAcw4pMEAB0EAv9G2k0xAAAAAElFTkSuQmCC";
+  const saved = [];
+  // Fake in-memory host (no server, no OS file dialog).
+  const fakeHost = {
+    async pickPhotos() { return [{ id: 'a', dataUrl: TINY }, { id: 'b', dataUrl: TINY }]; },
+    async savePost(png, templateJson) {
+      const id = saved.length + 1;
+      saved.push({ id, title: 'T', theme: 'dark_premium', size: 'square',
+                   template_json: templateJson, created_at: '2026-06-28' });
+      window.__savedCount = saved.length;
+      window.__lastPng = png && png.size > 0;
+      return { success: true, id };
+    },
+    async listPosts() { return saved.slice().reverse(); },
+    async getPost(id) { return saved.find((p) => p.id === id); },
+    async deletePost(id) { const i = saved.findIndex((p) => p.id === id); if (i >= 0) saved.splice(i, 1); },
+  };
+  mountEditor(document.getElementById('root'), fakeHost);
+  window.__ready = true;
+</script>
+</body>
+</html>

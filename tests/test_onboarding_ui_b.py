@@ -19,7 +19,10 @@ def test_template_has_cloud_link_panel():
 @pytest.mark.skipif(shutil.which('node') is None, reason='node not installed')
 def test_template_scripts_pass_node_check():
     html = templates.HTML_TEMPLATE
-    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+    # Exclude type="module" blocks — those use ES import syntax which node --check
+    # only accepts when the file extension is .mjs; they are checked separately
+    # by tests/test_post_studio_ui.py::test_template_module_scripts_pass_node_check.
+    scripts = re.findall(r'<script(?![^>]*type=["\']module["\'])[^>]*>(.*?)</script>', html, re.DOTALL)
     blob = '\n;\n'.join(scripts)
     with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as fh:
         fh.write(blob); path = fh.name

@@ -8,6 +8,7 @@ Run: py dental_clinic.py (Windows) or python dental_clinic.py (Linux/Mac)
 import sys
 import subprocess
 import os
+import io
 import sqlite3
 import base64
 import binascii
@@ -70,6 +71,8 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from markupsafe import escape
+from PIL import Image
+from PIL import Image as _PILImage
 
 # Werkzeug 3's default generate_password_hash method is scrypt
 # (scrypt:32768:8:1$...). scrypt needs OpenSSL scrypt support plus a ~32 MB
@@ -1206,6 +1209,42 @@ def init_database():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS marketing_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            theme TEXT NOT NULL,
+            size TEXT NOT NULL,
+            doctor_name TEXT,
+            template_json TEXT,
+            file_name TEXT,
+            file_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Pre-release migration: rebuild old-shape DBs (those still carrying the
+    # Pillow-era photo_count/labels_json) to the new shape. No production data
+    # exists, so dropping the table is safe; this spares a manual DB delete on
+    # dev machines. New-shape DBs that merely lack template_json get the column.
+    _mp_cols = {row[1] for row in cursor.execute('PRAGMA table_info(marketing_posts)')}
+    if 'photo_count' in _mp_cols or 'labels_json' in _mp_cols:
+        cursor.execute('DROP TABLE marketing_posts')
+        cursor.execute('''
+            CREATE TABLE marketing_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                theme TEXT NOT NULL,
+                size TEXT NOT NULL,
+                doctor_name TEXT,
+                template_json TEXT,
+                file_name TEXT,
+                file_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    else:
+        ensure_table_column(cursor, 'marketing_posts', 'template_json', 'TEXT')
+
     # Add missing columns to existing tables
     ensure_table_column(cursor, 'patient_followups', 'is_deleted', 'INTEGER DEFAULT 0')
     ensure_table_column(cursor, 'patient_followups', 'entry_type', "TEXT DEFAULT 'new'")
@@ -1990,8 +2029,9 @@ _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/backup-file', '/api/bt/status'
                         '/api/data/clear-catalogs',
                         '/api/data/duplicate-patients', '/api/data/merge-patients',
                         '/api/data/import-patients/preview',
-                        '/api/data/import-patients/commit'}
-_AUTH_REQUIRED_PREFIXES = ('/invoice/',)
+                        '/api/data/import-patients/commit',
+                        '/api/branding', '/api/posts'}
+_AUTH_REQUIRED_PREFIXES = ('/invoice/', '/api/branding/', '/api/posts/')
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
 _MAINTENANCE = False
@@ -2015,6 +2055,16 @@ def _require_login_for_portal():
         return None
     path = request.path or '/'
     if path not in _AUTH_REQUIRED_EXACT and not path.startswith(_AUTH_REQUIRED_PREFIXES):
+        return None
+    # Editor ESM bundle is a public same-origin asset (served to the portal page).
+    if request.method == 'GET' and path.startswith('/post_studio/'):
+        return None
+    # Read-only marketing-post endpoints stay reachable for the offline-first
+    # mobile app, which authenticates with device/clinic-token headers rather
+    # than the portal session cookie — same open posture as /api/patients and
+    # /api/medical-images. Writes (POST/DELETE/preview) and branding stay gated.
+    if request.method == 'GET' and (path == '/api/posts'
+                                    or re.match(r'^/api/posts/\d+(/image)?$', path)):
         return None
     if session.get('uid'):
         return None
@@ -4675,6 +4725,179 @@ def support_messages():
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+_VALID_POST_THEMES = ('dark_premium', 'clean_clinical', 'soft_mint', 'bold_editorial')
+
+
+@app.route('/api/branding', methods=['GET', 'PUT'])
+def branding():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        out = {
+            'doctor_name': read_app_setting(cursor, 'doctor_name', '') or '',
+            'doctor_name_ar': read_app_setting(cursor, 'doctor_name_ar', '') or '',
+            'default_theme': read_app_setting(cursor, 'post_default_theme', 'clean_clinical'),
+        }
+        conn.close()
+        return jsonify(out)
+
+    data = request.get_json(silent=True) or {}
+    theme = data.get('default_theme')
+    if theme is not None and theme not in _VALID_POST_THEMES:
+        conn.close()
+        return jsonify({'error': 'Unknown theme'}), 400
+    for key, col in (('doctor_name', 'doctor_name'),
+                     ('doctor_name_ar', 'doctor_name_ar'),
+                     ('default_theme', 'post_default_theme')):
+        if key in data and data[key] is not None:
+            write_app_setting(cursor, col, str(data[key]))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+_MAX_POST_PHOTOS = 6
+_POST_PHOTO_MAX_EDGE = 2000  # px; downscale longer edge to keep files sane
+
+_POST_STUDIO_DIR = (_BUNDLE_DIR / 'static' / 'post_studio').resolve()
+_POST_STUDIO_MIME = {'.js': 'text/javascript', '.mjs': 'text/javascript',
+                     '.json': 'application/json', '.css': 'text/css'}
+
+
+@app.route('/post_studio/<path:filename>')
+def post_studio_asset(filename):
+    target = (_POST_STUDIO_DIR / filename).resolve()
+    # Path-traversal guard: the resolved target must stay inside the dir.
+    if _POST_STUDIO_DIR not in target.parents or not target.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    mimetype = _POST_STUDIO_MIME.get(target.suffix.lower(), 'application/octet-stream')
+    return send_file(str(target), mimetype=mimetype)
+
+
+@app.route('/api/posts/photos', methods=['POST'])
+def posts_photos():
+    files = [f for f in request.files.getlist('photo') if f and f.filename]
+    if not files:
+        return jsonify({'error': 'No photos uploaded'}), 400
+    if len(files) > _MAX_POST_PHOTOS:
+        return jsonify({'error': f'At most {_MAX_POST_PHOTOS} photos'}), 400
+    staging = UPLOAD_FOLDER / 'posts' / '_staging'
+    staging.mkdir(parents=True, exist_ok=True)
+    out = []
+    for f in files:
+        try:
+            img = _PILImage.open(f.stream)
+            img.verify()                 # reject corrupt/non-images
+            f.stream.seek(0)
+            img = _PILImage.open(f.stream).convert('RGB')
+        except Exception:                # noqa: BLE001
+            return jsonify({'error': 'One of the files is not a valid image'}), 400
+        longest = max(img.size)
+        if longest > _POST_PHOTO_MAX_EDGE:
+            scale = _POST_PHOTO_MAX_EDGE / longest
+            img = img.resize((max(1, round(img.width * scale)),
+                              max(1, round(img.height * scale))))
+        name = f'{uuid.uuid4().hex}.jpg'
+        img.save(staging / name, 'JPEG', quality=88)
+        out.append(f'posts/_staging/{name}')
+    return jsonify({'photos': out})
+
+
+@app.route('/api/posts', methods=['GET', 'POST'])
+def posts_collection():
+    import json as _json
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    if request.method == 'GET':
+        cur.execute('''SELECT id, title, theme, size, doctor_name, created_at
+                       FROM marketing_posts ORDER BY created_at DESC''')
+        rows = [{'id': r[0], 'title': r[1], 'theme': r[2], 'size': r[3],
+                 'doctor_name': r[4], 'created_at': r[5]} for r in cur.fetchall()]
+        conn.close()
+        return jsonify(rows)
+
+    # POST: persist the client-exported PNG + the editable spec.
+    png = request.files.get('image')
+    if not png or not png.filename:
+        conn.close()
+        return jsonify({'error': 'No exported image'}), 400
+    template_json = request.form.get('template_json') or ''
+    try:
+        _json.loads(template_json)
+    except (ValueError, TypeError):
+        conn.close()
+        return jsonify({'error': 'Invalid template_json'}), 400
+    theme = request.form.get('theme') or ''
+    size = request.form.get('size') or ''
+    title = request.form.get('title') or ''
+    doctor = read_app_setting(cur, 'doctor_name', '') or ''
+
+    cur.execute('''INSERT INTO marketing_posts (title, theme, size, doctor_name, template_json)
+                   VALUES (?,?,?,?,?)''', (title, theme, size, doctor, template_json))
+    new_id = cur.lastrowid
+    post_dir = UPLOAD_FOLDER / 'posts' / str(new_id)
+    post_dir.mkdir(parents=True, exist_ok=True)
+    dest = post_dir / f'{new_id}.png'
+    try:
+        png.save(str(dest))
+        # Move any staged source photos into the post's own dir (best-effort).
+        for ref in request.form.getlist('photos'):
+            src = UPLOAD_FOLDER / ref
+            if str(src).startswith(str(UPLOAD_FOLDER / 'posts' / '_staging')) and src.exists():
+                src.replace(post_dir / src.name)
+        cur.execute('UPDATE marketing_posts SET file_name=?, file_path=? WHERE id=?',
+                    (f'{new_id}.png', str(dest), new_id))
+        conn.commit()
+    except Exception:  # noqa: BLE001 — never leak the connection or persist a half-written row
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'Failed to save the post'}), 500
+    conn.close()
+    return jsonify({'success': True, 'id': new_id})
+
+
+@app.route('/api/posts/<int:post_id>', methods=['GET'])
+def posts_get(post_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute('''SELECT id, title, theme, size, doctor_name, template_json, created_at
+                   FROM marketing_posts WHERE id=?''', (post_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'id': row[0], 'title': row[1], 'theme': row[2], 'size': row[3],
+                    'doctor_name': row[4], 'template_json': row[5], 'created_at': row[6]})
+
+
+@app.route('/api/posts/<int:post_id>/image')
+def posts_image(post_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute('SELECT file_path FROM marketing_posts WHERE id=?', (post_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row or not row[0] or not Path(row[0]).exists():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(row[0], mimetype='image/png')
+
+
+@app.route('/api/posts/<int:post_id>', methods=['DELETE'])
+def posts_delete(post_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute('SELECT file_path FROM marketing_posts WHERE id=?', (post_id,))
+    row = cur.fetchone()
+    if row and row[0]:
+        post_dir = Path(row[0]).parent
+        if post_dir.name == str(post_id) and post_dir.exists():
+            shutil.rmtree(post_dir, ignore_errors=True)
+    cur.execute('DELETE FROM marketing_posts WHERE id=?', (post_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 
 @app.route('/api/visits', methods=['GET', 'POST'])
 def visits():

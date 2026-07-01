@@ -92,7 +92,8 @@ class AppStrings {
       'dismiss': 'تجاهل',
       'view_only_renew': 'وضع العرض فقط — اطلب من العيادة التجديد',
       'activate_on_desktop_title': 'فعِّل من تطبيق سطح المكتب أولاً',
-      'activate_on_desktop_body': 'افتح تطبيق العيادة على سطح المكتب وأكمل التفعيل.',
+      'activate_on_desktop_body':
+          'افتح تطبيق العيادة على سطح المكتب وأكمل التفعيل.',
       // ── Dashboard ──
       'total_patients': 'إجمالي المرضى',
       'todays_appointments': 'مواعيد اليوم',
@@ -218,6 +219,13 @@ class AppStrings {
       'note_optional': 'ملاحظة (اختياري)',
       'status_draft': 'مسودة',
       'status_active': 'نشطة',
+      // ── Posts (Post Studio) ──
+      'nav_posts': 'المنشورات',
+      'no_posts': 'لا توجد منشورات بعد.\nأنشئ منشورًا من تطبيق سطح المكتب.',
+      'post_theme_label': 'القالب: ',
+      'post_doctor_label': 'الطبيب: ',
+      'share': 'مشاركة',
+      'share_failed': 'تعذّرت المشاركة',
     },
     'en': {
       'cancel': 'Cancel',
@@ -319,7 +327,8 @@ class AppStrings {
       'total_visits': 'Total Visits',
       'revenue': 'Revenue',
       'recent_appointments': 'Recent Appointments',
-      'no_appointments_yet': 'No appointments yet.\nSchedule one to get started.',
+      'no_appointments_yet':
+          'No appointments yet.\nSchedule one to get started.',
       // ── Patients ──
       'search_patients_hint': 'Search by name, phone, or email…',
       'no_patients_found': 'No patients found',
@@ -438,7 +447,14 @@ class AppStrings {
       'note_optional': 'Note (optional)',
       'status_draft': 'Draft',
       'status_active': 'Active',
-    }
+      // ── Posts (Post Studio) ──
+      'nav_posts': 'Posts',
+      'no_posts': 'No posts yet.\nCreate one from the desktop app.',
+      'post_theme_label': 'Theme: ',
+      'post_doctor_label': 'Doctor: ',
+      'share': 'Share',
+      'share_failed': 'Could not share',
+    },
   };
 
   static String t(String key, {bool isArabic = false}) {
