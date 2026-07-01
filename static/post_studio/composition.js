@@ -71,9 +71,7 @@ export function seedLayout(comp) {
     const panelW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (n - 1) * L.gap) / n;
     const panelH = L.panelH != null ? L.panelH : panelW * (W / H) * (asp.h / asp.w);
     const rowW = n * panelW + (n - 1) * L.gap;
-    // When panelW is explicit (theme-authored), L.margin is the canonical startX
-    // and avoids floating-point drift from (1 - rowW) / 2.
-    const startX = L.panelW != null ? L.margin : (1 - rowW) / 2;
+    const startX = (1 - rowW) / 2;   // centre the row for any panel count
     const panelY = L.panelRowY != null ? L.panelRowY : 0.5 - panelH / 2;
     const pillY = L.pillRowY != null ? L.pillRowY : panelY + panelH + L.gap;
     strip.panelW = panelW;

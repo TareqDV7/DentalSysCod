@@ -200,8 +200,9 @@ test('dark_premium seeds the exact go.png grid', () => {
   assert.equal(strip.panelW, 250 / 1080);
   assert.equal(strip.panelH, 320 / 1080);
   assert.equal(strip.blocks[0].panelPos.y, 360 / 1080);
-  assert.equal(strip.blocks[0].panelPos.x, 16 / 1080);           // centered row: 4*250+3*16=1048 -> start 16
-  assert.equal(strip.blocks[1].panelPos.x, (16 + 266) / 1080);   // panelW+gap = 266
+  // centered row: 4*250+3*16=1048 -> start 16 (tolerance: (1-rowW)/2 drifts ~1e-17 from 16/1080)
+  assert.ok(Math.abs(strip.blocks[0].panelPos.x - 16 / 1080) < 1e-9);
+  assert.ok(Math.abs(strip.blocks[1].panelPos.x - (16 + 266) / 1080) < 1e-9);   // panelW+gap = 266
   assert.equal(strip.blocks[0].pillPos.y, 708 / 1080);
   assert.equal(doctor.pos.y, 920 / 1080);
 });
