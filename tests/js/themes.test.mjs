@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { THEMES, THEME_OPTIONS, themeTokens }
+import { THEMES, THEME_OPTIONS, themeTokens, themeLayout }
   from '../../static/post_studio/themes.js';
 
 const NAMES = ['dark_premium', 'light_luxury', 'clinical_premium', 'bold_editorial'];
@@ -85,4 +85,28 @@ test('themePalette skips non-hex values and dedupes per theme', async () => {
 test('themePalette falls back to dark_premium for unknown names', async () => {
   const { themePalette } = await import('../../static/post_studio/themes.js');
   assert.deepEqual(themePalette('nope'), themePalette('dark_premium'));
+});
+
+test('themeLayout returns the exact dark_premium go.png grid tokens', () => {
+  const L = themeLayout('dark_premium');
+  assert.equal(L.panelW, 250 / 1080);
+  assert.equal(L.panelH, 320 / 1080);
+  assert.equal(L.panelRowY, 360 / 1080);
+  assert.equal(L.pillRowY, 708 / 1080);
+  assert.equal(L.doctorY, 920 / 1080);
+  assert.equal(L.margin, 16 / 1080);
+  assert.equal(L.gap, 16 / 1080);
+});
+
+test('themeLayout gives a generic theme the derive-mode defaults', () => {
+  const L = themeLayout('light_luxury');
+  assert.equal(L.panelW, null);
+  assert.equal(L.panelH, null);
+  assert.equal(L.panelRowY, null);
+  assert.equal(L.margin, 0.06);
+  assert.equal(L.doctorY, 0.93);
+});
+
+test('themeLayout falls back to dark_premium for unknown names', () => {
+  assert.deepEqual(themeLayout('nope'), themeLayout('dark_premium'));
 });

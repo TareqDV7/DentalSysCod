@@ -43,6 +43,12 @@ export const THEMES = {
       ],
     },
     accent: '#C6A274',
+    layout: {
+      margin: 16 / 1080, gap: 16 / 1080,
+      panelW: 250 / 1080, panelH: 320 / 1080,
+      panelRowY: 360 / 1080, pillRowY: 708 / 1080,
+      titleY: 172 / 1080, doctorY: 920 / 1080,
+    },
   },
   // Warm cream, ink + gold, serif headline, soft-shadow white cards, thin gold badges.
   light_luxury: {
@@ -118,4 +124,19 @@ export function themePalette(name) {
     out.push(hex);
   }
   return out;
+}
+
+// Layout tokens drive seedLayout (composition.js). A theme may override any key;
+// null means "derive in seedLayout" (panelW→fill row, panelH→from card aspect,
+// panelRowY→center, pillRowY→below panel).
+export const DEFAULT_LAYOUT = {
+  margin: 0.06, gap: 0.03,
+  panelW: null, panelH: null,
+  panelRowY: null, pillRowY: null,
+  titleY: 0.10, doctorY: 0.93,
+};
+
+export function themeLayout(name) {
+  const t = THEMES[name] || THEMES.dark_premium;
+  return { ...DEFAULT_LAYOUT, ...(t.layout || {}) };
 }
