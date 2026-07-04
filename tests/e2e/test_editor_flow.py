@@ -225,3 +225,28 @@ def test_arrow_keys_nudge_selected_element():
             "n => n.getBoundingClientRect().top")
         assert after > before, (before, after)
         browser.close()
+
+
+def test_export_after_drag_is_untainted():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        page.click("[data-ps-action='add-photos']")
+        page.wait_for_function("() => document.querySelectorAll('[data-ps-stage] img').length === 2")
+        # drag a panel, then save -> the fake host still receives a non-empty PNG
+        box = page.eval_on_selector("[data-ps-block='0']",
+            "n => { const b = n.getBoundingClientRect();"
+            "  return { x: b.left + b.width/2, y: b.top + b.height/2 }; }")
+        page.mouse.move(box["x"], box["y"])
+        page.mouse.down()
+        page.mouse.move(box["x"] + 30, box["y"] + 20, steps=6)
+        page.mouse.up()
+        page.click("[data-ps-action='save']")
+        page.wait_for_function("() => window.__savedCount === 1")
+        assert page.evaluate("() => window.__lastPng") is True     # PNG produced => canvas not tainted
+        # no editor chrome leaked into the composition JSON
+        tj = page.evaluate("() => JSON.parse(window.__lastTemplateJson || 'null')")
+        browser.close()

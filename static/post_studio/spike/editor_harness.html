@@ -18,6 +18,7 @@
                    template_json: templateJson, created_at: '2026-06-28' });
       window.__savedCount = saved.length;
       window.__lastPng = png && png.size > 0;
+      window.__lastTemplateJson = templateJson;
       return { success: true, id };
     },
     async listPosts() { return saved.slice().reverse(); },

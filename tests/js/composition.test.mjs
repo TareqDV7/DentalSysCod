@@ -265,3 +265,14 @@ test('getPosition reads the correct field per ref', () => {
     c.elements.find((e) => e.id === 'strip').blocks[0].panelPos);
   assert.deepEqual(getPosition(c, 'title'), c.elements.find((e) => e.id === 'title').pos);
 });
+
+test('deserialize seeds a legacy post that has no positions', () => {
+  const legacy = JSON.stringify({ version: 1, size: 'square', theme: 'dark_premium', elements: [
+    { id: 'title', type: 'title', headline: { text: 'Old' }, subline: { text: 'Post' } },
+    { id: 'strip', type: 'photoStrip', blocks: [{ photo: null, badge: 1, label: 'A' }] },
+    { id: 'doctor', type: 'doctorName', text: 'DR. X' },
+  ] });
+  const c = deserialize(legacy);
+  assert.equal(hasLayout(c), true);
+  assert.ok(c.elements.find((e) => e.id === 'strip').blocks[0].panelPos);
+});
