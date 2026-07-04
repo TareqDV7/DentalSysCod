@@ -5,7 +5,7 @@
 import { TEMPLATES, MAX_BLOCKS, defaultComposition, serialize, deserialize, applyTheme,
          setText, setTypography, setBlockLabel, setBlockPhoto,
          addBlock, removeBlock, reorderBlock,
-         setPosition, getPosition } from './composition.js';
+         setPosition, getPosition, nudgePosition } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
 import { THEME_OPTIONS, themePalette, themeLayout } from './themes.js';
@@ -195,6 +195,7 @@ export function mountEditor(rootEl, host, opts = {}) {
              orig: getPosition(state.comp, refs.pos) };
     previewBox.setPointerCapture(e.pointerId);
     e.preventDefault();
+    rootEl.focus({ preventScroll: true });   // preventDefault blocks native focus; arrow-nudge needs it
   });
   previewBox.addEventListener('pointermove', (e) => {
     if (!drag || !drag.scale) return;
@@ -208,6 +209,29 @@ export function mountEditor(rootEl, host, opts = {}) {
   function endDrag() { if (drag) { drag = null; clearGuides(); renderInspector(); } }
   previewBox.addEventListener('pointerup', endDrag);
   previewBox.addEventListener('pointercancel', endDrag);
+
+  function posRefOf(selRef) {
+    if (!selRef) return null;
+    if (selRef.startsWith('title')) return 'title';
+    if (selRef === 'doctor') return 'doctor';
+    if (selRef.startsWith('block:')) return 'panel:' + selRef.slice(6);
+    return null;
+  }
+
+  const NUDGE = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  rootEl.setAttribute('tabindex', '0');
+  rootEl.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') return;  // don't hijack fields
+    const delta = NUDGE[e.key];
+    const posRef = posRefOf(state.selectedRef);
+    if (!delta || !posRef) return;
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    const canvas = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
+    state.comp = nudgePosition(state.comp, posRef, delta[0] * step, delta[1] * step, canvas);
+    renderPreview();
+  });
 
   layout.appendChild(controls);
   layout.appendChild(previewCol);

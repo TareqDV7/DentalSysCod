@@ -205,3 +205,23 @@ def test_drag_snaps_to_canvas_center_and_shows_guide():
         # guides cleared after drop
         assert page.query_selector("[data-ps-guide]") is None
         browser.close()
+
+
+def test_arrow_keys_nudge_selected_element():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        page.click("[data-ps-el='doctor']")   # select the doctor
+        before = page.eval_on_selector("[data-ps-el='doctor']",
+            "n => n.getBoundingClientRect().top")
+        # Shift+ArrowDown = 10 canvas-px -> 10 * (360/1080) ~= 3.3 display-px down
+        page.keyboard.down("Shift")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.up("Shift")
+        after = page.eval_on_selector("[data-ps-el='doctor']",
+            "n => n.getBoundingClientRect().top")
+        assert after > before, (before, after)
+        browser.close()
