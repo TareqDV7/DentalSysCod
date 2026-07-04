@@ -173,3 +173,35 @@ def test_drag_moves_an_element_and_updates_pos():
             "n => n.getBoundingClientRect().left")
         assert moved < box["x"] - 20, moved
         browser.close()
+
+
+def test_drag_snaps_to_canvas_center_and_shows_guide():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        stage = page.eval_on_selector("[data-ps-stage]",
+            "n => { const b = n.getBoundingClientRect();"
+            "  return { left: b.left, top: b.top, w: b.width, h: b.height }; }")
+        # grab the doctor, drag its centre a few px off the canvas centre-x
+        box = page.eval_on_selector("[data-ps-el='doctor']",
+            "n => { const b = n.getBoundingClientRect();"
+            "  return { x: b.left + b.width/2, y: b.top + b.height/2 }; }")
+        target_x = stage["left"] + stage["w"] / 2 + 3   # ~3px right of centre -> within snap threshold
+        page.mouse.move(box["x"], box["y"])
+        page.mouse.down()
+        page.mouse.move(target_x, box["y"], steps=8)
+        # a guide line is visible mid-drag ...
+        assert page.query_selector("[data-ps-guide]") is not None
+        page.mouse.up()
+        # ... and the doctor snapped to exact canvas centre-x (pos.x == 0.5)
+        cx = page.eval_on_selector("[data-ps-el='doctor']",
+            "n => { const b = n.getBoundingClientRect();"
+            "  const s = n.closest('[data-ps-stage]').getBoundingClientRect();"
+            "  return (b.left + b.width/2 - s.left) / s.width; }")
+        assert abs(cx - 0.5) < 0.01, cx
+        # guides cleared after drop
+        assert page.query_selector("[data-ps-guide]") is None
+        browser.close()

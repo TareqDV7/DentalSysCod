@@ -8,7 +8,7 @@ import { TEMPLATES, MAX_BLOCKS, defaultComposition, serialize, deserialize, appl
          setPosition, getPosition } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
-import { THEME_OPTIONS, themePalette } from './themes.js';
+import { THEME_OPTIONS, themePalette, themeLayout } from './themes.js';
 import { ensureFontsLoaded } from './fonts.js';
 import { buildTextInspector, buildBlockInspector, weightsFor } from './inspector.js';
 
@@ -134,6 +134,55 @@ export function mountEditor(rootEl, host, opts = {}) {
     return null;
   }
 
+  const SNAP_PX = 6;   // display-px threshold
+
+  // Fractional snap targets on each axis: canvas centre + margins + every OTHER
+  // positionable element's anchor. `exceptPos` is the dragged element's ref.
+  function snapTargets(exceptPos) {
+    const m = themeLayout(state.comp.theme).margin;
+    const xs = [0.5, m, 1 - m];
+    const ys = [0.5, m, 1 - m];
+    const title = state.comp.elements.find((e) => e.id === 'title');
+    const doctor = state.comp.elements.find((e) => e.id === 'doctor');
+    const strip = state.comp.elements.find((e) => e.id === 'strip');
+    const add = (ref, pt) => { if (ref !== exceptPos && pt) { xs.push(pt.x); ys.push(pt.y); } };
+    add('title', title && title.pos);
+    add('doctor', doctor && doctor.pos);
+    (strip ? strip.blocks : []).forEach((b, i) => {
+      add('panel:' + i, b.panelPos); add('pill:' + i, b.pillPos);
+    });
+    return { xs, ys };
+  }
+
+  function computeSnap(posRef, nx, ny) {
+    const [W] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
+    const thresh = SNAP_PX / (PREVIEW_W / W) / W;   // display-px -> fractional-of-width
+    const T = snapTargets(posRef);
+    let sx = nx, sy = ny; const lines = [];
+    for (const t of T.xs) if (Math.abs(nx - t) < thresh) { sx = t; lines.push({ axis: 'x', at: t }); break; }
+    for (const t of T.ys) if (Math.abs(ny - t) < thresh) { sy = t; lines.push({ axis: 'y', at: t }); break; }
+    return { x: sx, y: sy, lines };
+  }
+
+  function drawGuides(lines) {
+    const stage = previewBox._stage;
+    if (!stage) return;
+    stage.querySelectorAll('[data-ps-guide]').forEach((n) => n.remove());
+    for (const ln of lines) {
+      const g = el('div', { 'data-ps-guide': '' }, {
+        position: 'absolute', background: '#38bdf8', pointerEvents: 'none', zIndex: '99',
+        ...(ln.axis === 'x'
+          ? { left: (ln.at * 100) + '%', top: '0', width: '2px', height: '100%' }
+          : { top: (ln.at * 100) + '%', left: '0', height: '2px', width: '100%' }),
+      });
+      stage.appendChild(g);
+    }
+  }
+  function clearGuides() {
+    const stage = previewBox._stage;
+    if (stage) stage.querySelectorAll('[data-ps-guide]').forEach((n) => n.remove());
+  }
+
   // Pointer-drag controller — selects on pointerdown, moves on pointermove.
   let drag = null;
   previewBox.addEventListener('pointerdown', (e) => {
@@ -149,12 +198,14 @@ export function mountEditor(rootEl, host, opts = {}) {
   });
   previewBox.addEventListener('pointermove', (e) => {
     if (!drag || !drag.scale) return;
-    const nx = drag.orig.x + (e.clientX - drag.startX) / drag.scale / drag.W;
-    const ny = drag.orig.y + (e.clientY - drag.startY) / drag.scale / drag.H;
-    state.comp = setPosition(state.comp, drag.posRef, { x: nx, y: ny });
+    const rawX = drag.orig.x + (e.clientX - drag.startX) / drag.scale / drag.W;
+    const rawY = drag.orig.y + (e.clientY - drag.startY) / drag.scale / drag.H;
+    const snap = computeSnap(drag.posRef, rawX, rawY);
+    state.comp = setPosition(state.comp, drag.posRef, { x: snap.x, y: snap.y });
     renderPreview();
+    drawGuides(snap.lines);
   });
-  function endDrag() { if (drag) { drag = null; renderInspector(); } }
+  function endDrag() { if (drag) { drag = null; clearGuides(); renderInspector(); } }
   previewBox.addEventListener('pointerup', endDrag);
   previewBox.addEventListener('pointercancel', endDrag);
 
