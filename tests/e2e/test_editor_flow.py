@@ -251,3 +251,80 @@ def test_export_after_drag_is_untainted():
         tj_raw = page.evaluate("() => window.__lastTemplateJson || ''")
         assert "data-ps-guide" not in tj_raw and "outline" not in tj_raw, tj_raw
         browser.close()
+
+
+def test_resize_handle_br_grows_panel_others_unaffected():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-resize-handle='br']")
+        before0 = page.eval_on_selector("[data-ps-block='0']",
+            "n => { const b = n.getBoundingClientRect(); return { w: b.width, h: b.height }; }")
+        before1 = page.eval_on_selector("[data-ps-block='1']",
+            "n => { const b = n.getBoundingClientRect(); return { w: b.width, left: b.left }; }")
+        handle = page.eval_on_selector("[data-ps-resize-handle='br']",
+            "n => { const b = n.getBoundingClientRect(); return { x: b.left + b.width/2, y: b.top + b.height/2 }; }")
+        page.mouse.move(handle["x"], handle["y"])
+        page.mouse.down()
+        page.mouse.move(handle["x"] + 40, handle["y"] + 30, steps=6)
+        page.mouse.up()
+        after0 = page.eval_on_selector("[data-ps-block='0']",
+            "n => { const b = n.getBoundingClientRect(); return { w: b.width, h: b.height }; }")
+        after1 = page.eval_on_selector("[data-ps-block='1']",
+            "n => { const b = n.getBoundingClientRect(); return { w: b.width, left: b.left }; }")
+        assert after0["w"] > before0["w"] + 10, (before0, after0)
+        assert after0["h"] > before0["h"] + 5, (before0, after0)
+        assert abs(after1["w"] - before1["w"]) < 2, (before1, after1)
+        assert abs(after1["left"] - before1["left"]) < 2, (before1, after1)
+        browser.close()
+
+
+def test_resize_handle_tl_keeps_opposite_corner_anchored():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-resize-handle='tl']")
+        before_br = page.eval_on_selector("[data-ps-block='0']",
+            "n => { const b = n.getBoundingClientRect(); return { x: b.right, y: b.bottom }; }")
+        handle = page.eval_on_selector("[data-ps-resize-handle='tl']",
+            "n => { const b = n.getBoundingClientRect(); return { x: b.left + b.width/2, y: b.top + b.height/2 }; }")
+        page.mouse.move(handle["x"], handle["y"])
+        page.mouse.down()
+        page.mouse.move(handle["x"] - 20, handle["y"] - 15, steps=6)
+        page.mouse.up()
+        after_br = page.eval_on_selector("[data-ps-block='0']",
+            "n => { const b = n.getBoundingClientRect(); return { x: b.right, y: b.bottom }; }")
+        assert abs(after_br["x"] - before_br["x"]) < 2, (before_br, after_br)
+        assert abs(after_br["y"] - before_br["y"]) < 2, (before_br, after_br)
+        browser.close()
+
+
+def test_export_after_resize_is_untainted():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        page.click("[data-ps-action='add-photos']")
+        page.wait_for_function("() => document.querySelectorAll('[data-ps-stage] img').length === 2")
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-resize-handle='br']")
+        handle = page.eval_on_selector("[data-ps-resize-handle='br']",
+            "n => { const b = n.getBoundingClientRect(); return { x: b.left + b.width/2, y: b.top + b.height/2 }; }")
+        page.mouse.move(handle["x"], handle["y"])
+        page.mouse.down()
+        page.mouse.move(handle["x"] + 30, handle["y"] + 20, steps=6)
+        page.mouse.up()
+        page.click("[data-ps-action='save']")
+        page.wait_for_function("() => window.__savedCount === 1")
+        assert page.evaluate("() => window.__lastPng") is True
+        browser.close()

@@ -5,7 +5,7 @@
 import { TEMPLATES, MAX_BLOCKS, defaultComposition, serialize, deserialize, applyTheme,
          setText, setTypography, setBlockLabel, setBlockPhoto,
          addBlock, removeBlock, reorderBlock,
-         setPosition, getPosition, nudgePosition } from './composition.js';
+         setPosition, getPosition, nudgePosition, setSize } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
 import { THEME_OPTIONS, themePalette, themeLayout } from './themes.js';
@@ -185,7 +185,39 @@ export function mountEditor(rootEl, host, opts = {}) {
 
   // Pointer-drag controller — selects on pointerdown, moves on pointermove.
   let drag = null;
+  // Corner -> which side(s) move. dx/dy = 1 means that axis's ANCHOR position
+  // moves with the drag (so the OPPOSITE corner stays visually fixed);
+  // dw/dh = the sign the delta applies to width/height.
+  const RESIZE_ANCHOR = {
+    br: { dx: 0, dy: 0, dw: 1, dh: 1 },
+    bl: { dx: 1, dy: 0, dw: -1, dh: 1 },
+    tr: { dx: 0, dy: 1, dw: 1, dh: -1 },
+    tl: { dx: 1, dy: 1, dw: -1, dh: -1 },
+  };
+  let resize = null;
+  function startResize(corner, e) {
+    const i = Number(state.selectedRef.slice(6));
+    const strip = state.comp.elements.find((e2) => e2.id === 'strip');
+    const b = strip.blocks[i];
+    const [W, H] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
+    const scale = PREVIEW_W / W;
+    resize = {
+      index: i, corner, startX: e.clientX, startY: e.clientY, scale, W, H,
+      origW: b.panelW != null ? b.panelW : (strip.panelW || 0.2),
+      origH: b.panelH != null ? b.panelH : (strip.panelH || 0.2),
+      origPos: b.panelPos || { x: 0, y: 0 },
+    };
+    previewBox.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    e.stopPropagation();
+    rootEl.focus({ preventScroll: true });
+  }
   previewBox.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('[data-ps-resize-handle]');
+    if (handle && state.selectedRef && state.selectedRef.startsWith('block:')) {
+      startResize(handle.getAttribute('data-ps-resize-handle'), e);
+      return;
+    }
     const refs = refsFor(e.target);
     if (!refs) { selectRef(null); return; }
     selectRef(refs.sel);
@@ -195,9 +227,22 @@ export function mountEditor(rootEl, host, opts = {}) {
              orig: getPosition(state.comp, refs.pos) };
     previewBox.setPointerCapture(e.pointerId);
     e.preventDefault();
-    rootEl.focus({ preventScroll: true });   // preventDefault blocks native focus; arrow-nudge needs it
+    rootEl.focus({ preventScroll: true });
   });
   previewBox.addEventListener('pointermove', (e) => {
+    if (resize) {
+      const a = RESIZE_ANCHOR[resize.corner];
+      const dxFrac = (e.clientX - resize.startX) / resize.scale / resize.W;
+      const dyFrac = (e.clientY - resize.startY) / resize.scale / resize.H;
+      const w = resize.origW + a.dw * dxFrac;
+      const h = resize.origH + a.dh * dyFrac;
+      const nx = resize.origPos.x + a.dx * dxFrac;
+      const ny = resize.origPos.y + a.dy * dyFrac;
+      state.comp = setSize(state.comp, resize.index, { w, h });
+      state.comp = setPosition(state.comp, 'panel:' + resize.index, { x: nx, y: ny });
+      renderPreview();
+      return;
+    }
     if (!drag || !drag.scale) return;
     const rawX = drag.orig.x + (e.clientX - drag.startX) / drag.scale / drag.W;
     const rawY = drag.orig.y + (e.clientY - drag.startY) / drag.scale / drag.H;
@@ -206,7 +251,10 @@ export function mountEditor(rootEl, host, opts = {}) {
     renderPreview();
     drawGuides(snap.lines);
   });
-  function endDrag() { if (drag) { drag = null; clearGuides(); renderInspector(); } }
+  function endDrag() {
+    if (drag) { drag = null; clearGuides(); renderInspector(); }
+    if (resize) { resize = null; renderInspector(); }
+  }
   previewBox.addEventListener('pointerup', endDrag);
   previewBox.addEventListener('pointercancel', endDrag);
 
@@ -267,6 +315,21 @@ export function mountEditor(rootEl, host, opts = {}) {
         ? stage.querySelector(`[data-ps-block="${state.selectedRef.slice(6)}"]`)
         : stage.querySelector(`[data-ps-el="${state.selectedRef}"]`);
       if (sel) { sel.style.outline = '3px solid #38bdf8'; sel.style.outlineOffset = '4px'; }
+      if (sel && state.selectedRef.startsWith('block:')) {
+        const hs = 10 / scale;   // handle size in native-stage px so it looks ~10 screen-px
+        for (const corner of ['tl', 'tr', 'bl', 'br']) {
+          const handle = el('div', { 'data-ps-resize-handle': corner }, {
+            position: 'absolute', width: `${hs}px`, height: `${hs}px`,
+            background: '#38bdf8', border: '2px solid #fff', borderRadius: '2px',
+            cursor: (corner === 'tl' || corner === 'br') ? 'nwse-resize' : 'nesw-resize',
+            top: corner.startsWith('t') ? `${-hs / 2}px` : 'auto',
+            bottom: corner.startsWith('b') ? `${-hs / 2}px` : 'auto',
+            left: corner.endsWith('l') ? `${-hs / 2}px` : 'auto',
+            right: corner.endsWith('r') ? `${-hs / 2}px` : 'auto',
+          });
+          sel.appendChild(handle);
+        }
+      }
     }
   }
 
