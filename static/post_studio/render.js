@@ -171,26 +171,32 @@ function buildStrip(el, theme, W, H) {
   setStyle(wrap, { position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
     pointerEvents: 'none' });
   const isPill = theme.label && theme.label.style === 'pill';
-  (el.blocks || []).forEach((b, i) => {
+  const blocks = el.blocks || [];
+  blocks.forEach((b, i) => {
     wrap.appendChild(buildPanel(b, el, theme, i, W, H, isPill));
-    if (isPill) wrap.appendChild(buildPill(b, el, theme, i, W, H));
+    const prevDouble = blocks[i - 1] && blocks[i - 1].pill && blocks[i - 1].pill.width === 'double';
+    if (isPill && !prevDouble) {
+      wrap.appendChild(buildPill(b, el, blocks[i + 1], theme, i, W, H));
+    }
   });
   return wrap;
 }
 
 function buildPanel(b, el, theme, index, W, H, isPill) {
   const pos = b.panelPos || { x: 0, y: 0 };
+  const panelW = b.panelW != null ? b.panelW : (el.panelW || 0.2);
+  const panelH = b.panelH != null ? b.panelH : (el.panelH || 0.2);
   const card = document.createElement('div');
   card.setAttribute('data-ps-block', String(index));
   setStyle(card, {
     position: 'absolute', left: px(pos.x * W), top: px(pos.y * H),
-    width: px((el.panelW || 0.2) * W), pointerEvents: 'auto',
+    width: px(panelW * W), pointerEvents: 'auto',
     display: 'flex', flexDirection: 'column', gap: '14px', alignItems: 'center',
   });
   const frame = document.createElement('div');
   frame.setAttribute('data-ps-frame', '');
   setStyle(frame, {
-    position: 'relative', width: '100%', aspectRatio: theme.card.aspect || '1 / 1',
+    position: 'relative', width: '100%', height: px(panelH * H),
     borderRadius: px(theme.card.borderRadius), overflow: 'hidden',
     border: theme.card.border, boxShadow: theme.card.boxShadow,
     background: theme.card.background,
@@ -217,18 +223,25 @@ function buildPanel(b, el, theme, index, W, H, isPill) {
   if (!isPill) {
     const label = document.createElement('div');
     label.textContent = b.label || '';
-    setStyle(label, { ...typoStyle({ ...theme.label, ...el.labelStyle }, label.textContent), textAlign: 'center' });
+    setStyle(label, { ...typoStyle({ ...theme.label, ...b.labelStyle }, label.textContent), textAlign: 'center' });
     card.appendChild(label);
   }
   return card;
 }
 
-function buildPill(b, el, theme, index, W, H) {
+function buildPill(b, el, nextBlock, theme, index, W, H) {
   const pos = b.pillPos || { x: 0, y: 0 };
-  const single = (el.panelW || 0.2) * W;
-  const gapPx = (el.gap || 0) * W;
+  const ownW = (b.panelW != null ? b.panelW : (el.panelW || 0.2)) * W;
   const isDouble = b.pill && b.pill.width === 'double';
-  const pillW = isDouble ? 2 * single + gapPx : single;
+  let pillW = ownW;
+  if (isDouble && nextBlock) {
+    const nextPos = nextBlock.panelPos || { x: 0, y: 0 };
+    const nextW = (nextBlock.panelW != null ? nextBlock.panelW : (el.panelW || 0.2)) * W;
+    pillW = (nextPos.x * W + nextW) - (pos.x * W);
+  } else if (isDouble) {
+    const gapPx = (el.gap || 0) * W;
+    pillW = 2 * ownW + gapPx;   // no next block to measure against (shouldn't normally occur)
+  }
   const pill = document.createElement('div');
   pill.setAttribute('data-ps-pill', '');
   pill.setAttribute('data-ps-pill-block', String(index));
@@ -249,7 +262,7 @@ function buildPill(b, el, theme, index, W, H) {
   const text = document.createElement('div');
   text.textContent = b.label || '';
   setStyle(text, {
-    ...typoStyle({ ...theme.label, ...el.labelStyle, color: theme.pill.color || theme.label.color }, b.label),
+    ...typoStyle({ ...theme.label, ...b.labelStyle, color: theme.pill.color || theme.label.color }, b.label),
     flex: '1 1 auto', textAlign: isDouble ? 'center' : 'left',
   });
   pill.appendChild(circle);

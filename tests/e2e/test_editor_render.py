@@ -187,16 +187,20 @@ def test_pill_labels_for_dark_premium_and_corner_badge_for_clinical():
             "(c) => { window.__buildStage(c);"
             "  return Array.from(document.querySelectorAll('[data-ps-pill]'))"
             "    .map(p => p.textContent); }", _COMP)
-        # frame aspect comes from the theme token
+        # frame size comes from the theme's per-block panelW/panelH tokens (P4b-2:
+        # the frame's height is now an explicit px value, not a CSS aspect-ratio,
+        # so free-aspect resize can set width/height independently).
         page.evaluate("(c) => window.__buildStage(c)", _COMP)
-        aspect = page.evaluate(
-            "() => getComputedStyle(document.querySelector('[data-ps-frame]')).aspectRatio")
+        frame_rect = page.evaluate(
+            "() => { const r = document.querySelector('[data-ps-frame]').getBoundingClientRect();"
+            "  return { w: Math.round(r.width), h: Math.round(r.height) }; }")
         browser.close()
     assert dark["pills"] == 2, "dark_premium renders one pill per block"
     assert clinical["pills"] == 0, "clinical_premium keeps corner-badge labels (no pills)"
     assert dark["badges"] == ["1", "2"], "pill number circles still detected as numbered badges"
     assert all("Treatment" in t for t in dark_pills), dark_pills   # label text inside the pill
-    assert "320" in aspect and "250" in aspect, f"portrait panel aspect expected, got {aspect}"
+    assert abs(frame_rect["w"] - 250) <= 2 and abs(frame_rect["h"] - 320) <= 2, (
+        f"portrait panel size (250x320) expected, got {frame_rect}")
 
 
 def test_wave_footer_present_for_dark_premium_only():
@@ -213,17 +217,28 @@ def test_wave_footer_present_for_dark_premium_only():
 
 
 def test_identity_hooks_and_pill_labelstyle_override():
+    # P4b-2: labelStyle moved from the shared strip-level field to per-block
+    # (spec: "strip.labelStyle is dropped entirely once every block carries
+    # its own"). Supply pos/panelPos/panelW/panelH/labelStyle directly so
+    # ensureLayout treats this as already-seeded and doesn't overwrite the
+    # per-block override with the theme default.
     comp = {
         "version": 1, "size": "square", "theme": "dark_premium",
         "elements": [
-            {"id": "title", "type": "title", "x": 0.5, "y": 0.15, "align": "center",
+            {"id": "title", "type": "title", "pos": {"x": 0.5, "y": 0.15},
              "headline": {"text": "Root Canal"}, "subline": {"text": "Lower Molar"}},
-            {"id": "strip", "type": "photoStrip", "layout": "row",
-             "labelStyle": {"font": "Poppins", "size": 44, "weight": 400, "color": "#F5F5F0"},
-             "blocks": [{"photo": None, "badge": 1, "label": "Before"},
-                        {"photo": None, "badge": 2, "label": "After"}]},
-            {"id": "doctor", "type": "doctorName", "x": 0.5, "y": 0.93, "align": "center",
-             "text": "DR. WASFY"},
+            {"id": "strip", "type": "photoStrip", "panelW": 250 / 1080, "panelH": 320 / 1080, "gap": 16 / 1080,
+             "blocks": [
+                 {"photo": None, "badge": 1, "label": "Before",
+                  "panelPos": {"x": 16 / 1080, "y": 360 / 1080}, "panelW": 250 / 1080, "panelH": 320 / 1080,
+                  "pillPos": {"x": 16 / 1080, "y": 708 / 1080}, "pill": {"width": "single"},
+                  "labelStyle": {"font": "Poppins", "size": 44, "weight": 400, "color": "#F5F5F0"}},
+                 {"photo": None, "badge": 2, "label": "After",
+                  "panelPos": {"x": 300 / 1080, "y": 360 / 1080}, "panelW": 250 / 1080, "panelH": 320 / 1080,
+                  "pillPos": {"x": 300 / 1080, "y": 708 / 1080}, "pill": {"width": "single"},
+                  "labelStyle": {"font": "Poppins", "size": 44, "weight": 400, "color": "#F5F5F0"}},
+             ]},
+            {"id": "doctor", "type": "doctorName", "pos": {"x": 0.5, "y": 0.93}, "text": "DR. WASFY"},
         ],
     }
     with sync_playwright() as p:
@@ -235,7 +250,8 @@ def test_identity_hooks_and_pill_labelstyle_override():
         browser.close()
     assert set(info["psEls"]) == {"title.headline", "title.subline", "doctor"}, info
     assert info["blockCount"] == 2, info
-    # pill label honors the overridden shared labelStyle size (proves buildPill merge)
+    # pill label honors each block's own labelStyle override (proves buildPill
+    # reads b.labelStyle, the P4b-2 per-block model)
     assert info["pillLabelSize"] == "44px", info
 
 
@@ -276,3 +292,41 @@ def test_dark_premium_seeds_exact_gopng_grid():
     # the 3rd pill is double-width (516), others single (250)
     assert abs(info["pillWidths"][2] - 516) <= 2, info["pillWidths"]
     assert abs(info["pillWidths"][0] - 250) <= 2, info["pillWidths"]
+
+
+_UNEVEN = {
+    "version": 1, "size": "square", "theme": "dark_premium",
+    "elements": [
+        {"id": "title", "type": "title", "pos": {"x": 0.5, "y": 0.1},
+         "headline": {"text": "Case"}, "subline": {"text": "Study"}},
+        {"id": "strip", "type": "photoStrip", "panelW": 250 / 1080, "panelH": 320 / 1080, "gap": 16 / 1080,
+         "blocks": [
+             {"photo": None, "badge": 1, "label": "One",
+              "panelPos": {"x": 16 / 1080, "y": 360 / 1080}, "panelW": 200 / 1080, "panelH": 260 / 1080,
+              "pillPos": {"x": 16 / 1080, "y": 708 / 1080}, "pill": {"width": "double"},
+              "labelStyle": {"font": "Manrope", "size": 28, "weight": 600, "color": "#cfd8e3"}},
+             {"photo": None, "badge": 2, "label": "Two",
+              "panelPos": {"x": 300 / 1080, "y": 360 / 1080}, "panelW": 350 / 1080, "panelH": 400 / 1080,
+              "pillPos": {"x": 300 / 1080, "y": 708 / 1080}, "pill": {"width": "single"},
+              "labelStyle": {"font": "Manrope", "size": 28, "weight": 600, "color": "#cfd8e3"}},
+         ]},
+        {"id": "doctor", "type": "doctorName", "pos": {"x": 0.5, "y": 0.92}, "text": "DR. WASFY BARZAQ"},
+    ],
+}
+
+
+def test_per_block_size_renders_independently_and_double_pill_covers_next_edge():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        info = page.evaluate("(c) => window.__describe(c)", _UNEVEN)
+        browser.close()
+    panels = info["rects"]["panels"]
+    assert abs(panels[0]["w"] - 200) <= 2 and abs(panels[0]["h"] - 260) <= 2, panels
+    assert abs(panels[1]["w"] - 350) <= 2 and abs(panels[1]["h"] - 400) <= 2, panels
+    # only ONE pill rendered (block 1's own pill is suppressed by block 0's double)
+    assert len(info["rects"]["pills"]) == 1, info["rects"]["pills"]
+    # the double pill's right edge reaches panel 1's actual right edge (300+350=650)
+    pill0 = info["rects"]["pills"][0]
+    assert abs((pill0["left"] + pill0["w"]) - 650) <= 2, pill0
