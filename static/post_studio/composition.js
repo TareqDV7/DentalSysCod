@@ -360,3 +360,19 @@ export function nudgePosition(comp, ref, dxPx, dyPx, canvas) {
   const cur = getPosition(comp, ref);
   return setPosition(comp, ref, { x: cur.x + dxPx / W, y: cur.y + dyPx / H });
 }
+
+export const PANEL_SIZE_MIN = 40 / 1080;
+export const PANEL_H_MAX = 0.9;
+
+export function setSize(comp, index, wh) {
+  const next = structuredClone(comp);
+  const strip = next.elements.find((e) => e.id === 'strip');
+  if (!strip) throw new Error('composition has no photoStrip');
+  if (index < 0 || index >= strip.blocks.length) throw new Error(`bad index ${index}`);
+  const L = themeLayout(next.theme);
+  const maxW = 1 - 2 * L.margin;
+  const w = Math.max(PANEL_SIZE_MIN, Math.min(maxW, Number(wh.w)));
+  const h = Math.max(PANEL_SIZE_MIN, Math.min(PANEL_H_MAX, Number(wh.h)));
+  strip.blocks[index] = { ...strip.blocks[index], panelW: w, panelH: h };
+  return next;
+}

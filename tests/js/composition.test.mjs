@@ -339,3 +339,26 @@ test('seedBlockStyle never overwrites an existing per-block value', () => {
   assert.equal(strip2.blocks[1].panelH, 320 / 1080);
   assert.ok(strip2.blocks[1].labelStyle && strip2.blocks[1].labelStyle.font);
 });
+
+import { setSize } from '../../static/post_studio/composition.js';
+
+test('setSize writes panelW/panelH immutably and clamps both axes independently', () => {
+  const c = defaultComposition('before_after');
+  const next = setSize(c, 0, { w: 0.5, h: 0.4 });
+  const strip = next.elements.find((e) => e.id === 'strip');
+  assert.equal(strip.blocks[0].panelW, 0.5);
+  assert.equal(strip.blocks[0].panelH, 0.4);
+  // input untouched
+  const origStrip = c.elements.find((e) => e.id === 'strip');
+  assert.notEqual(origStrip.blocks[0].panelW, 0.5);
+  // clamps: too small
+  const tiny = setSize(c, 0, { w: 0.001, h: 0.001 });
+  assert.equal(tiny.elements.find((e) => e.id === 'strip').blocks[0].panelW, 40 / 1080);
+  assert.equal(tiny.elements.find((e) => e.id === 'strip').blocks[0].panelH, 40 / 1080);
+  // clamps: too large
+  const huge = setSize(c, 0, { w: 5, h: 5 });
+  const L = 16 / 1080;   // dark_premium margin token
+  assert.ok(Math.abs(huge.elements.find((e) => e.id === 'strip').blocks[0].panelW - (1 - 2 * L)) < 1e-9);
+  assert.equal(huge.elements.find((e) => e.id === 'strip').blocks[0].panelH, 0.9);
+  assert.throws(() => setSize(c, 9, { w: 0.3, h: 0.3 }));
+});
