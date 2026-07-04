@@ -271,11 +271,16 @@ function textRunTarget(comp, ref) {
   return null;
 }
 
-// A typography target — text runs plus the shared label style.
+// A typography target — text runs plus a block's own label style
+// (`ref = 'block:N.label'`). Initializes an empty labelStyle on the clone
+// if the block doesn't have one yet (e.g. a just-added block).
 function typoTarget(comp, ref) {
-  if (ref === 'strip.label') {
+  const m = /^block:(\d+)\.label$/.exec(ref);
+  if (m) {
     const strip = comp.elements.find((e) => e.id === 'strip');
-    return strip && strip.labelStyle;
+    const b = strip && strip.blocks[Number(m[1])];
+    if (b && !b.labelStyle) b.labelStyle = {};
+    return b && b.labelStyle;
   }
   return textRunTarget(comp, ref);
 }
@@ -374,5 +379,15 @@ export function setSize(comp, index, wh) {
   const w = Math.max(PANEL_SIZE_MIN, Math.min(maxW, Number(wh.w)));
   const h = Math.max(PANEL_SIZE_MIN, Math.min(PANEL_H_MAX, Number(wh.h)));
   strip.blocks[index] = { ...strip.blocks[index], panelW: w, panelH: h };
+  return next;
+}
+
+export function setPillWidth(comp, index, width) {
+  if (width !== 'single' && width !== 'double') throw new Error(`bad pill width: ${width}`);
+  const next = structuredClone(comp);
+  const strip = next.elements.find((e) => e.id === 'strip');
+  if (!strip) throw new Error('composition has no photoStrip');
+  if (index < 0 || index >= strip.blocks.length) throw new Error(`bad index ${index}`);
+  strip.blocks[index] = { ...strip.blocks[index], pill: { width } };
   return next;
 }

@@ -163,12 +163,6 @@ test('setTypography merges font/weight, clamps size, validates hex', () => {
   assert.equal(h2.color, '#abcdef');
 });
 
-test('setTypography on strip.label writes the shared labelStyle', () => {
-  const c = comp();
-  const out = setTypography(c, 'strip.label', { size: 44 });
-  assert.equal(out.elements.find((e) => e.id === 'strip').labelStyle.size, 44);
-});
-
 test('setBlockLabel and setBlockPhoto are immutable per-block updates', () => {
   const c = comp();
   const c1 = setBlockLabel(c, 0, 'Day 1');
@@ -361,4 +355,26 @@ test('setSize writes panelW/panelH immutably and clamps both axes independently'
   assert.ok(Math.abs(huge.elements.find((e) => e.id === 'strip').blocks[0].panelW - (1 - 2 * L)) < 1e-9);
   assert.equal(huge.elements.find((e) => e.id === 'strip').blocks[0].panelH, 0.9);
   assert.throws(() => setSize(c, 9, { w: 0.3, h: 0.3 }));
+});
+
+import { setPillWidth } from '../../static/post_studio/composition.js';
+
+test('setPillWidth writes single/double immutably and validates the enum', () => {
+  const c = defaultComposition('before_after');
+  const doubled = setPillWidth(c, 0, 'double');
+  assert.equal(doubled.elements.find((e) => e.id === 'strip').blocks[0].pill.width, 'double');
+  // input untouched
+  assert.equal(c.elements.find((e) => e.id === 'strip').blocks[0].pill.width, 'single');
+  assert.throws(() => setPillWidth(c, 0, 'triple'));
+  assert.throws(() => setPillWidth(c, 9, 'double'));
+});
+
+test('setTypography with a block:N.label ref edits only that block\'s labelStyle', () => {
+  const c = defaultComposition('before_after');
+  const next = setTypography(c, 'block:1.label', { size: 44, color: '#ff0000' });
+  const strip = next.elements.find((e) => e.id === 'strip');
+  assert.equal(strip.blocks[1].labelStyle.size, 44);
+  assert.equal(strip.blocks[1].labelStyle.color, '#ff0000');
+  // block 0 unaffected
+  assert.notEqual(strip.blocks[0].labelStyle.size, 44);
 });
