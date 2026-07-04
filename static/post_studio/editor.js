@@ -4,7 +4,8 @@
 // are P3. EN/AR via the STR map keyed off <html lang>.
 import { TEMPLATES, MAX_BLOCKS, defaultComposition, serialize, deserialize, applyTheme,
          setText, setTypography, setBlockLabel, setBlockPhoto,
-         addBlock, removeBlock, reorderBlock } from './composition.js';
+         addBlock, removeBlock, reorderBlock,
+         setPosition, getPosition } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
 import { THEME_OPTIONS, themePalette } from './themes.js';
@@ -113,14 +114,49 @@ export function mountEditor(rootEl, host, opts = {}) {
   const previewBox = el('div', { 'data-ps-preview': '' }, { position: 'relative', overflow: 'hidden' });
   previewCol.appendChild(previewBox);
 
-  // Delegated click-to-select on the on-screen stage (editor-only; never serialized).
-  previewBox.addEventListener('click', (e) => {
-    const elNode = e.target.closest('[data-ps-el]');
-    if (elNode) { selectRef(elNode.getAttribute('data-ps-el')); return; }
-    const blockNode = e.target.closest('[data-ps-block]');
-    if (blockNode) { selectRef('block:' + blockNode.getAttribute('data-ps-block')); return; }
-    selectRef(null);
+  // Map a hit element to { sel (inspector ref), pos (drag/position ref) }.
+  function refsFor(node) {
+    const elNode = node.closest('[data-ps-el]');
+    if (elNode) {
+      const v = elNode.getAttribute('data-ps-el');   // title.headline | title.subline | doctor
+      return { sel: v, pos: v === 'doctor' ? 'doctor' : 'title' };
+    }
+    const pillNode = node.closest('[data-ps-pill-block]');
+    if (pillNode) {
+      const i = pillNode.getAttribute('data-ps-pill-block');
+      return { sel: 'block:' + i, pos: 'pill:' + i };
+    }
+    const blockNode = node.closest('[data-ps-block]');
+    if (blockNode) {
+      const i = blockNode.getAttribute('data-ps-block');
+      return { sel: 'block:' + i, pos: 'panel:' + i };
+    }
+    return null;
+  }
+
+  // Pointer-drag controller — selects on pointerdown, moves on pointermove.
+  let drag = null;
+  previewBox.addEventListener('pointerdown', (e) => {
+    const refs = refsFor(e.target);
+    if (!refs) { selectRef(null); return; }
+    selectRef(refs.sel);
+    const [W, H] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
+    const scale = PREVIEW_W / W;
+    drag = { posRef: refs.pos, startX: e.clientX, startY: e.clientY, scale, W, H,
+             orig: getPosition(state.comp, refs.pos) };
+    previewBox.setPointerCapture(e.pointerId);
+    e.preventDefault();
   });
+  previewBox.addEventListener('pointermove', (e) => {
+    if (!drag || !drag.scale) return;
+    const nx = drag.orig.x + (e.clientX - drag.startX) / drag.scale / drag.W;
+    const ny = drag.orig.y + (e.clientY - drag.startY) / drag.scale / drag.H;
+    state.comp = setPosition(state.comp, drag.posRef, { x: nx, y: ny });
+    renderPreview();
+  });
+  function endDrag() { if (drag) { drag = null; renderInspector(); } }
+  previewBox.addEventListener('pointerup', endDrag);
+  previewBox.addEventListener('pointercancel', endDrag);
 
   layout.appendChild(controls);
   layout.appendChild(previewCol);

@@ -149,3 +149,27 @@ def test_export_after_edits_is_untainted():
         page.wait_for_function("() => window.__savedCount === 1")
         assert page.evaluate("() => window.__lastPng") is True   # PNG produced => canvas not tainted
         browser.close()
+
+
+def test_drag_moves_an_element_and_updates_pos():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        # measure the doctor element, drag it left by ~40 display px
+        box = page.eval_on_selector(
+            "[data-ps-el='doctor']",
+            "n => { const b = n.getBoundingClientRect();"
+            "  return { x: b.left + b.width/2, y: b.top + b.height/2 }; }")
+        page.mouse.move(box["x"], box["y"])
+        page.mouse.down()
+        page.mouse.move(box["x"] - 40, box["y"], steps=6)
+        page.mouse.up()
+        # the doctor element's centre moved left on the stage
+        moved = page.eval_on_selector(
+            "[data-ps-el='doctor']",
+            "n => n.getBoundingClientRect().left")
+        assert moved < box["x"] - 20, moved
+        browser.close()
