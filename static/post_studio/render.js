@@ -168,7 +168,8 @@ function buildDoctor(el, theme, W, H) {
 
 function buildStrip(el, theme, W, H) {
   const wrap = document.createElement('div');
-  setStyle(wrap, { position: 'absolute', left: '0', top: '0', width: '100%', height: '100%' });
+  setStyle(wrap, { position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
+    pointerEvents: 'none' });
   const isPill = theme.label && theme.label.style === 'pill';
   (el.blocks || []).forEach((b, i) => {
     wrap.appendChild(buildPanel(b, el, theme, i, W, H, isPill));
@@ -183,7 +184,7 @@ function buildPanel(b, el, theme, index, W, H, isPill) {
   card.setAttribute('data-ps-block', String(index));
   setStyle(card, {
     position: 'absolute', left: px(pos.x * W), top: px(pos.y * H),
-    width: px((el.panelW || 0.2) * W),
+    width: px((el.panelW || 0.2) * W), pointerEvents: 'auto',
     display: 'flex', flexDirection: 'column', gap: '14px', alignItems: 'center',
   });
   const frame = document.createElement('div');
@@ -233,7 +234,7 @@ function buildPill(b, el, theme, index, W, H) {
   pill.setAttribute('data-ps-pill-block', String(index));
   setStyle(pill, {
     position: 'absolute', left: px(pos.x * W), top: px(pos.y * H),
-    width: px(pillW), height: '56px',
+    width: px(pillW), height: '56px', pointerEvents: 'auto',
     display: 'flex', alignItems: 'center', gap: '10px', padding: '0 16px',
     boxSizing: 'border-box', borderRadius: '28px', border: theme.pill.border,
   });
