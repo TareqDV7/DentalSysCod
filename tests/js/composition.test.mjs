@@ -315,9 +315,10 @@ test('ensureLayout migrates a P4b-1-shape comp: fills per-block size/style, pres
   // dragged positions untouched
   assert.deepEqual(strip.blocks[0].panelPos, { x: 0.1, y: 0.4 });
   assert.deepEqual(strip.blocks[1].pillPos, { x: 0.45, y: 0.7 });
-  // per-block size/style filled in
+  // per-block size/style filled in to the exact dark_premium go.png grid token
   for (const b of strip.blocks) {
-    assert.ok(b.panelW != null && b.panelH != null);
+    assert.equal(b.panelW, 250 / 1080);
+    assert.equal(b.panelH, 320 / 1080);
     assert.ok(b.labelStyle && b.labelStyle.font);
   }
   assert.equal(hasBlockStyle(c), true);
@@ -327,8 +328,14 @@ test('seedBlockStyle never overwrites an existing per-block value', () => {
   const c = defaultComposition('before_after');
   const strip = c.elements.find((e) => e.id === 'strip');
   strip.blocks[0].panelW = 0.5;   // pretend block 0 was already resized
+  // pretend block 1 is genuinely P4b-1-era: no per-block size/style yet
+  delete strip.blocks[1].panelW;
+  delete strip.blocks[1].panelH;
+  delete strip.blocks[1].labelStyle;
   const seeded = seedBlockStyle(c);
   const strip2 = seeded.elements.find((e) => e.id === 'strip');
-  assert.equal(strip2.blocks[0].panelW, 0.5);
-  assert.equal(strip2.blocks[1].panelW, 250 / 1080);   // still gets the default
+  assert.equal(strip2.blocks[0].panelW, 0.5);          // existing value untouched
+  assert.equal(strip2.blocks[1].panelW, 250 / 1080);   // missing value filled to the exact default
+  assert.equal(strip2.blocks[1].panelH, 320 / 1080);
+  assert.ok(strip2.blocks[1].labelStyle && strip2.blocks[1].labelStyle.font);
 });

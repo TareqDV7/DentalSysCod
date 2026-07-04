@@ -54,6 +54,20 @@ function parseAspect(card) {
   return { w: 1, h: 1 };
 }
 
+// Computes a theme's default per-block panel size + label style — the single
+// source of truth for the panelW/panelH/labelStyle fallback formula, shared by
+// seedLayout (full re-layout) and seedBlockStyle (additive migration fill).
+// Read-only: never mutates `next`.
+function computeDefaultPanelSize(next, L, W, H) {
+  const strip = next.elements.find((e) => e.id === 'strip');
+  const n = (strip && strip.blocks.length) || 1;
+  const asp = parseAspect(themeTokens(next.theme).card);
+  const panelW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (n - 1) * L.gap) / n;
+  const panelH = L.panelH != null ? L.panelH : panelW * (W / H) * (asp.h / asp.w);
+  const labelStyle = themeTokens(next.theme).label;
+  return { panelW, panelH, labelStyle };
+}
+
 // Returns a NEW comp with every positionable element's coordinates recomputed
 // from the active theme's layout tokens. Single centered row for all panel counts.
 export function seedLayout(comp) {
@@ -67,14 +81,11 @@ export function seedLayout(comp) {
   if (doctor) doctor.pos = { x: 0.5, y: L.doctorY };
   if (strip) {
     const n = strip.blocks.length || 1;
-    const asp = parseAspect(themeTokens(next.theme).card);
-    const panelW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (n - 1) * L.gap) / n;
-    const panelH = L.panelH != null ? L.panelH : panelW * (W / H) * (asp.h / asp.w);
+    const { panelW, panelH, labelStyle } = computeDefaultPanelSize(next, L, W, H);
     const rowW = n * panelW + (n - 1) * L.gap;
     const startX = (1 - rowW) / 2;   // centre the row for any panel count
     const panelY = L.panelRowY != null ? L.panelRowY : 0.5 - panelH / 2;
     const pillY = L.pillRowY != null ? L.pillRowY : panelY + panelH + L.gap;
-    const labelStyle = themeTokens(next.theme).label;
     strip.panelW = panelW;
     strip.panelH = panelH;
     strip.gap = L.gap;
@@ -109,11 +120,7 @@ export function seedBlockStyle(comp) {
   if (!strip) return next;
   const L = themeLayout(next.theme);
   const [W, H] = CANVAS_DIMS[next.size] || CANVAS_DIMS.square;
-  const n = strip.blocks.length || 1;
-  const asp = parseAspect(themeTokens(next.theme).card);
-  const fallbackW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (n - 1) * L.gap) / n;
-  const fallbackH = L.panelH != null ? L.panelH : fallbackW * (W / H) * (asp.h / asp.w);
-  const labelStyle = themeTokens(next.theme).label;
+  const { panelW: fallbackW, panelH: fallbackH, labelStyle } = computeDefaultPanelSize(next, L, W, H);
   strip.blocks = strip.blocks.map((b) => ({
     ...b,
     panelW: b.panelW != null ? b.panelW : fallbackW,
