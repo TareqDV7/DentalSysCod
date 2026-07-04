@@ -74,6 +74,7 @@ export function seedLayout(comp) {
     const startX = (1 - rowW) / 2;   // centre the row for any panel count
     const panelY = L.panelRowY != null ? L.panelRowY : 0.5 - panelH / 2;
     const pillY = L.pillRowY != null ? L.pillRowY : panelY + panelH + L.gap;
+    const labelStyle = themeTokens(next.theme).label;
     strip.panelW = panelW;
     strip.panelH = panelH;
     strip.gap = L.gap;
@@ -82,8 +83,43 @@ export function seedLayout(comp) {
       panelPos: { x: startX + i * (panelW + L.gap), y: panelY },
       pillPos: { x: startX + i * (panelW + L.gap), y: pillY },
       pill: { width: (b.pill && b.pill.width) || 'single' },
+      panelW,
+      panelH,
+      labelStyle: { ...labelStyle },
     }));
   }
+  return next;
+}
+
+// True if every block already carries its own panelW/panelH/labelStyle (or
+// the strip has no blocks — nothing to migrate).
+export function hasBlockStyle(comp) {
+  const strip = (comp.elements || []).find((e) => e.id === 'strip');
+  if (!strip || !strip.blocks.length) return true;
+  return strip.blocks.every((b) => b.panelW != null && b.panelH != null && b.labelStyle);
+}
+
+// Additive-only migration: fills in ONLY missing per-block panelW/panelH/
+// labelStyle from the theme's tokens, WITHOUT touching any existing
+// pos/panelPos/pillPos. Used to upgrade a P4b-1-era saved post (which has
+// positions but no per-block size/style) without discarding dragged layout.
+export function seedBlockStyle(comp) {
+  const next = structuredClone(comp);
+  const strip = next.elements.find((e) => e.id === 'strip');
+  if (!strip) return next;
+  const L = themeLayout(next.theme);
+  const [W, H] = CANVAS_DIMS[next.size] || CANVAS_DIMS.square;
+  const n = strip.blocks.length || 1;
+  const asp = parseAspect(themeTokens(next.theme).card);
+  const fallbackW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (n - 1) * L.gap) / n;
+  const fallbackH = L.panelH != null ? L.panelH : fallbackW * (W / H) * (asp.h / asp.w);
+  const labelStyle = themeTokens(next.theme).label;
+  strip.blocks = strip.blocks.map((b) => ({
+    ...b,
+    panelW: b.panelW != null ? b.panelW : fallbackW,
+    panelH: b.panelH != null ? b.panelH : fallbackH,
+    labelStyle: b.labelStyle || { ...labelStyle },
+  }));
   return next;
 }
 
@@ -93,7 +129,9 @@ export function hasLayout(comp) {
 }
 
 export function ensureLayout(comp) {
-  return hasLayout(comp) ? comp : seedLayout(comp);
+  let next = hasLayout(comp) ? comp : seedLayout(comp);
+  next = hasBlockStyle(next) ? next : seedBlockStyle(next);
+  return next;
 }
 
 // Returns a NEW strip whose blocks are renumbered 1..n (badges follow order).
