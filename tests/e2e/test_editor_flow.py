@@ -247,6 +247,7 @@ def test_export_after_drag_is_untainted():
         page.click("[data-ps-action='save']")
         page.wait_for_function("() => window.__savedCount === 1")
         assert page.evaluate("() => window.__lastPng") is True     # PNG produced => canvas not tainted
-        # no editor chrome leaked into the composition JSON
-        tj = page.evaluate("() => JSON.parse(window.__lastTemplateJson || 'null')")
+        # no editor chrome (selection outline / snap guides) leaked into the composition JSON
+        tj_raw = page.evaluate("() => window.__lastTemplateJson || ''")
+        assert "data-ps-guide" not in tj_raw and "outline" not in tj_raw, tj_raw
         browser.close()

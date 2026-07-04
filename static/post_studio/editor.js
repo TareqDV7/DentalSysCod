@@ -220,7 +220,8 @@ export function mountEditor(rootEl, host, opts = {}) {
 
   const NUDGE = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   rootEl.setAttribute('tabindex', '0');
-  rootEl.addEventListener('keydown', (e) => {
+  if (rootEl._psKeyHandler) { rootEl.removeEventListener('keydown', rootEl._psKeyHandler); rootEl._psKeyHandler = null; }
+  const keyHandler = (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'select' || tag === 'textarea') return;  // don't hijack fields
     const delta = NUDGE[e.key];
@@ -231,7 +232,9 @@ export function mountEditor(rootEl, host, opts = {}) {
     const canvas = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
     state.comp = nudgePosition(state.comp, posRef, delta[0] * step, delta[1] * step, canvas);
     renderPreview();
-  });
+  };
+  rootEl.addEventListener('keydown', keyHandler);
+  rootEl._psKeyHandler = keyHandler;
 
   layout.appendChild(controls);
   layout.appendChild(previewCol);
