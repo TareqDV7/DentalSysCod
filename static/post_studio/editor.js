@@ -50,7 +50,7 @@ export function mountEditor(rootEl, host, opts = {}) {
   const lang = document.documentElement.lang === 'ar' ? 'ar' : 'en';
   const s = STR[lang];
   const tl = TPL_LABEL[lang];
-  const state = { comp: opts.initialComp || defaultComposition('before_after'), selectedRef: null };
+  const state = { comp: opts.initialComp || defaultComposition('before_after'), selectedRef: null, selectedPosRef: null };
 
   rootEl.innerHTML = '';
   const layout = el('div', {}, { display: 'flex', gap: '24px', flexWrap: 'wrap', alignItems: 'flex-start' });
@@ -220,7 +220,7 @@ export function mountEditor(rootEl, host, opts = {}) {
     }
     const refs = refsFor(e.target);
     if (!refs) { selectRef(null); return; }
-    selectRef(refs.sel);
+    selectRef(refs.sel, refs.pos);
     const [W, H] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
     const scale = PREVIEW_W / W;
     drag = { posRef: refs.pos, startX: e.clientX, startY: e.clientY, scale, W, H,
@@ -273,7 +273,7 @@ export function mountEditor(rootEl, host, opts = {}) {
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'select' || tag === 'textarea') return;  // don't hijack fields
     const delta = NUDGE[e.key];
-    const posRef = posRefOf(state.selectedRef);
+    const posRef = state.selectedPosRef;
     if (!delta || !posRef) return;
     e.preventDefault();
     const step = e.shiftKey ? 10 : 1;
@@ -333,8 +333,9 @@ export function mountEditor(rootEl, host, opts = {}) {
     }
   }
 
-  function selectRef(ref) {
+  function selectRef(ref, posRef) {
     state.selectedRef = ref;
+    state.selectedPosRef = ref ? (posRef || posRefOf(ref)) : null;
     renderPreview();
     renderInspector();
   }

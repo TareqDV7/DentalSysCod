@@ -227,6 +227,34 @@ def test_arrow_keys_nudge_selected_element():
         browser.close()
 
 
+def test_arrow_keys_nudge_selected_pill_moves_pill_not_panel():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        # default theme (dark_premium) renders pill labels alongside panels
+        page.wait_for_selector("[data-ps-pill-block='0']")
+        panel_before = page.eval_on_selector("[data-ps-block='0']",
+            "n => n.getBoundingClientRect().top")
+        pill_before = page.eval_on_selector("[data-ps-pill-block='0']",
+            "n => n.getBoundingClientRect().top")
+        page.click("[data-ps-pill-block='0']")
+        page.wait_for_function(
+            "() => document.querySelector('[data-ps-inspector]').dataset.psSelected === 'block:0'")
+        page.keyboard.down("Shift")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.up("Shift")
+        panel_after = page.eval_on_selector("[data-ps-block='0']",
+            "n => n.getBoundingClientRect().top")
+        pill_after = page.eval_on_selector("[data-ps-pill-block='0']",
+            "n => n.getBoundingClientRect().top")
+        assert pill_after > pill_before, (pill_before, pill_after)
+        assert panel_after == panel_before, (panel_before, panel_after)
+        browser.close()
+
+
 def test_export_after_drag_is_untainted():
     with sync_playwright() as p:
         browser = p.chromium.launch(args=_LAUNCH_ARGS)
