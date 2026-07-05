@@ -11,7 +11,7 @@ import 'patients_screen.dart';
 import 'appointments_screen.dart';
 import 'financial_screen.dart';
 import 'reports_screen.dart';
-import 'posts_screen.dart';
+import 'post_studio_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -31,7 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const AppointmentsScreen(),
     const FinancialScreen(),
     const ReportsScreen(),
-    const PostsScreen(),
+    const PostStudioScreen(),
   ];
 
   @override

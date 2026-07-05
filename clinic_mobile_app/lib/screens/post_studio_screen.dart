@@ -1,0 +1,72 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+
+import '../services/post_studio_bridge_handler.dart';
+import '../state/app_state.dart';
+import '../utils/app_strings.dart';
+
+/// Full editor parity with desktop's Post Studio: mounts the same client-side
+/// WYSIWYG editor bundle (static/post_studio/, synced into
+/// assets/post_studio/) inside a WebView, bridged to ClinicApi via
+/// [PostStudioBridgeHandler]. Replaces the old read-only PostsScreen.
+class PostStudioScreen extends StatefulWidget {
+  const PostStudioScreen({super.key});
+
+  @override
+  State<PostStudioScreen> createState() => _PostStudioScreenState();
+}
+
+class _PostStudioScreenState extends State<PostStudioScreen> {
+  late final WebViewController _controller;
+  bool _loadFailed = false;
+  bool _initialized = false;
+  String? _trustedOrigin;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    _initialized = true;
+    final handler = PostStudioBridgeHandler(
+      api: context.read<AppState>().api,
+      runJavaScript: (script) => _controller.runJavaScript(script),
+    );
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(NavigationDelegate(
+        onNavigationRequest: _onNavigationRequest,
+        onWebResourceError: (_) {
+          if (mounted) setState(() => _loadFailed = true);
+        },
+      ))
+      ..addJavaScriptChannel(
+        'PostStudioBridge',
+        onMessageReceived: (message) => unawaited(handler.onMessage(message.message)),
+      )
+      ..loadFlutterAsset('assets/post_studio/mobile_editor.html');
+  }
+
+  // Never load arbitrary URLs — only navigations within the bundled asset's
+  // own origin (established on first load) are allowed.
+  NavigationDecision _onNavigationRequest(NavigationRequest request) {
+    final uri = Uri.tryParse(request.url);
+    if (uri == null) return NavigationDecision.prevent;
+    final origin = '${uri.scheme}://${uri.authority}';
+    _trustedOrigin ??= origin;
+    return origin == _trustedOrigin ? NavigationDecision.navigate : NavigationDecision.prevent;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ar = context.watch<AppState>().isArabic;
+    if (_loadFailed) {
+      return Scaffold(
+        body: Center(child: Text(AppStrings.t('failed_to_load_data', isArabic: ar))),
+      );
+    }
+    return Scaffold(body: WebViewWidget(controller: _controller));
+  }
+}

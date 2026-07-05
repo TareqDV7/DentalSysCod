@@ -57,6 +57,7 @@ dependencies:
   pdf: ^3.11.1
   printing: ^5.13.2
   share_plus: ^11.0.0
+  webview_flutter: ^4.14.0
 
 dev_dependencies:
   flutter_test:
@@ -98,6 +99,7 @@ flutter:
   # Bundled so the printable patient statement can embed the clinic logo.
   assets:
     - assets/icon/dentacare_icon.png
+    - assets/post_studio/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
