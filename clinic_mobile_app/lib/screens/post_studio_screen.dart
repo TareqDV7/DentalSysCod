@@ -23,7 +23,7 @@ class _PostStudioScreenState extends State<PostStudioScreen> {
   late final WebViewController _controller;
   bool _loadFailed = false;
   bool _initialized = false;
-  String? _trustedOrigin;
+  bool _initialLoadComplete = false;
 
   @override
   void didChangeDependencies() {
@@ -37,6 +37,7 @@ class _PostStudioScreenState extends State<PostStudioScreen> {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(NavigationDelegate(
+        onPageFinished: (_) => _initialLoadComplete = true,
         onNavigationRequest: _onNavigationRequest,
         onWebResourceError: (_) {
           if (mounted) setState(() => _loadFailed = true);
@@ -49,14 +50,15 @@ class _PostStudioScreenState extends State<PostStudioScreen> {
       ..loadFlutterAsset('assets/post_studio/mobile_editor.html');
   }
 
-  // Never load arbitrary URLs — only navigations within the bundled asset's
-  // own origin (established on first load) are allowed.
+  // Never load arbitrary URLs. The bundled editor is a closed SPA that never
+  // navigates after its own initial load (no links, no window.open, no
+  // location changes) — so only navigations observed before that first load
+  // finishes can possibly be part of it; anything after is never legitimate,
+  // on every platform, regardless of whether onNavigationRequest happens to
+  // fire for the initial load itself.
   NavigationDecision _onNavigationRequest(NavigationRequest request) {
-    final uri = Uri.tryParse(request.url);
-    if (uri == null) return NavigationDecision.prevent;
-    final origin = '${uri.scheme}://${uri.authority}';
-    _trustedOrigin ??= origin;
-    return origin == _trustedOrigin ? NavigationDecision.navigate : NavigationDecision.prevent;
+    if (_initialLoadComplete) return NavigationDecision.prevent;
+    return NavigationDecision.navigate;
   }
 
   @override
