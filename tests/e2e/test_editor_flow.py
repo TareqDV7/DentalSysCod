@@ -328,3 +328,40 @@ def test_export_after_resize_is_untainted():
         page.wait_for_function("() => window.__savedCount === 1")
         assert page.evaluate("() => window.__lastPng") is True
         browser.close()
+
+
+def test_double_width_toggle_hides_and_restores_next_pill():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        assert page.query_selector("[data-ps-pill-block='1']") is not None
+        page.click("[data-ps-block='0']")
+        page.click("[data-ps-action='toggle-double']")
+        assert page.query_selector("[data-ps-pill-block='1']") is None
+        page.click("[data-ps-action='toggle-double']")
+        assert page.query_selector("[data-ps-pill-block='1']") is not None
+        browser.close()
+
+
+def test_per_block_label_typography_is_independent():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri())
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        # dark_premium is a pill-style theme -> the label text lives in the
+        # SIBLING pill ([data-ps-pill-block]), not inside the panel card.
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-inspector-block] [data-ps-field='size']")
+        page.eval_on_selector("[data-ps-inspector-block] [data-ps-field='size']",
+            "n => { n.value = '60'; n.dispatchEvent(new Event('input', { bubbles: true })); }")
+        size0 = page.eval_on_selector("[data-ps-pill-block='0']",
+            "n => parseFloat(getComputedStyle(n.lastElementChild).fontSize)")
+        size1 = page.eval_on_selector("[data-ps-pill-block='1']",
+            "n => parseFloat(getComputedStyle(n.lastElementChild).fontSize)")
+        assert size0 != size1, (size0, size1)
+        browser.close()

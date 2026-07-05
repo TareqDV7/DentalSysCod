@@ -5,7 +5,7 @@
 import { TEMPLATES, MAX_BLOCKS, defaultComposition, serialize, deserialize, applyTheme,
          setText, setTypography, setBlockLabel, setBlockPhoto,
          addBlock, removeBlock, reorderBlock,
-         setPosition, getPosition, nudgePosition, setSize } from './composition.js';
+         setPosition, getPosition, nudgePosition, setSize, setPillWidth } from './composition.js';
 import { renderComposition, EXPORT_PX } from './render.js';
 import { rasterizeToPngBlob } from './rasterize.js';
 import { THEME_OPTIONS, themePalette, themeLayout } from './themes.js';
@@ -361,15 +361,21 @@ export function mountEditor(rootEl, host, opts = {}) {
       const i = Number(ref.slice(6));
       const strip = state.comp.elements.find((e) => e.id === 'strip');
       if (!strip || i < 0 || i >= strip.blocks.length) { state.selectedRef = null; inspectorSlot.dataset.psSelected = ''; return; }
-      inspectorSlot.appendChild(buildBlockInspector(strip.blocks[i], strip.labelStyle, {
+      inspectorSlot.appendChild(buildBlockInspector(strip.blocks[i], {
         lang, palette: themePalette(state.comp.theme),
         index: i, count: strip.blocks.length, maxBlocks: MAX_BLOCKS,
         onLabel: (v) => { state.comp = setBlockLabel(state.comp, i, v); renderPreview(); },
-        onLabelTypography: (patch) => { state.comp = setTypography(state.comp, 'strip.label', patch); renderPreview(); },
+        onLabelTypography: (patch) => { state.comp = setTypography(state.comp, `block:${i}.label`, patch); renderPreview(); },
         onLabelFont: (family) => {
+          const cur = strip.blocks[i].labelStyle || {};
           const allowed = weightsFor(family);
-          const w = allowed.includes(strip.labelStyle.weight) ? strip.labelStyle.weight : allowed[0];
-          state.comp = setTypography(state.comp, 'strip.label', { font: family, weight: w });
+          const w = allowed.includes(cur.weight) ? cur.weight : allowed[0];
+          state.comp = setTypography(state.comp, `block:${i}.label`, { font: family, weight: w });
+          renderPreview(); renderInspector();
+        },
+        onToggleDouble: () => {
+          const cur = strip.blocks[i].pill && strip.blocks[i].pill.width === 'double';
+          state.comp = setPillWidth(state.comp, i, cur ? 'single' : 'double');
           renderPreview(); renderInspector();
         },
         onReplace: async () => {

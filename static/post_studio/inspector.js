@@ -99,11 +99,11 @@ function actionBtn(label, action, disabled, onClick) {
   return b;
 }
 
-// block: { photo, badge, label }; labelStyle: shared { font,size,weight,color }
+// block: { photo, badge, label, labelStyle, pill }
 // opts: { lang, palette, index, count, maxBlocks,
-//         onLabel, onLabelTypography, onLabelFont, onReplace, onRemove,
-//         onMoveLeft, onMoveRight, onAdd }
-export function buildBlockInspector(block, labelStyle, opts) {
+//         onLabel, onLabelTypography, onLabelFont, onToggleDouble,
+//         onReplace, onRemove, onMoveLeft, onMoveRight, onAdd }
+export function buildBlockInspector(block, opts) {
   const ar = opts.lang === 'ar';
   const root = elt('div', { 'data-ps-inspector-block': '' },
     { display: 'flex', flexDirection: 'column', gap: '10px' });
@@ -115,14 +115,18 @@ export function buildBlockInspector(block, labelStyle, opts) {
   labelWrap.appendChild(label);
   root.appendChild(labelWrap);
 
-  // shared label typography (applies to ALL labels)
-  const note = elt('div', { text: ar ? '(يطبَّق على كل التسميات)' : '(applies to all labels)' },
-    { fontSize: '0.75em', opacity: '0.6' });
-  root.appendChild(note);
+  const ls = block.labelStyle || {};
   root.appendChild(buildTextInspector(
-    { text: undefined, font: labelStyle.font, size: labelStyle.size, weight: labelStyle.weight, color: labelStyle.color },
+    { text: undefined, font: ls.font, size: ls.size, weight: ls.weight, color: ls.color },
     { lang: opts.lang, palette: opts.palette,
       onText: () => {}, onTypography: opts.onLabelTypography, onFont: opts.onLabelFont }));
+
+  const isDouble = !!(block.pill && block.pill.width === 'double');
+  const isLast = opts.index >= opts.count - 1;
+  const doubleBtn = actionBtn(
+    isDouble ? (ar ? 'عرض مفرد' : 'Single width') : (ar ? 'عرض مزدوج' : 'Double width'),
+    'toggle-double', isLast, opts.onToggleDouble);
+  root.appendChild(doubleBtn);
 
   const photoRow = elt('div', {}, { display: 'flex', gap: '8px' });
   photoRow.appendChild(actionBtn(ar ? 'استبدال الصورة' : 'Replace photo', 'replace', false, opts.onReplace));
