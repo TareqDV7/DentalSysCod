@@ -10,6 +10,8 @@
   import { renderComposition } from '../render.js';
   import { rasterizeToPngBlob } from '../rasterize.js';
   import { ensureFontsLoaded } from '../fonts.js';
+  import { defaultComposition, applyTheme, TEMPLATES } from '../composition.js';
+  import { THEME_OPTIONS } from '../themes.js';
   ensureFontsLoaded();
 
   // Build a composition node on demand (Task 3 exercises renderComposition;
@@ -76,6 +78,34 @@
       })(),
       pillWidths: Array.from(stage.querySelectorAll('[data-ps-pill]')).map((p) => Math.round(p.getBoundingClientRect().width)),
     };
+  };
+
+  // P5 QA sweep: every template x theme combination, EN + AR doctor name,
+  // rendered through the real defaultComposition/applyTheme pipeline (not a
+  // hand-built fixture) — catches anything a single-combo test would miss.
+  window.__smokeMatrix = function () {
+    const out = [];
+    for (const template of TEMPLATES) {
+      for (const opt of THEME_OPTIONS) {
+        for (const doctorName of ['DR. JOHN SMITH', 'د. أحمد محمد']) {
+          let comp;
+          try {
+            comp = applyTheme(defaultComposition(template, { doctorName }), opt.id);
+            const info = window.__describe(comp);
+            const doctorNode = window.__stage.querySelector('[data-ps-el="doctor"]');
+            out.push({
+              template, theme: opt.id, doctorName, ok: true,
+              blockCount: info.blockCount,
+              doctorText: doctorNode ? doctorNode.textContent : null,
+              psEls: info.psEls, pills: info.pills,
+            });
+          } catch (e) {
+            out.push({ template, theme: opt.id, doctorName, ok: false, error: String(e) });
+          }
+        }
+      }
+    }
+    return out;
   };
 
   window.__fontLoaded = function (spec) {
