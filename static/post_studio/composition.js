@@ -30,7 +30,6 @@ function stripElement(labels, layout) {
   return renumber({
     id: 'strip', type: 'photoStrip', layout: layout || 'row',
     blocks,
-    labelStyle: { font: 'Manrope', size: 28, weight: 600, color: '#cfd8e3' },
   });
 }
 
@@ -193,8 +192,6 @@ export function applyTheme(comp, themeName) {
     if (el.type === 'title') {
       el.headline = { ...el.headline, ...t.headline };
       el.subline = { ...el.subline, ...t.subline };
-    } else if (el.type === 'photoStrip') {
-      el.labelStyle = { ...el.labelStyle, ...t.label };
     } else if (el.type === 'doctorName') {
       Object.assign(el, t.doctor);
     }
