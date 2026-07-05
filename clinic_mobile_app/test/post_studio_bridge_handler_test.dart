@@ -90,7 +90,7 @@ void main() {
         'args': {'id': 7},
       }));
       expect(api.lastGetPath, '/api/posts/7');
-      expect(calls.single, contains('"id":7'));
+      expect(calls.single, contains('\\"id\\":7'));
     });
 
     test('deletePost passes through to ClinicApi.delete with the id in the path', () async {
@@ -116,7 +116,7 @@ void main() {
         runJavaScript: (js) async => calls.add(js),
         pickImages: () async => [
           XFile.fromData(Uint8List.fromList([1, 2, 3]),
-              mimeType: 'image/jpeg', name: 'a.jpg'),
+              mimeType: 'image/jpeg', name: 'a.jpg', path: 'a.jpg'),
         ],
       );
       await handler.onMessage(jsonEncode({'id': '4', 'method': 'pickPhotos', 'args': null}));
