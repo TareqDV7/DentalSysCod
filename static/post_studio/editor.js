@@ -155,12 +155,15 @@ export function mountEditor(rootEl, host, opts = {}) {
   }
 
   function computeSnap(posRef, nx, ny) {
-    const [W] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
-    const thresh = SNAP_PX / (PREVIEW_W / W) / W;   // display-px -> fractional-of-width
+    const [W, H] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
+    const scale = PREVIEW_W / W;
+    // display-px -> fractional, per axis (W !== H on portrait/story sizes)
+    const threshX = SNAP_PX / scale / W;
+    const threshY = SNAP_PX / scale / H;
     const T = snapTargets(posRef);
     let sx = nx, sy = ny; const lines = [];
-    for (const t of T.xs) if (Math.abs(nx - t) < thresh) { sx = t; lines.push({ axis: 'x', at: t }); break; }
-    for (const t of T.ys) if (Math.abs(ny - t) < thresh) { sy = t; lines.push({ axis: 'y', at: t }); break; }
+    for (const t of T.xs) if (Math.abs(nx - t) < threshX) { sx = t; lines.push({ axis: 'x', at: t }); break; }
+    for (const t of T.ys) if (Math.abs(ny - t) < threshY) { sy = t; lines.push({ axis: 'y', at: t }); break; }
     return { x: sx, y: sy, lines };
   }
 
