@@ -102,3 +102,63 @@ export function createDesktopHost() {
 
   return { pickPhotos, savePost, listPosts, getPost, deletePost };
 }
+
+/**
+ * @param {{postMessage: (json:string) => void}} [bridge] Injected for testing;
+ * defaults to the Dart-injected `window.PostStudioBridge` JavaScriptChannel.
+ * @returns {PostStudioHost}
+ */
+export function createMobileHost(bridge = globalThis.PostStudioBridge) {
+  let seq = 0;
+  const pending = new Map();
+
+  globalThis.__psResolve = (id, resultJson) => {
+    const p = pending.get(id);
+    if (!p) return;
+    pending.delete(id);
+    p.resolve(resultJson == null ? undefined : JSON.parse(resultJson));
+  };
+  globalThis.__psReject = (id, message) => {
+    const p = pending.get(id);
+    if (!p) return;
+    pending.delete(id);
+    p.reject(new Error(message));
+  };
+
+  function call(method, args) {
+    return new Promise((resolve, reject) => {
+      const id = String(++seq);
+      pending.set(id, { resolve, reject });
+      bridge.postMessage(JSON.stringify({ id, method, args }));
+    });
+  }
+
+  async function pickPhotos() {
+    const picked = (await call('pickPhotos', null)) || [];
+    const out = [];
+    for (const item of picked) {
+      out.push({ id: item.id, dataUrl: await downscaleDataUrl(item.dataUrl, MAX_PHOTO_DIM) });
+    }
+    return out;
+  }
+
+  async function savePost(png, templateJson, meta) {
+    const dataUrl = await fileToDataUrl(png);
+    const pngB64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    return call('savePost', { pngB64, templateJson, meta: meta || {} });
+  }
+
+  function listPosts() {
+    return call('listPosts', null).then((r) => r || []);
+  }
+
+  function getPost(id) {
+    return call('getPost', { id });
+  }
+
+  function deletePost(id) {
+    return call('deletePost', { id });
+  }
+
+  return { pickPhotos, savePost, listPosts, getPost, deletePost };
+}
