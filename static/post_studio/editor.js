@@ -34,6 +34,7 @@ const TPL_LABEL = {
 };
 
 const PREVIEW_W = 360; // displayed width; the stage renders at native export px.
+const HANDLE_PX = { mouse: 10, touch: 32 }; // resize-handle size in screen-px, by pointerProfile
 
 function el(tag, attrs = {}, styles = {}) {
   const node = document.createElement(tag);
@@ -51,6 +52,7 @@ export function mountEditor(rootEl, host, opts = {}) {
   const s = STR[lang];
   const tl = TPL_LABEL[lang];
   const state = { comp: opts.initialComp || defaultComposition('before_after'), selectedRef: null, selectedPosRef: null };
+  const pointerProfile = opts.pointerProfile === 'touch' ? 'touch' : 'mouse';
 
   rootEl.innerHTML = '';
   const layout = el('div', {}, { display: 'flex', gap: '24px', flexWrap: 'wrap', alignItems: 'flex-start' });
@@ -319,7 +321,7 @@ export function mountEditor(rootEl, host, opts = {}) {
         : stage.querySelector(`[data-ps-el="${state.selectedRef}"]`);
       if (sel) { sel.style.outline = '3px solid #38bdf8'; sel.style.outlineOffset = '4px'; }
       if (sel && state.selectedRef.startsWith('block:')) {
-        const hs = 10 / scale;   // handle size in native-stage px so it looks ~10 screen-px
+        const hs = HANDLE_PX[pointerProfile] / scale;   // handle size in native-stage px
         for (const corner of ['tl', 'tr', 'bl', 'br']) {
           const handle = el('div', { 'data-ps-resize-handle': corner }, {
             position: 'absolute', width: `${hs}px`, height: `${hs}px`,

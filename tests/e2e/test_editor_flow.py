@@ -393,3 +393,19 @@ def test_per_block_label_typography_is_independent():
             "n => parseFloat(getComputedStyle(n.lastElementChild).fontSize)")
         assert size0 != size1, (size0, size1)
         browser.close()
+
+
+def test_touch_profile_grows_resize_handle():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri() + "?profile=touch")
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-resize-handle='br']")
+        size = page.eval_on_selector("[data-ps-resize-handle='br']",
+            "n => { const b = n.getBoundingClientRect(); return { w: b.width, h: b.height }; }")
+        # mouse profile renders ~10 screen-px, touch renders ~32 — 20 cleanly separates them
+        assert size["w"] > 20 and size["h"] > 20, size
+        browser.close()

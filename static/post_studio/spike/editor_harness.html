@@ -25,8 +25,10 @@
     async getPost(id) { return saved.find((p) => p.id === id); },
     async deletePost(id) { const i = saved.findIndex((p) => p.id === id); if (i >= 0) saved.splice(i, 1); },
   };
+  const profile = new URLSearchParams(location.search).get('profile') === 'touch' ? 'touch' : 'mouse';
   mountEditor(document.getElementById('root'), fakeHost, {
     initialComp: defaultComposition('before_after', { doctorName: 'DR. TEST' }),
+    pointerProfile: profile,
   });
   window.__ready = true;
 </script>
