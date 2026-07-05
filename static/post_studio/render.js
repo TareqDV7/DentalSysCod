@@ -232,15 +232,16 @@ function buildPanel(b, el, theme, index, W, H, isPill) {
 function buildPill(b, el, nextBlock, theme, index, W, H) {
   const pos = b.pillPos || { x: 0, y: 0 };
   const ownW = (b.panelW != null ? b.panelW : (el.panelW || 0.2)) * W;
-  const isDouble = b.pill && b.pill.width === 'double';
+  // 'double' only has a neighbor's slot to cover when a next block exists;
+  // a trailing 'double' (e.g. left over from a reorder/remove that made this
+  // the last block) has nothing to reach for, so it renders as single-width
+  // rather than guessing at an off-canvas phantom neighbor.
+  const isDouble = !!(b.pill && b.pill.width === 'double' && nextBlock);
   let pillW = ownW;
-  if (isDouble && nextBlock) {
+  if (isDouble) {
     const nextPos = nextBlock.panelPos || { x: 0, y: 0 };
     const nextW = (nextBlock.panelW != null ? nextBlock.panelW : (el.panelW || 0.2)) * W;
     pillW = (nextPos.x * W + nextW) - (pos.x * W);
-  } else if (isDouble) {
-    const gapPx = (el.gap || 0) * W;
-    pillW = 2 * ownW + gapPx;   // no next block to measure against (shouldn't normally occur)
   }
   const pill = document.createElement('div');
   pill.setAttribute('data-ps-pill', '');

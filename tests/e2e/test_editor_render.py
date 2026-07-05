@@ -330,3 +330,43 @@ def test_per_block_size_renders_independently_and_double_pill_covers_next_edge()
     # the double pill's right edge reaches panel 1's actual right edge (300+350=650)
     pill0 = info["rects"]["pills"][0]
     assert abs((pill0["left"] + pill0["w"]) - 650) <= 2, pill0
+
+
+_TRAILING_DOUBLE = {
+    "version": 1, "size": "square", "theme": "dark_premium",
+    "elements": [
+        {"id": "title", "type": "title", "pos": {"x": 0.5, "y": 0.1},
+         "headline": {"text": "Case"}, "subline": {"text": "Study"}},
+        {"id": "strip", "type": "photoStrip", "panelW": 250 / 1080, "panelH": 320 / 1080, "gap": 16 / 1080,
+         "blocks": [
+             {"photo": None, "badge": 1, "label": "One",
+              "panelPos": {"x": 16 / 1080, "y": 360 / 1080}, "panelW": 250 / 1080, "panelH": 320 / 1080,
+              "pillPos": {"x": 16 / 1080, "y": 708 / 1080}, "pill": {"width": "single"},
+              "labelStyle": {"font": "Manrope", "size": 28, "weight": 600, "color": "#cfd8e3"}},
+             # last block, but STILL flagged 'double' — e.g. left over from a
+             # reorder/remove that made it the last block after the toggle was
+             # set while it had a neighbor to cover.
+             {"photo": None, "badge": 2, "label": "Two",
+              "panelPos": {"x": 282 / 1080, "y": 360 / 1080}, "panelW": 250 / 1080, "panelH": 320 / 1080,
+              "pillPos": {"x": 282 / 1080, "y": 708 / 1080}, "pill": {"width": "double"},
+              "labelStyle": {"font": "Manrope", "size": 28, "weight": 600, "color": "#cfd8e3"}},
+         ]},
+        {"id": "doctor", "type": "doctorName", "pos": {"x": 0.5, "y": 0.92}, "text": "DR. WASFY BARZAQ"},
+    ],
+}
+
+
+def test_trailing_double_pill_with_no_next_block_renders_single_width():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        _goto_ready(page, HARNESS.as_uri())
+        info = page.evaluate("(c) => window.__describe(c)", _TRAILING_DOUBLE)
+        browser.close()
+    # both pills render (nothing follows the last block to suppress) ...
+    assert len(info["rects"]["pills"]) == 2, info["rects"]["pills"]
+    # ... and the trailing 'double' pill renders at its OWN single width,
+    # not the old 2x+gap phantom-neighbor width that ran off-canvas (1080).
+    pill1 = info["rects"]["pills"][1]
+    assert abs(pill1["w"] - 250) <= 2, pill1
+    assert pill1["left"] + pill1["w"] <= 1080, pill1
