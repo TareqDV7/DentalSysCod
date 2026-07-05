@@ -22,6 +22,31 @@ function fileToDataUrl(file) {
   });
 }
 
+// A picked photo is stored as a source data URL directly in template_json
+// (P4a decision) — unbounded, an unresized phone photo can be several MB,
+// multiplied by up to MAX_BLOCKS per post. Downscale to a bounded longest
+// edge before it ever reaches composition state; the export canvas is at
+// most 1080px, so this leaves generous headroom for on-canvas cropping
+// without storing multi-megapixel originals.
+export const MAX_PHOTO_DIM = 1600;
+
+export function downscaleDataUrl(dataUrl, maxDim) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+      if (scale >= 1) { resolve(dataUrl); return; }
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => reject(new Error('image decode failed'));
+    img.src = dataUrl;
+  });
+}
+
 /** @returns {PostStudioHost} */
 export function createDesktopHost() {
   function pickPhotos() {
@@ -36,7 +61,8 @@ export function createDesktopHost() {
         const files = Array.from(input.files || []);
         const out = [];
         for (const f of files) {
-          out.push({ id: `${f.name}:${f.size}`, dataUrl: await fileToDataUrl(f) });
+          const raw = await fileToDataUrl(f);
+          out.push({ id: `${f.name}:${f.size}`, dataUrl: await downscaleDataUrl(raw, MAX_PHOTO_DIM) });
         }
         input.remove();
         resolve(out);

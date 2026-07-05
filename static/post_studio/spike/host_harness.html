@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Post Studio host harness</title>
+</head>
+<body>
+<script type="module">
+  import { downscaleDataUrl, MAX_PHOTO_DIM } from '../host.js';
+
+  window.__MAX_PHOTO_DIM = MAX_PHOTO_DIM;
+
+  // Builds a synthetic solid-color JPEG data URL of the given size, entirely
+  // in-browser (no fixture file needed) — a stand-in for a picked photo.
+  window.__makeDataUrl = function (w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#3366cc';
+    ctx.fillRect(0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.9);
+  };
+
+  // Downscales a data URL and reports the resulting decoded pixel size.
+  window.__downscaleAndMeasure = async function (dataUrl, maxDim) {
+    const out = await downscaleDataUrl(dataUrl, maxDim);
+    const dims = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+      img.onerror = reject;
+      img.src = out;
+    });
+    return { outDataUrl: out, outLength: out.length, w: dims.w, h: dims.h };
+  };
+
+  window.__ready = true;
+</script>
+</body>
+</html>
