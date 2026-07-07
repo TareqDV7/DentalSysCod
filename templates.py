@@ -2231,6 +2231,10 @@ HTML_TEMPLATE = '''
                 <span class="tab-icon"><svg class="ic"><use href="#i-folders"/></svg></span>
                 <span data-en="Catalog" data-ar="الفهرس">Catalog</span>
             </button>
+            <button class="nav-tab" data-tab="depo" onclick="switchTab('depo', this)">
+                <span class="tab-icon"><svg class="ic"><use href="#i-folders"/></svg></span>
+                <span data-en="Depo" data-ar="مخزن">Depo</span>
+            </button>
             <button class="nav-tab" data-tab="support" onclick="switchTab('support', this)">
                 <span class="tab-icon"><svg class="ic"><use href="#i-gear"/></svg></span>
                 <span data-en="Settings" data-ar="الإعدادات">Settings</span>
@@ -2570,6 +2574,32 @@ HTML_TEMPLATE = '''
                         </div><!-- /catalog-subtab-procedure -->
                     </div><!-- /section-card -->
 
+                    <div class="section-card">
+                        <div class="section-card-header"><div>
+                            <h3 data-i18n="procedure_materials">Procedure materials (Depo)</h3>
+                            <p data-i18n="procedure_materials_summary">Link stock items consumed by a procedure and set the default amount issued.</p>
+                        </div></div>
+                        <div class="form-row-3">
+                            <div class="form-group"><label data-i18n="procedure">Procedure</label>
+                                <select id="materials-procedure-select" onchange="loadProcedureMaterials()"></select></div>
+                            <div class="form-group"><label data-i18n="item">Item</label>
+                                <select id="materials-item-select"></select></div>
+                            <div class="form-group"><label data-i18n="default_qty">Default qty</label>
+                                <input type="number" step="any" id="materials-default-qty" value="1"></div>
+                        </div>
+                        <div class="toolbar-row">
+                            <button class="btn btn-primary" type="button" onclick="addProcedureMaterial()" data-i18n="link_material">+ Link material</button>
+                        </div>
+                        <div class="table-container" style="margin-top:12px;">
+                            <table><thead><tr>
+                                <th data-i18n="item">Item</th>
+                                <th class="numeric-cell" data-i18n="default_qty">Default qty</th>
+                                <th class="actions-cell" data-i18n="actions">Actions</th>
+                            </tr></thead>
+                            <tbody id="materials-body"><tr><td colspan="3" data-i18n="no_data">No data</td></tr></tbody></table>
+                        </div>
+                    </div>
+
                     <!-- ── Tooth Conditions Admin ── -->
                     <div class="section-card">
                         <div class="card">
@@ -2587,6 +2617,65 @@ HTML_TEMPLATE = '''
 
                 </div>
             </div><!-- /treatments -->
+
+            <!-- Depo Tab -->
+            <div id="depo" class="tab-content">
+                <div class="screen-shell">
+                    <div class="section-card">
+                        <div class="section-card-header">
+                            <div>
+                                <h2 data-i18n="depo_title">Depo</h2>
+                                <p data-i18n="depo_summary">Stock items, on-hand levels, and low-stock alerts.</p>
+                            </div>
+                            <div class="toolbar-row">
+                                <button class="btn btn-primary" type="button" onclick="openInventoryItemEditor()" data-i18n="add_item">+ Add Item</button>
+                            </div>
+                        </div>
+                        <div class="admin-overview-cards">
+                            <div class="stat-card stat-card-teal">
+                                <span class="stat-icon">📦</span>
+                                <h3 id="depo-item-count">0</h3>
+                                <p data-i18n="items_in_stock">Items in stock</p>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-icon">💰</span>
+                                <h3 id="depo-stock-value">0</h3>
+                                <p data-i18n="stock_value">Stock value</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="section-card">
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="item">Item</th>
+                                        <th class="numeric-cell" data-i18n="on_hand">On hand</th>
+                                        <th class="numeric-cell" data-i18n="packs_remaining">Packs</th>
+                                        <th class="center-cell" data-i18n="status">Status</th>
+                                        <th class="actions-cell" data-i18n="actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="depo-items-body"><tr><td colspan="5" data-i18n="no_data">No data</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="section-card">
+                        <div class="section-card-header"><div>
+                            <h3 data-i18n="depo_report">Stock report</h3>
+                            <p data-i18n="on_hand_value">On-hand value</p>
+                        </div><div><strong id="depo-report-value">0</strong></div></div>
+                        <div class="form-row">
+                            <div class="form-group" style="flex:1;">
+                                <h4 data-i18n="low_stock_items">Low-stock items</h4>
+                                <div id="depo-report-low"></div></div>
+                            <div class="form-group" style="flex:1;">
+                                <h4 data-i18n="expiring_soon">Expiring soon</h4>
+                                <div id="depo-report-expiring"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <div id="reports" class="tab-content">
                 <div class="page-header">
@@ -3313,6 +3402,105 @@ HTML_TEMPLATE = '''
       </div>
     </div>
 
+    <div id="depo-item-modal" class="modal" onclick="if(event.target===this)closeModal('depo-item-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close-modal" onclick="closeModal('depo-item-modal')">&times;</span>
+                <h3 id="depo-item-modal-title" data-i18n="add_item">Add Item</h3>
+            </div>
+            <form id="depo-item-form" onsubmit="saveInventoryItem(event)">
+                <input type="hidden" id="depo-item-id" value="">
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="item_name_required">Name *</label>
+                        <input type="text" id="depo-item-name" required></div>
+                    <div class="form-group"><label data-i18n="item_name_ar">Name (Arabic)</label>
+                        <input type="text" id="depo-item-name-ar" dir="rtl"></div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group"><label data-i18n="category">Category</label>
+                        <input type="text" id="depo-item-category"></div>
+                    <div class="form-group"><label data-i18n="base_unit">Base unit</label>
+                        <input type="text" id="depo-item-base-unit" placeholder="piece / carpule / ml"></div>
+                    <div class="form-group"><label data-i18n="pack_unit">Pack unit</label>
+                        <input type="text" id="depo-item-pack-unit" placeholder="box / bottle"></div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group"><label data-i18n="pack_size">Pack size</label>
+                        <input type="number" step="any" id="depo-item-pack-size" value="1"></div>
+                    <div class="form-group"><label data-i18n="low_stock_threshold">Low-stock threshold</label>
+                        <input type="number" step="any" id="depo-item-threshold" value="0"></div>
+                    <div class="form-group"><label data-i18n="reorder_qty">Reorder qty</label>
+                        <input type="number" step="any" id="depo-item-reorder"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="supplier">Supplier</label>
+                        <input type="text" id="depo-item-supplier"></div>
+                    <div class="form-group"><label data-i18n="location">Location</label>
+                        <input type="text" id="depo-item-location"></div>
+                </div>
+                <div class="toolbar-row">
+                    <label style="display:flex; gap:8px; align-items:center; font-weight:600;">
+                        <input type="checkbox" id="depo-item-track-expiry">
+                        <span data-i18n="track_expiry">Track expiry</span>
+                    </label>
+                </div>
+                <div class="toolbar-row" style="justify-content:space-between;">
+                    <button class="btn btn-primary" type="submit" data-i18n="save">Save</button>
+                    <button class="btn btn-danger" type="button" id="depo-item-deactivate-btn"
+                            style="display:none;" onclick="deactivateInventoryItem()" data-i18n="deactivate">Deactivate</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="depo-restock-modal" class="modal" onclick="if(event.target===this)closeModal('depo-restock-modal')">
+        <div class="modal-content">
+            <div class="modal-header"><span class="close-modal" onclick="closeModal('depo-restock-modal')">&times;</span>
+                <h3 data-i18n="add_stock">Add stock</h3></div>
+            <form onsubmit="submitRestock(event)">
+                <input type="hidden" id="depo-restock-id">
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="quantity">Quantity (base units)</label>
+                        <input type="number" step="any" id="depo-restock-qty" required></div>
+                    <div class="form-group"><label data-i18n="unit_cost">Unit cost</label>
+                        <input type="number" step="any" id="depo-restock-cost" value="0"></div>
+                </div>
+                <div class="form-group" id="depo-restock-expiry-wrap" style="display:none;">
+                    <label data-i18n="expiry_date">Expiry date</label>
+                    <input type="date" id="depo-restock-expiry"></div>
+                <div class="toolbar-row"><button class="btn btn-primary" type="submit" data-i18n="add_stock">Add stock</button></div>
+            </form>
+        </div>
+    </div>
+    <div id="depo-adjust-modal" class="modal" onclick="if(event.target===this)closeModal('depo-adjust-modal')">
+        <div class="modal-content">
+            <div class="modal-header"><span class="close-modal" onclick="closeModal('depo-adjust-modal')">&times;</span>
+                <h3 data-i18n="adjust_count">Adjust count</h3></div>
+            <form onsubmit="submitAdjust(event)">
+                <input type="hidden" id="depo-adjust-id">
+                <div class="form-group"><label data-i18n="counted_qty">Counted quantity</label>
+                    <input type="number" step="any" id="depo-adjust-qty" required></div>
+                <div class="form-group"><label data-i18n="note">Note</label>
+                    <input type="text" id="depo-adjust-note"></div>
+                <div class="toolbar-row"><button class="btn btn-warning" type="submit" data-i18n="adjust_count">Adjust count</button></div>
+            </form>
+        </div>
+    </div>
+    <div id="depo-writeoff-modal" class="modal" onclick="if(event.target===this)closeModal('depo-writeoff-modal')">
+        <div class="modal-content">
+            <div class="modal-header"><span class="close-modal" onclick="closeModal('depo-writeoff-modal')">&times;</span>
+                <h3 data-i18n="write_off">Write-off</h3></div>
+            <form onsubmit="submitWriteoff(event)">
+                <input type="hidden" id="depo-writeoff-id">
+                <div class="form-group"><label data-i18n="quantity">Quantity</label>
+                    <input type="number" step="any" id="depo-writeoff-qty" required></div>
+                <div class="form-group"><label data-i18n="note">Note</label>
+                    <input type="text" id="depo-writeoff-note" placeholder="breakage / contamination / expired"></div>
+                <div class="toolbar-row"><button class="btn btn-danger" type="submit" data-i18n="write_off">Write-off</button></div>
+            </form>
+        </div>
+    </div>
+
     <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-desc">
         <div class="modal-content">
             <div class="confirm-modal__icon" aria-hidden="true">⚠</div>
@@ -3833,6 +4021,46 @@ HTML_TEMPLATE = '''
                 ps_branding_save: 'Save branding',
                 ps_branding_saved: 'Branding saved',
                 ps_branding_save_failed: 'Could not save branding: ',
+                depo_title: 'Depo',
+                depo_summary: 'Stock items, on-hand levels, and low-stock alerts.',
+                add_item: '+ Add Item',
+                items_in_stock: 'Items in stock',
+                stock_value: 'Stock value',
+                item: 'Item',
+                on_hand: 'On hand',
+                packs_remaining: 'Packs',
+                in_stock: 'In stock',
+                low_stock: 'Low stock',
+                negative: 'Negative',
+                add_stock: 'Add stock',
+                edit_item: 'Edit Item',
+                item_name_required: 'Name is required',
+                item_name_ar: 'Name (Arabic)',
+                base_unit: 'Base unit',
+                pack_unit: 'Pack unit',
+                pack_size: 'Pack size',
+                low_stock_threshold: 'Low-stock threshold',
+                reorder_qty: 'Reorder qty',
+                supplier: 'Supplier',
+                location: 'Location',
+                track_expiry: 'Track expiry',
+                unable_save_item: 'Unable to save item.',
+                item_saved: 'Item saved.',
+                item_deactivated: 'Item deactivated.',
+                adjust_count: 'Adjust count', write_off: 'Write-off', quantity: 'Quantity',
+                unit_cost: 'Unit cost', counted_qty: 'Counted quantity', expiry_date: 'Expiry date',
+                note: 'Note', stock_added: 'Stock added.', count_adjusted: 'Count adjusted.',
+                written_off: 'Written off.', now_low_stock: 'Item is now at/below its low-stock level.',
+                unable_restock: 'Unable to add stock.', unable_adjust: 'Unable to adjust.', unable_writeoff: 'Unable to write off.',
+                procedure_materials: 'Procedure materials (Depo)',
+                procedure_materials_summary: 'Link stock items consumed by a procedure and set the default amount issued.',
+                default_qty: 'Default qty', link_material: '+ Link material',
+                remove: 'Remove', pick_procedure_item: 'Pick a procedure and an item.',
+                unable_link: 'Unable to link material.', unable_unlink: 'Unable to remove link.',
+                issued_from_stock: 'Issued from stock',
+                stock_low_after: 'Low stock after issuing: ',
+                depo_report: 'Stock report', low_stock_items: 'Low-stock items',
+                expiring_soon: 'Expiring soon', on_hand_value: 'On-hand value', none: 'None',
             },
             ar: {
                 undo: 'تراجع',
@@ -4289,6 +4517,46 @@ HTML_TEMPLATE = '''
                 ps_branding_save: 'حفظ العلامة التجارية',
                 ps_branding_saved: 'تم حفظ العلامة التجارية',
                 ps_branding_save_failed: 'تعذّر حفظ العلامة التجارية: ',
+                depo_title: 'مخزن',
+                depo_summary: 'مواد المخزون ومستويات التوفر وتنبيهات النقص.',
+                add_item: '+ إضافة مادة',
+                items_in_stock: 'مواد في المخزون',
+                stock_value: 'قيمة المخزون',
+                item: 'المادة',
+                on_hand: 'المتوفر',
+                packs_remaining: 'العبوات',
+                in_stock: 'متوفر',
+                low_stock: 'مخزون منخفض',
+                negative: 'سالب',
+                add_stock: 'إضافة مخزون',
+                edit_item: 'تعديل المادة',
+                item_name_required: 'الاسم مطلوب',
+                item_name_ar: 'الاسم (بالعربية)',
+                base_unit: 'الوحدة الأساسية',
+                pack_unit: 'وحدة العبوة',
+                pack_size: 'حجم العبوة',
+                low_stock_threshold: 'حد المخزون المنخفض',
+                reorder_qty: 'كمية إعادة الطلب',
+                supplier: 'المورّد',
+                location: 'الموقع',
+                track_expiry: 'تتبّع الصلاحية',
+                unable_save_item: 'تعذّر حفظ المادة.',
+                item_saved: 'تم حفظ المادة.',
+                item_deactivated: 'تم إلغاء تفعيل المادة.',
+                adjust_count: 'تعديل الجرد', write_off: 'شطب', quantity: 'الكمية',
+                unit_cost: 'تكلفة الوحدة', counted_qty: 'الكمية المعدودة', expiry_date: 'تاريخ الصلاحية',
+                note: 'ملاحظة', stock_added: 'تمت إضافة المخزون.', count_adjusted: 'تم تعديل الجرد.',
+                written_off: 'تم الشطب.', now_low_stock: 'المادة الآن عند حد النقص أو أقل.',
+                unable_restock: 'تعذّرت إضافة المخزون.', unable_adjust: 'تعذّر التعديل.', unable_writeoff: 'تعذّر الشطب.',
+                procedure_materials: 'مواد الإجراء (المخزن)',
+                procedure_materials_summary: 'اربط مواد المخزون التي يستهلكها الإجراء وحدّد الكمية الافتراضية المصروفة.',
+                default_qty: 'الكمية الافتراضية', link_material: '+ ربط مادة',
+                remove: 'إزالة', pick_procedure_item: 'اختر إجراءً ومادة.',
+                unable_link: 'تعذّر ربط المادة.', unable_unlink: 'تعذّرت إزالة الربط.',
+                issued_from_stock: 'المصروف من المخزون',
+                stock_low_after: 'مخزون منخفض بعد الصرف: ',
+                depo_report: 'تقرير المخزون', low_stock_items: 'مواد منخفضة المخزون',
+                expiring_soon: 'قريبة الانتهاء', on_hand_value: 'قيمة المتوفر', none: 'لا يوجد',
             }
         };
 
@@ -4531,6 +4799,7 @@ HTML_TEMPLATE = '''
             else if (activeTab === 'reports') loadReportsSection();
             else if (activeTab === 'financial') loadFinancialSection();
             else if (activeTab === 'support') loadSupportSection();
+            else if (activeTab === 'depo') loadDepoSection();
 
             applyTheme();
         }
@@ -4603,6 +4872,266 @@ HTML_TEMPLATE = '''
             return Number.isFinite(direct) ? direct : 0;
         }
 
+        let inventoryItemsCache = [];
+
+        async function loadInventoryItems() {
+            try {
+                const res = await fetch('/api/inventory/items');
+                inventoryItemsCache = await res.json();
+                if (!Array.isArray(inventoryItemsCache)) inventoryItemsCache = [];
+            } catch (_) {
+                inventoryItemsCache = [];
+            }
+            return inventoryItemsCache;
+        }
+
+        function inventoryStatusBadge(item) {
+            const qty = Number(item.quantity) || 0;
+            const threshold = Number(item.low_stock_threshold) || 0;
+            if (qty < 0) return `<span class="badge badge-danger">${t('negative','Negative')}</span>`;
+            if (qty <= threshold) return `<span class="badge badge-warning">${t('low_stock','Low stock')}</span>`;
+            return `<span class="badge badge-success">${t('in_stock','In stock')}</span>`;
+        }
+
+        function renderInventoryItems() {
+            const body = document.getElementById('depo-items-body');
+            if (!body) return;
+            const items = inventoryItemsCache;
+            if (!items.length) {
+                body.innerHTML = `<tr><td colspan="5">${t('no_data','No data')}</td></tr>`;
+            } else {
+                body.innerHTML = items.map(it => {
+                    const qty = Number(it.quantity) || 0;
+                    const packs = (it.packs_remaining == null) ? '—' : (Math.round(it.packs_remaining * 100) / 100);
+                    const unit = it.base_unit ? ` <small style="color:var(--muted)">${escapeHtml(it.base_unit)}</small>` : '';
+                    return `<tr>
+                        <td>${escapeHtml(it.name || '')}</td>
+                        <td class="numeric-cell">${qty}${unit}</td>
+                        <td class="numeric-cell">${packs}</td>
+                        <td class="center-cell">${inventoryStatusBadge(it)}</td>
+                        <td class="actions-cell">
+                            <button class="btn btn-sm" onclick="openInventoryItemEditor(${it.id})" data-i18n="edit">Edit</button>
+                            <button class="btn btn-sm btn-primary" onclick="openRestockModal(${it.id})" data-i18n="add_stock">Add stock</button>
+                            <button class="btn btn-sm btn-warning" onclick="openAdjustModal(${it.id})" data-i18n="adjust_count">Adjust</button>
+                            <button class="btn btn-sm btn-danger" onclick="openWriteoffModal(${it.id})" data-i18n="write_off">Write-off</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+            }
+            const count = document.getElementById('depo-item-count');
+            if (count) count.textContent = items.length;
+            const value = document.getElementById('depo-stock-value');
+            if (value) {
+                const total = items.reduce((s, it) =>
+                    s + (Number(it.quantity) || 0) * (Number(it.cost_per_unit) || 0), 0);
+                value.textContent = '₪ ' + total.toFixed(2);
+            }
+        }
+
+        async function loadDepoReport() {
+            let report = {low_stock: [], expiring_soon: [], on_hand_value: 0};
+            try { report = await (await fetch('/api/inventory/report')).json(); } catch (_) {}
+            renderDepoReport(report || {});
+        }
+
+        function renderDepoReport(report) {
+            const low = document.getElementById('depo-report-low');
+            const exp = document.getElementById('depo-report-expiring');
+            const val = document.getElementById('depo-report-value');
+            const lowList = report.low_stock || [];
+            const expList = report.expiring_soon || [];
+            if (low) low.innerHTML = lowList.length
+                ? lowList.map(i => `<div>${escapeHtml(i.name || '')} — <span class="badge badge-warning">${escapeHtml(String(i.quantity ?? ''))}</span></div>`).join('')
+                : `<div style="color:var(--muted)">${t('none','None')}</div>`;
+            if (exp) exp.innerHTML = expList.length
+                ? expList.map(i => `<div>${escapeHtml(i.name || '')} — ${escapeHtml(i.expiry_date || '')}</div>`).join('')
+                : `<div style="color:var(--muted)">${t('none','None')}</div>`;
+            if (val) val.textContent = '₪ ' + (Number(report.on_hand_value) || 0).toFixed(2);
+        }
+
+        async function loadDepoSection() {
+            await loadInventoryItems();
+            renderInventoryItems();
+            await loadDepoReport();
+        }
+
+        function openRestockModal(id) {
+            const item = inventoryItemsCache.find(x => x.id === id);
+            document.getElementById('depo-restock-id').value = id;
+            document.getElementById('depo-restock-qty').value = '';
+            document.getElementById('depo-restock-cost').value = item ? (item.cost_per_unit || 0) : 0;
+            document.getElementById('depo-restock-expiry').value = '';
+            document.getElementById('depo-restock-expiry-wrap').style.display =
+                (item && Number(item.track_expiry) === 1) ? '' : 'none';
+            document.getElementById('depo-restock-modal').classList.add('active');
+        }
+
+        function _stockWarnToast(res) {
+            // The follow-up path returns stock_warnings; restock returns low_stock.
+            if (res && res.low_stock) showToast(t('now_low_stock','Item is now at/below its low-stock level.'), 'warning');
+        }
+
+        async function submitRestock(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-restock-id').value;
+            const payload = {
+                base_qty: Number(document.getElementById('depo-restock-qty').value),
+                unit_cost: Number(document.getElementById('depo-restock-cost').value),
+                expiry_date: document.getElementById('depo-restock-expiry').value || null,
+            };
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}/restock`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            } catch (err) {
+                showToast(t('unable_restock','Unable to add stock.'), 'error');
+                return;
+            }
+            if (!res.ok) { const p = await res.json().catch(()=>({})); showToast(p.error || t('unable_restock','Unable to add stock.'), 'error'); return; }
+            const body = await res.json().catch(() => ({}));
+            closeModal('depo-restock-modal');
+            showToast(t('stock_added','Stock added.'), 'success');
+            _stockWarnToast(body);
+            await loadDepoSection();
+        }
+
+        async function submitAdjust(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-adjust-id').value;
+            const payload = {
+                counted_qty: Number(document.getElementById('depo-adjust-qty').value),
+                note: document.getElementById('depo-adjust-note').value || null};
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}/adjust`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            } catch (err) {
+                showToast(t('unable_adjust','Unable to adjust.'), 'error');
+                return;
+            }
+            if (!res.ok) { const p = await res.json().catch(()=>({})); showToast(p.error || t('unable_adjust','Unable to adjust.'), 'error'); return; }
+            closeModal('depo-adjust-modal');
+            showToast(t('count_adjusted','Count adjusted.'), 'success');
+            await loadDepoSection();
+        }
+        function openAdjustModal(id) {
+            const item = inventoryItemsCache.find(x => x.id === id);
+            document.getElementById('depo-adjust-id').value = id;
+            document.getElementById('depo-adjust-qty').value = item ? (item.quantity || 0) : 0;
+            document.getElementById('depo-adjust-note').value = '';
+            document.getElementById('depo-adjust-modal').classList.add('active');
+        }
+
+        async function submitWriteoff(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-writeoff-id').value;
+            const payload = {
+                qty: Number(document.getElementById('depo-writeoff-qty').value),
+                note: document.getElementById('depo-writeoff-note').value || null};
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}/writeoff`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            } catch (err) {
+                showToast(t('unable_writeoff','Unable to write off.'), 'error');
+                return;
+            }
+            if (!res.ok) { const p = await res.json().catch(()=>({})); showToast(p.error || t('unable_writeoff','Unable to write off.'), 'error'); return; }
+            closeModal('depo-writeoff-modal');
+            showToast(t('written_off','Written off.'), 'success');
+            await loadDepoSection();
+        }
+        function openWriteoffModal(id) {
+            document.getElementById('depo-writeoff-id').value = id;
+            document.getElementById('depo-writeoff-qty').value = '';
+            document.getElementById('depo-writeoff-note').value = '';
+            document.getElementById('depo-writeoff-modal').classList.add('active');
+        }
+
+        function openInventoryItemEditor(id) {
+            const item = (id != null) ? inventoryItemsCache.find(x => x.id === id) : null;
+            const setVal = (fid, v) => { const el = document.getElementById(fid); if (el) el.value = (v == null ? '' : v); };
+            document.getElementById('depo-item-id').value = item ? item.id : '';
+            setVal('depo-item-name', item && item.name);
+            setVal('depo-item-name-ar', item && item.name_ar);
+            setVal('depo-item-category', item && item.category);
+            setVal('depo-item-base-unit', item ? (item.base_unit || 'piece') : 'piece');
+            setVal('depo-item-pack-unit', item && item.pack_unit);
+            setVal('depo-item-pack-size', item ? (item.pack_size != null ? item.pack_size : 1) : 1);
+            setVal('depo-item-threshold', item ? (item.low_stock_threshold || 0) : 0);
+            setVal('depo-item-reorder', item && item.reorder_qty);
+            setVal('depo-item-supplier', item && item.supplier);
+            setVal('depo-item-location', item && item.location);
+            document.getElementById('depo-item-track-expiry').checked = Boolean(item && Number(item.track_expiry) === 1);
+            document.getElementById('depo-item-modal-title').textContent =
+                item ? t('edit_item','Edit Item') : t('add_item','Add Item');
+            document.getElementById('depo-item-deactivate-btn').style.display = item ? '' : 'none';
+            document.getElementById('depo-item-modal').classList.add('active');
+        }
+
+        async function saveInventoryItem(event) {
+            event.preventDefault();
+            const id = document.getElementById('depo-item-id').value;
+            const numOrNull = (fid) => {
+                const v = document.getElementById(fid).value;
+                return v === '' ? null : Number(v);
+            };
+            const payload = {
+                name: document.getElementById('depo-item-name').value.trim(),
+                name_ar: document.getElementById('depo-item-name-ar').value.trim() || null,
+                category: document.getElementById('depo-item-category').value.trim() || null,
+                base_unit: document.getElementById('depo-item-base-unit').value.trim() || 'piece',
+                pack_unit: document.getElementById('depo-item-pack-unit').value.trim() || null,
+                pack_size: numOrNull('depo-item-pack-size'),
+                low_stock_threshold: numOrNull('depo-item-threshold'),
+                reorder_qty: numOrNull('depo-item-reorder'),
+                supplier: document.getElementById('depo-item-supplier').value.trim() || null,
+                location: document.getElementById('depo-item-location').value.trim() || null,
+                track_expiry: document.getElementById('depo-item-track-expiry').checked,
+            };
+            if (!payload.name) { showToast(t('item_name_required','Name is required'), 'warning'); return; }
+            const url = id ? `/api/inventory/items/${id}` : '/api/inventory/items';
+            let res;
+            try {
+                res = await fetch(url, {
+                    method: id ? 'PUT' : 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+            } catch (err) {
+                showToast(t('unable_save_item','Unable to save item.'), 'error');
+                return;
+            }
+            if (!res.ok) {
+                const p = await res.json().catch(() => ({}));
+                showToast(p.error || t('unable_save_item','Unable to save item.'), 'error');
+                return;
+            }
+            closeModal('depo-item-modal');
+            showToast(t('item_saved','Item saved.'), 'success');
+            await loadDepoSection();
+        }
+
+        async function deactivateInventoryItem() {
+            const id = document.getElementById('depo-item-id').value;
+            if (!id) return;
+            let res;
+            try {
+                res = await fetch(`/api/inventory/items/${id}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({active: false}),
+                });
+            } catch (err) {
+                showToast(t('unable_save_item','Unable to save item.'), 'error');
+                return;
+            }
+            if (!res.ok) { showToast(t('unable_save_item','Unable to save item.'), 'error'); return; }
+            closeModal('depo-item-modal');
+            showToast(t('item_deactivated','Item deactivated.'), 'success');
+            await loadDepoSection();
+        }
+
         async function loadTreatmentProcedures() {
             const response = await fetch('/api/treatment-procedures');
             treatmentProceduresCache = await response.json();
@@ -4640,6 +5169,36 @@ HTML_TEMPLATE = '''
             }
 
             requiresLabField.value = requiresLab ? '1' : '0';
+            loadFollowupMaterials(select.value || null);
+        }
+
+        async function loadFollowupMaterials(procedureId) {
+            const wrap = document.getElementById('followup-materials-wrap');
+            const body = document.getElementById('followup-materials-body');
+            if (!wrap || !body) return;
+            if (!procedureId) { wrap.style.display = 'none'; body.innerHTML = ''; return; }
+            let links = [];
+            try {
+                const res = await fetch(`/api/inventory/procedures/${procedureId}/materials`);
+                links = await res.json();
+            } catch (_) { links = []; }
+            if (!Array.isArray(links) || !links.length) { wrap.style.display = 'none'; body.innerHTML = ''; return; }
+            wrap.style.display = 'block';
+            body.innerHTML = links.map(m => `<div class="form-row" style="align-items:center;">
+                <div class="form-group" style="flex:2;">${escapeHtml(m.name || '')}
+                    <small style="color:var(--muted)">${escapeHtml(String(m.base_unit ?? ''))}</small></div>
+                <div class="form-group" style="flex:1;">
+                    <input type="number" step="any" class="followup-material-qty"
+                           data-item-id="${escapeHtml(String(m.item_id ?? ''))}" value="${escapeHtml(String(m.default_qty ?? ''))}"></div>
+            </div>`).join('');
+        }
+
+        function collectFollowupMaterials() {
+            const out = [];
+            document.querySelectorAll('#followup-materials-body .followup-material-qty').forEach(inp => {
+                out.push({item_id: Number(inp.getAttribute('data-item-id')), qty: Number(inp.value)});
+            });
+            return out;
         }
 
         function resetProcedureForm() {
@@ -4741,6 +5300,80 @@ HTML_TEMPLATE = '''
             attachDatePickerButtons(document.getElementById('treatments'));
             // Load tooth conditions admin
             renderToothConditionsTable();
+            await loadInventoryItems();
+            _fillMaterialsSelects();
+            loadProcedureMaterials();
+        }
+
+        // ── Procedure Materials (Depo) ────────────────────────────────────────────
+        function _fillMaterialsSelects() {
+            const procSel = document.getElementById('materials-procedure-select');
+            const itemSel = document.getElementById('materials-item-select');
+            if (procSel) procSel.innerHTML = treatmentProceduresCache
+                .map(p => `<option value="${p.id}">${escapeHtml(p.name || '')}</option>`).join('');
+            if (itemSel) itemSel.innerHTML = inventoryItemsCache
+                .map(it => `<option value="${it.id}">${escapeHtml(it.name || '')}</option>`).join('');
+        }
+
+        async function loadProcedureMaterials() {
+            const procSel = document.getElementById('materials-procedure-select');
+            const body = document.getElementById('materials-body');
+            if (!procSel || !body) return;
+            const pid = procSel.value;
+            if (!pid) { renderProcedureMaterials([]); return; }
+            let res;
+            try {
+                res = await fetch(`/api/inventory/procedures/${pid}/materials`);
+            } catch (err) {
+                renderProcedureMaterials([]);
+                return;
+            }
+            const links = await res.json().catch(() => []);
+            renderProcedureMaterials(Array.isArray(links) ? links : []);
+        }
+
+        function renderProcedureMaterials(list) {
+            const body = document.getElementById('materials-body');
+            if (!body) return;
+            body.innerHTML = list.length ? list.map(m => `<tr>
+                <td>${escapeHtml(m.name || '')}</td>
+                <td class="numeric-cell">${escapeHtml(String(m.default_qty ?? ''))}</td>
+                <td class="actions-cell"><button class="btn btn-sm btn-danger"
+                    onclick="removeProcedureMaterial(${m.item_id})" data-i18n="remove">Remove</button></td>
+            </tr>`).join('') : `<tr><td colspan="3">${t('no_data','No data')}</td></tr>`;
+        }
+
+        async function addProcedureMaterial() {
+            const pid = document.getElementById('materials-procedure-select').value;
+            const itemId = document.getElementById('materials-item-select').value;
+            const qty = Number(document.getElementById('materials-default-qty').value);
+            if (!pid || !itemId) { showToast(t('pick_procedure_item','Pick a procedure and an item.'), 'warning'); return; }
+            let res;
+            try {
+                res = await fetch(`/api/inventory/procedures/${pid}/materials`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({item_id: Number(itemId), default_qty: qty})});
+            } catch (err) {
+                showToast(t('unable_link','Unable to link material.'), 'error');
+                return;
+            }
+            if (!res.ok) { showToast(t('unable_link','Unable to link material.'), 'error'); return; }
+            await loadProcedureMaterials();
+        }
+
+        async function removeProcedureMaterial(itemId) {
+            const pid = document.getElementById('materials-procedure-select').value;
+            let res;
+            try {
+                res = await fetch(`/api/inventory/procedures/${pid}/materials`, {
+                    method: 'DELETE', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({item_id: itemId})});
+            } catch (err) {
+                showToast(t('unable_unlink','Unable to remove link.'), 'error');
+                return;
+            }
+            if (!res.ok) { showToast(t('unable_unlink','Unable to remove link.'), 'error'); return; }
+            await loadProcedureMaterials();
         }
 
         // ── Tooth Conditions Admin ────────────────────────────────────────────────
@@ -4822,6 +5455,7 @@ HTML_TEMPLATE = '''
             else if (tabName === 'financial')    loadFinancialSection();
             else if (tabName === 'support')      loadSupportSection();
             else if (tabName === 'poststudio')   { if (window.PostStudioMount) window.PostStudioMount(); }
+            else if (tabName === 'depo')         loadDepoSection();
         }
 
         function switchReportsSubTab(tabName, clickedBtn = null, shouldLoad = true) {
@@ -7369,6 +8003,10 @@ HTML_TEMPLATE = '''
                                     <input type="text" name="tooth_no" id="followup-tooth-no" placeholder="e.g. 16" maxlength="10" autocomplete="off">
                                 </div>
                             </div>
+                            <div class="form-group" id="followup-materials-wrap" style="display:none;">
+                                <label>${t('issued_from_stock','Issued from stock')}</label>
+                                <div id="followup-materials-body"></div>
+                            </div>
                             <div class="form-row-3">
                                 <div class="form-group"><label>${t('price','Price')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')})</small></label><input type="text" inputmode="decimal" name="price" id="followup-price" value="0" class="calc-input" data-calc-field="1" placeholder="0" autocomplete="off" required></div>
                                 <div class="form-group"><label>${t('discount','Discount')} <small style="font-weight:400;color:var(--muted);">(${t('or_expression','or expression')}, ${t('or_percent','or % e.g. 20%')})</small></label><input type="text" inputmode="decimal" name="discount" id="followup-discount" value="0" class="calc-input" data-calc-field="1" data-percent-base="followup-price" placeholder="0" autocomplete="off"></div>
@@ -7469,6 +8107,8 @@ HTML_TEMPLATE = '''
                     showToast(t('procedure_required', 'Please select a procedure or enter a custom procedure name.'), 'warning');
                     return;
                 }
+                const followupMaterials = collectFollowupMaterials();
+                if (followupMaterials.length) data.materials = followupMaterials;
                 const response = await fetch(`/api/patients/${patient.id}/followups`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -7478,6 +8118,11 @@ HTML_TEMPLATE = '''
                     const payload = await response.json().catch(() => ({}));
                     showToast(payload.error || t('unable_save_followup', 'Unable to save follow-up.'), 'error');
                     return;
+                }
+                const result = await response.json().catch(() => ({}));
+                if (Array.isArray(result.stock_warnings) && result.stock_warnings.length) {
+                    const names = result.stock_warnings.map(w => w.name).join(', ');
+                    showToast(t('stock_low_after','Low stock after issuing: ') + names, 'warning');
                 }
                 await viewPatientProfile(patientId);
                 const followupsBtn = document.querySelector('#patient-profile-modal .profile-tab:nth-child(2)');

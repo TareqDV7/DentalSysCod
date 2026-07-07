@@ -534,6 +534,9 @@ SYNC_TABLES = [
     'treatments',
     'treatment_plans',
     'treatment_procedures',
+    'inventory_items',
+    'procedure_materials',
+    'stock_movements',
     'patient_followups',
     'expenses',
     'billing',
@@ -867,6 +870,57 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            name_ar TEXT,
+            category TEXT,
+            base_unit TEXT NOT NULL DEFAULT 'piece',
+            pack_unit TEXT,
+            pack_size REAL NOT NULL DEFAULT 1,
+            quantity REAL NOT NULL DEFAULT 0,
+            cost_per_unit REAL NOT NULL DEFAULT 0,
+            low_stock_threshold REAL NOT NULL DEFAULT 0,
+            reorder_qty REAL,
+            supplier TEXT,
+            location TEXT,
+            track_expiry INTEGER NOT NULL DEFAULT 0,
+            earliest_expiry TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS procedure_materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            procedure_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            default_qty REAL NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(procedure_id, item_id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            change_qty REAL NOT NULL,
+            reason TEXT NOT NULL,
+            unit_cost REAL,
+            source_type TEXT,
+            source_id INTEGER,
+            expiry_date TEXT,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_stock_mv_item ON stock_movements(item_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_stock_mv_source ON stock_movements(source_type, source_id)')
+    # Future column additions to these tables go through ensure_table_column(...).
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tooth_conditions (
@@ -1851,6 +1905,16 @@ def _apply_sync_import(cursor, payload):
         applied_total += applied
         skipped_total += skipped
 
+    # Depo v1 decision: we deliberately do NOT call
+    # inventory.apply_followup_consumption for synced-in patient_followups here.
+    # A desktop-recorded follow-up deducts at POST time, and its stock_movements
+    # replicate through this same loop (the 3 inventory tables are in SYNC_TABLES),
+    # so the deduction propagates as DATA — re-running it here would risk a
+    # double-deduct if a follow-up row arrives before its movement rows. Mobile is
+    # view-only for Depo, so a mobile-recorded procedure carries no movements; it
+    # reconciles on the desktop via Recount. apply_followup_consumption is
+    # idempotent, so a later version can safely enable sync-time deduction.
+
     incoming_tombstones = payload.get('tombstones')
     if not isinstance(incoming_tombstones, list):
         incoming_tombstones = []
@@ -2006,6 +2070,7 @@ from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE, FOR
 # Data-tools helpers (pure, no Flask).
 import db_import
 import db_merge
+import inventory
 import patient_dedupe
 import patient_import
 
@@ -2031,7 +2096,7 @@ _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/backup-file', '/api/bt/status'
                         '/api/data/import-patients/preview',
                         '/api/data/import-patients/commit',
                         '/api/branding', '/api/posts'}
-_AUTH_REQUIRED_PREFIXES = ('/invoice/', '/api/branding/', '/api/posts/')
+_AUTH_REQUIRED_PREFIXES = ('/invoice/', '/api/branding/', '/api/posts/', '/api/inventory/')
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
 _MAINTENANCE = False
@@ -2979,10 +3044,24 @@ def patient_followups(patient_id):
             'amount': lab_expense
         })
 
+    # Auto-deduct linked materials from stock (insight-only; never blocks the
+    # follow-up). Idempotent on the follow-up id; warnings surface low/zero stock.
+    overrides = None
+    raw_materials = data.get('materials')
+    if isinstance(raw_materials, list):
+        overrides = {}
+        for m in raw_materials:
+            try:
+                overrides[int(m['item_id'])] = float(m['qty'])
+            except (KeyError, TypeError, ValueError):
+                continue
+    stock_warnings = inventory.apply_followup_consumption(
+        cursor, followup_id, procedure_id, overrides=overrides)
+
     _recompute_followup_balances(cursor, patient_id)
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'stock_warnings': stock_warnings})
 
 @app.route('/api/patients/<int:patient_id>/followups/<int:followup_id>', methods=['DELETE', 'PUT'])
 def followup_detail(patient_id, followup_id):
@@ -3007,6 +3086,8 @@ def followup_detail(patient_id, followup_id):
             cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
             record_tombstone(cursor, 'expenses', exp_id)
         append_audit_log(cursor, 'delete', 'patient_followup', followup_id, {'patient_id': patient_id})
+        # Restore any stock this follow-up consumed (compensating reversal).
+        inventory.reverse_followup_consumption(cursor, followup_id)
         _recompute_followup_balances(cursor, patient_id)
         conn.commit()
         conn.close()
@@ -3088,10 +3169,236 @@ def followup_detail(patient_id, followup_id):
         'price': price,
         'payment': payment,
     })
+    # Re-sync stock for the edited follow-up: reverse the prior deduction, then
+    # re-apply against the stored procedure (+ any point-of-use overrides).
+    cursor.execute('SELECT procedure_id FROM patient_followups WHERE id=?', (followup_id,))
+    prow = cursor.fetchone()
+    edited_procedure_id = prow['procedure_id'] if prow else None
+    overrides = None
+    raw_materials = data.get('materials')
+    if isinstance(raw_materials, list):
+        overrides = {}
+        for m in raw_materials:
+            try:
+                overrides[int(m['item_id'])] = float(m['qty'])
+            except (KeyError, TypeError, ValueError):
+                continue
+    inventory.reverse_followup_consumption(cursor, followup_id)
+    inventory.apply_followup_consumption(cursor, followup_id, edited_procedure_id, overrides=overrides)
     _recompute_followup_balances(cursor, patient_id)
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+
+def _item_dict(row):
+    d = dict(row)
+    pack = d.get('pack_size') or 1
+    d['packs_remaining'] = (d.get('quantity') or 0) / pack if pack else None
+    return d
+
+
+@app.route('/api/inventory/items', methods=['GET', 'POST'])
+def inventory_items():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        include_inactive = request.args.get('include_inactive')
+        where = '' if include_inactive else 'WHERE active = 1'
+        rows = cursor.execute(f'SELECT * FROM inventory_items {where} ORDER BY name').fetchall()
+        conn.close()
+        return jsonify([_item_dict(r) for r in rows])
+
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        conn.close()
+        return jsonify({'error': 'Name is required'}), 400
+    cursor.execute(
+        'INSERT INTO inventory_items '
+        '(name, name_ar, category, base_unit, pack_unit, pack_size, '
+        ' low_stock_threshold, reorder_qty, supplier, location, track_expiry) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        (name, data.get('name_ar'), data.get('category'),
+         data.get('base_unit') or 'piece', data.get('pack_unit'),
+         float(data.get('pack_size') or 1), float(data.get('low_stock_threshold') or 0),
+         data.get('reorder_qty'), data.get('supplier'), data.get('location'),
+         1 if data.get('track_expiry') else 0))
+    item_id = cursor.lastrowid
+    append_audit_log(cursor, 'create', 'inventory_item', item_id, {'name': name})
+    row = cursor.execute('SELECT * FROM inventory_items WHERE id=?', (item_id,)).fetchone()
+    conn.commit(); conn.close()
+    return jsonify(_item_dict(row))
+
+
+@app.route('/api/inventory/items/<int:item_id>', methods=['PUT'])
+def inventory_item_update(item_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    data = request.json or {}
+    fields = ['name', 'name_ar', 'category', 'base_unit', 'pack_unit', 'pack_size',
+              'low_stock_threshold', 'reorder_qty', 'supplier', 'location',
+              'track_expiry', 'active']
+    sets, vals = [], []
+    for f in fields:
+        if f in data:
+            sets.append(f'{f}=?')
+            v = data[f]
+            if f in ('track_expiry', 'active'):
+                v = 1 if v else 0
+            vals.append(v)
+    if not sets:
+        conn.close()
+        return jsonify({'error': 'No fields to update'}), 400
+    vals.append(item_id)
+    cursor.execute(f"UPDATE inventory_items SET {','.join(sets)}, "
+                   f"updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Item not found'}), 404
+    row = cursor.execute('SELECT * FROM inventory_items WHERE id=?', (item_id,)).fetchone()
+    conn.commit(); conn.close()
+    return jsonify(_item_dict(row))
+
+
+@app.route('/api/inventory/items/<int:item_id>/restock', methods=['POST'])
+def inventory_restock(item_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    data = request.json or {}
+    item = cursor.execute('SELECT pack_size FROM inventory_items WHERE id=?', (item_id,)).fetchone()
+    if item is None:
+        conn.close()
+        return jsonify({'error': 'Item not found'}), 404
+    pack_size = float(item['pack_size'] or 1)
+    if data.get('base_qty') not in (None, ''):
+        base_qty = float(data['base_qty'])
+    else:
+        base_qty = float(data.get('pack_qty') or 0) * pack_size
+    if base_qty <= 0:
+        conn.close()
+        return jsonify({'error': 'Quantity must be positive'}), 400
+    if data.get('unit_cost') not in (None, ''):
+        unit_cost = float(data['unit_cost'])
+    else:
+        unit_cost = (float(data.get('pack_cost') or 0) / pack_size) if pack_size else 0.0
+    if unit_cost < 0:
+        conn.close()
+        return jsonify({'error': 'Cost cannot be negative'}), 400
+    res = inventory.post_movement(cursor, item_id, base_qty, 'restock',
+                                  unit_cost=unit_cost, source_type='manual',
+                                  expiry_date=data.get('expiry_date') or None,
+                                  note=data.get('note'))
+    row = cursor.execute('SELECT quantity, cost_per_unit FROM inventory_items WHERE id=?',
+                         (item_id,)).fetchone()
+    conn.commit(); conn.close()
+    return jsonify({'quantity': row['quantity'], 'cost_per_unit': row['cost_per_unit'],
+                    'low_stock': res['low_stock']})
+
+
+@app.route('/api/inventory/items/<int:item_id>/adjust', methods=['POST'])
+def inventory_adjust(item_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    data = request.json or {}
+    counted = float(data.get('counted_qty') or 0)
+    if counted < 0:
+        conn.close()
+        return jsonify({'error': 'Count cannot be negative'}), 400
+    item = cursor.execute('SELECT quantity FROM inventory_items WHERE id=?', (item_id,)).fetchone()
+    if item is None:
+        conn.close()
+        return jsonify({'error': 'Item not found'}), 404
+    delta = counted - float(item['quantity'])
+    if delta != 0:
+        inventory.post_movement(cursor, item_id, delta, 'adjustment',
+                                source_type='count', note=data.get('note'))
+    row = cursor.execute('SELECT quantity FROM inventory_items WHERE id=?', (item_id,)).fetchone()
+    conn.commit(); conn.close()
+    return jsonify({'quantity': row['quantity']})
+
+
+@app.route('/api/inventory/items/<int:item_id>/writeoff', methods=['POST'])
+def inventory_writeoff(item_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    data = request.json or {}
+    qty = float(data.get('qty') or 0)
+    if qty <= 0:
+        conn.close()
+        return jsonify({'error': 'Quantity must be positive'}), 400
+    if cursor.execute('SELECT 1 FROM inventory_items WHERE id=?', (item_id,)).fetchone() is None:
+        conn.close()
+        return jsonify({'error': 'Item not found'}), 404
+    res = inventory.post_movement(cursor, item_id, -qty, 'writeoff',
+                                  source_type='manual', note=data.get('note'))
+    conn.commit(); conn.close()
+    return jsonify({'quantity': res['quantity']})
+
+
+@app.route('/api/inventory/report', methods=['GET'])
+def inventory_report():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    low = cursor.execute(
+        'SELECT * FROM inventory_items WHERE active=1 AND quantity <= low_stock_threshold '
+        'ORDER BY name').fetchall()
+    value_row = cursor.execute(
+        'SELECT COALESCE(SUM(quantity * cost_per_unit), 0) FROM inventory_items '
+        'WHERE active=1').fetchone()
+    expiring = cursor.execute(
+        "SELECT i.id, i.name, sm.expiry_date, sm.change_qty "
+        "FROM stock_movements sm JOIN inventory_items i ON i.id = sm.item_id "
+        "WHERE i.active=1 AND i.track_expiry=1 AND sm.reason='restock' "
+        "AND sm.expiry_date IS NOT NULL "
+        "AND date(sm.expiry_date) <= date('now', '+60 day') "
+        "ORDER BY sm.expiry_date").fetchall()
+    conn.close()
+    return jsonify({'low_stock': [_item_dict(r) for r in low],
+                    'on_hand_value': float(value_row[0]),
+                    'expiring_soon': [dict(r) for r in expiring]})
+
+
+@app.route('/api/inventory/procedures/<int:procedure_id>/materials',
+           methods=['GET', 'POST', 'DELETE'])
+def inventory_procedure_materials(procedure_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        rows = cursor.execute(
+            'SELECT pm.item_id, pm.default_qty, i.name, i.base_unit '
+            'FROM procedure_materials pm JOIN inventory_items i ON i.id = pm.item_id '
+            'WHERE pm.procedure_id=? AND pm.active=1', (procedure_id,)).fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    data = request.json or {}
+    item_id = data.get('item_id')
+    if not item_id:
+        conn.close()
+        return jsonify({'error': 'item_id is required'}), 400
+
+    if request.method == 'DELETE':
+        cursor.execute('DELETE FROM procedure_materials WHERE procedure_id=? AND item_id=?',
+                       (procedure_id, item_id))
+        conn.commit(); conn.close()
+        return jsonify({'success': True})
+
+    # POST = upsert link + default_qty
+    cursor.execute(
+        'INSERT INTO procedure_materials (procedure_id, item_id, default_qty) VALUES (?,?,?) '
+        'ON CONFLICT(procedure_id, item_id) DO UPDATE SET default_qty=excluded.default_qty, active=1',
+        (procedure_id, item_id, float(data.get('default_qty') or 0)))
+    conn.commit(); conn.close()
+    return jsonify({'success': True})
+
 
 @app.route('/api/appointments', methods=['GET', 'POST'])
 def appointments():
