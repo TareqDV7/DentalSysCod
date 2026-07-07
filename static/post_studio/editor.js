@@ -529,7 +529,7 @@ export function mountEditor(rootEl, host, opts = {}) {
     if (cur !== lang) {
       langObserver.disconnect();
       rootEl._psLangObserver = null;
-      mountEditor(rootEl, host, { initialComp: state.comp });
+      mountEditor(rootEl, host, { initialComp: state.comp, pointerProfile });
     }
   });
   langObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });

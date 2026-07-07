@@ -409,3 +409,20 @@ def test_touch_profile_grows_resize_handle():
         # mouse profile renders ~10 screen-px, touch renders ~32 — 20 cleanly separates them
         assert size["w"] > 20 and size["h"] > 20, size
         browser.close()
+
+
+def test_touch_profile_survives_language_toggle():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(HARNESS.as_uri() + "?profile=touch")
+        page.wait_for_function("() => window.__ready === true")
+        page.wait_for_selector("[data-ps-stage]")
+        page.evaluate("() => document.documentElement.setAttribute('lang', 'ar')")
+        page.wait_for_function("() => document.body.textContent.includes('القالب اللوني')")
+        page.click("[data-ps-block='0']")
+        page.wait_for_selector("[data-ps-resize-handle='br']")
+        size = page.eval_on_selector("[data-ps-resize-handle='br']",
+            "n => { const b = n.getBoundingClientRect(); return { w: b.width, h: b.height }; }")
+        assert size["w"] > 20 and size["h"] > 20, size
+        browser.close()
