@@ -54,7 +54,12 @@ class PostStudioBridgeHandler {
     try {
       final result = await _dispatch(method, msg['args']);
       await _resolve(id, result);
-    } on Exception catch (e) {
+    } catch (e) {
+      // Deliberately broader than `on Exception`: this is the outer boundary
+      // of one JS<->Dart bridge frame. A malformed args shape from the JS
+      // side can throw a bare Error (e.g. TypeError), and the JS-side
+      // Promise must still settle via reject — or the editor UI hangs
+      // forever waiting on a response that will never come.
       await _reject(id, e.toString());
     }
   }

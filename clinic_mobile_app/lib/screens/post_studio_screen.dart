@@ -39,8 +39,10 @@ class _PostStudioScreenState extends State<PostStudioScreen> {
       ..setNavigationDelegate(NavigationDelegate(
         onPageFinished: (_) => _initialLoadComplete = true,
         onNavigationRequest: _onNavigationRequest,
-        onWebResourceError: (_) {
-          if (mounted) setState(() => _loadFailed = true);
+        onWebResourceError: (error) {
+          if (error.isForMainFrame != false && mounted) {
+            setState(() => _loadFailed = true);
+          }
         },
       ))
       ..addJavaScriptChannel(

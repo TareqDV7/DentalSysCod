@@ -196,6 +196,16 @@ void main() {
       expect(calls.single, contains('network down'));
     });
 
+    test('onMessage rejects (not hangs) when args is not a map', () async {
+      final calls = <String>[];
+      final handler = PostStudioBridgeHandler(
+        api: _FakeClinicApi(),
+        runJavaScript: (js) async => calls.add(js),
+      );
+      await handler.onMessage(jsonEncode({'id': '9', 'method': 'savePost', 'args': null}));
+      expect(calls.single, startsWith('window.__psReject('));
+    });
+
     test('malformed JSON is ignored without throwing', () async {
       final calls = <String>[];
       final handler = PostStudioBridgeHandler(
