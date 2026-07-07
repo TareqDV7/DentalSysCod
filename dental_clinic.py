@@ -2059,12 +2059,18 @@ def _require_login_for_portal():
     # Editor ESM bundle is a public same-origin asset (served to the portal page).
     if request.method == 'GET' and path.startswith('/post_studio/'):
         return None
-    # Read-only marketing-post endpoints stay reachable for the offline-first
-    # mobile app, which authenticates with device/clinic-token headers rather
-    # than the portal session cookie — same open posture as /api/patients and
-    # /api/medical-images. Writes (POST/DELETE/preview) and branding stay gated.
-    if request.method == 'GET' and (path == '/api/posts'
-                                    or re.match(r'^/api/posts/\d+(/image)?$', path)):
+    # marketing-post endpoints stay reachable for the offline-first mobile
+    # app, which authenticates with device/clinic-token headers rather than
+    # the portal session cookie — same open posture as /api/patients and
+    # /api/medical-images for reads. Writes additionally require one of
+    # those two headers, so a stray logged-out browser tab still falls
+    # through to the session check below (matches this endpoint's existing
+    # desktop-security posture — see test_post_writes_still_require_login).
+    is_posts_path = path == '/api/posts' or re.match(r'^/api/posts/\d+(/image)?$', path)
+    if is_posts_path and request.method == 'GET':
+        return None
+    if is_posts_path and request.method in ('POST', 'DELETE') and (
+            request.headers.get('X-Clinic-Token') or request.headers.get('X-Device-Token')):
         return None
     if session.get('uid'):
         return None
@@ -2147,9 +2153,11 @@ if not _CSRF_ENABLED:
 def _request_is_csrf_exempt():
     # A classic CSRF vector (an HTML form, or a "simple" cross-origin fetch) cannot
     # set custom request headers without a CORS preflight this server never approves.
-    # So the presence of X-Clinic-Token / Authorization proves the request is not a
-    # forged cross-site one. Mobile + cloud-sync use the X-Clinic-Token header.
-    return bool(request.headers.get('X-Clinic-Token') or request.headers.get('Authorization'))
+    # So the presence of X-Clinic-Token / X-Device-Token / Authorization proves the
+    # request is not a forged cross-site one. Mobile uses X-Clinic-Token (cloud link)
+    # or X-Device-Token (LAN link); cloud-sync uses X-Clinic-Token.
+    return bool(request.headers.get('X-Clinic-Token') or request.headers.get('X-Device-Token')
+                or request.headers.get('Authorization'))
 
 
 def _form_csrf_ok():

@@ -156,6 +156,37 @@ def test_save_persists_png_and_spec_then_roundtrips(client):
     assert client.get(f'/api/posts/{pid}').status_code == 404
 
 
+def test_post_create_allowed_with_clinic_token_header(client):
+    # Mobile's cloud-linked create path: no portal session, but a clinic token.
+    r = client.post('/api/posts',
+                     data={'image': (io.BytesIO(_png()), 'export.png'),
+                           'template_json': _TJSON, 'theme': 'dark_premium',
+                           'size': 'square', 'title': 'Mobile Post'},
+                     headers={'X-Clinic-Token': 'whatever'},
+                     content_type='multipart/form-data')
+    assert r.status_code == 200
+
+
+def test_post_create_allowed_with_device_token_header(client):
+    # Mobile's LAN-linked create path: no portal session, but a device token.
+    r = client.post('/api/posts',
+                     data={'image': (io.BytesIO(_png()), 'export.png'),
+                           'template_json': _TJSON, 'theme': 'dark_premium',
+                           'size': 'square', 'title': 'Mobile Post'},
+                     headers={'X-Device-Token': 'whatever'},
+                     content_type='multipart/form-data')
+    assert r.status_code == 200
+
+
+def test_post_delete_allowed_with_clinic_token_header(client):
+    _login(client)
+    pid = _save_post(client).get_json()['id']
+    with client.session_transaction() as sess:
+        sess.clear()  # simulate mobile: no portal session on this request
+    r = client.delete(f'/api/posts/{pid}', headers={'X-Clinic-Token': 'whatever'})
+    assert r.status_code == 200
+
+
 def test_save_rejects_missing_png_or_bad_spec(client):
     _login(client)
     no_png = client.post('/api/posts',

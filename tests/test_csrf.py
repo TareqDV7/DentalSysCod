@@ -88,6 +88,12 @@ def test_x_clinic_token_header_exempts(client):
     assert resp.status_code != 403  # exempt: handler ran (mobile/sync path)
 
 
+def test_x_device_token_header_exempts(client):
+    resp = client.post('/api/appointments', json={'patient_id': 999999},
+                       headers={'X-Device-Token': 'whatever'}, csrf=False)
+    assert resp.status_code != 403  # exempt: handler ran (mobile LAN path)
+
+
 def test_authorization_header_exempts(client):
     resp = client.post('/api/appointments', json={'patient_id': 999999},
                        headers={'Authorization': 'Bearer x'}, csrf=False)
