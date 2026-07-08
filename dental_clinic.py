@@ -2495,6 +2495,118 @@ def auth_me():
     return jsonify({'authenticated': bool(session.get('uid')), 'username': session.get('uname', '')})
 
 
+def _count_users_with_permission(cursor, permission_key, exclude_user_id=None):
+    rows = cursor.execute(
+        'SELECT user_id FROM user_permissions WHERE permission_key = ? AND granted = 1',
+        (permission_key,)
+    ).fetchall()
+    ids = {r[0] for r in rows}
+    if exclude_user_id is not None:
+        ids.discard(exclude_user_id)
+    if not ids:
+        return 0
+    placeholders = ','.join('?' * len(ids))
+    active = cursor.execute(
+        f'SELECT COUNT(*) FROM users WHERE id IN ({placeholders}) AND is_active = 1',
+        tuple(ids)
+    ).fetchone()[0]
+    return active
+
+
+@app.route('/api/staff', methods=['GET', 'POST'])
+def staff_accounts():
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        rows = cursor.execute(
+            'SELECT id, username, display_name, is_active, created_at, last_login_at FROM users '
+            'ORDER BY username'
+        ).fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+    if not username or not password:
+        conn.close()
+        return jsonify({'error': 'Username and password are required'}), 400
+    existing = cursor.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({'error': 'That username is already in use'}), 400
+    cursor.execute(
+        'INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)',
+        (username, hash_password(password), data.get('display_name') or username))
+    new_id = cursor.lastrowid
+    requested_perms = data.get('permissions') or []
+    for key in requested_perms:
+        permissions.set_permission(cursor, new_id, key, True)
+    append_audit_log(cursor, 'create', 'staff_account', new_id, {'username': username})
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'id': new_id})
+
+
+@app.route('/api/staff/<int:user_id>', methods=['PUT'])
+def staff_account_update(user_id):
+    data = request.json or {}
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if 'is_active' in data and not data['is_active']:
+        # Refuse to deactivate the last active account holding staff.manage —
+        # that would lock the clinic out of Manage Staff entirely.
+        cursor.execute('SELECT 1 FROM user_permissions WHERE user_id = ? AND permission_key = ? AND granted = 1',
+                        (user_id, 'staff.manage'))
+        if cursor.fetchone():
+            remaining = _count_users_with_permission(cursor, 'staff.manage', exclude_user_id=user_id)
+            if remaining == 0:
+                conn.close()
+                return jsonify({'error': 'Cannot deactivate the last account with staff management access'}), 400
+    sets, vals = [], []
+    if 'is_active' in data:
+        sets.append('is_active = ?'); vals.append(1 if data['is_active'] else 0)
+    if 'display_name' in data:
+        sets.append('display_name = ?'); vals.append(data['display_name'])
+    if not sets:
+        conn.close()
+        return jsonify({'error': 'No fields to update'}), 400
+    vals.append(user_id)
+    cursor.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", vals)
+    append_audit_log(cursor, 'update', 'staff_account', user_id, data)
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/staff/<int:user_id>/permissions', methods=['GET', 'PUT'])
+def staff_permissions(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        granted = sorted(permissions.get_permissions(cursor, user_id))
+        conn.close()
+        return jsonify({'user_id': user_id, 'granted': granted, 'all_keys': list(permissions.PERMISSION_KEYS)})
+
+    data = request.json or {}
+    key = data.get('permission_key')
+    granted_flag = bool(data.get('granted'))
+    if not granted_flag and key == 'staff.manage':
+        remaining = _count_users_with_permission(cursor, 'staff.manage', exclude_user_id=user_id)
+        if remaining == 0:
+            conn.close()
+            return jsonify({'error': 'Cannot revoke the last account with staff management access'}), 400
+    try:
+        permissions.set_permission(cursor, user_id, key, granted_flag)
+    except ValueError as exc:
+        conn.close()
+        return jsonify({'error': str(exc)}), 400
+    append_audit_log(cursor, 'update', 'staff_permission', user_id, {'key': key, 'granted': granted_flag})
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
 @app.route('/api/auth/change-password', methods=['POST'])
 def auth_change_password():
     if not session.get('uid'):

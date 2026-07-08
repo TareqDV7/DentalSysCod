@@ -187,3 +187,77 @@ def test_device_token_request_bypasses_permission_gate(db):
     # whatever the route's own logic does (200, or 401 from device-token
     # validation elsewhere — NOT 403 permission_denied).
     assert r.status_code != 403 or r.get_json().get('reason') != 'permission_denied'
+
+
+def _owner_client(app, uid=1, uname='admin'):
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['uid'] = uid
+        sess['uname'] = uname
+    return client
+
+
+def test_list_staff_returns_seeded_admin(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    client = _owner_client(app)
+    r = client.get('/api/staff')
+    assert r.status_code == 200
+    usernames = [u['username'] for u in r.get_json()]
+    assert 'admin' in usernames
+
+
+def test_create_staff_account_with_selected_permissions(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    client = _owner_client(app)
+    r = client.post('/api/staff', json={
+        'username': 'frontdesk', 'password': 'x', 'display_name': 'Front Desk',
+        'permissions': ['appointments.view', 'appointments.edit', 'patients.view']})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    new_id = r.get_json()['id']
+
+    r2 = client.get(f'/api/staff/{new_id}/permissions')
+    granted = set(r2.get_json()['granted'])
+    assert granted == {'appointments.view', 'appointments.edit', 'patients.view'}
+
+
+def test_create_staff_rejects_duplicate_username(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    client = _owner_client(app)
+    client.post('/api/staff', json={'username': 'dup', 'password': 'x', 'permissions': []})
+    r = client.post('/api/staff', json={'username': 'dup', 'password': 'x', 'permissions': []})
+    assert r.status_code == 400
+
+
+def test_deactivate_last_staff_manage_account_is_blocked(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    client = _owner_client(app)
+    # admin (uid=1) is the ONLY account with staff.manage — deactivating it
+    # would lock the clinic out of staff management entirely.
+    r = client.put('/api/staff/1', json={'is_active': False})
+    assert r.status_code == 400
+    assert 'last' in r.get_json()['error'].lower()
+
+
+def test_deactivate_staff_account_succeeds_when_another_owner_exists(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    client = _owner_client(app)
+    r = client.post('/api/staff', json={
+        'username': 'owner2', 'password': 'x', 'permissions': list(permissions.PERMISSION_KEYS)})
+    second_owner_id = r.get_json()['id']
+    r2 = client.put(f'/api/staff/{second_owner_id}', json={'is_active': False})
+    assert r2.status_code == 200
+
+
+def test_revoke_permission_from_self_when_another_owner_exists(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    client = _owner_client(app)
+    client.post('/api/staff', json={
+        'username': 'owner2', 'password': 'x', 'permissions': list(permissions.PERMISSION_KEYS)})
+    r = client.put('/api/staff/1/permissions', json={'permission_key': 'staff.manage', 'granted': False})
+    assert r.status_code == 200
