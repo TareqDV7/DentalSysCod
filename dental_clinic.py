@@ -1060,9 +1060,19 @@ def init_database():
             entity_type TEXT NOT NULL,
             entity_id INTEGER,
             details TEXT,
+            actor_user_id INTEGER,
+            actor_username TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # Migration: add actor fields to audit_logs for existing installations
+    cursor.execute("PRAGMA table_info(audit_logs)")
+    _audit_cols = {row[1] for row in cursor.fetchall()}
+    if 'actor_user_id' not in _audit_cols:
+        cursor.execute('ALTER TABLE audit_logs ADD COLUMN actor_user_id INTEGER')
+    if 'actor_username' not in _audit_cols:
+        cursor.execute('ALTER TABLE audit_logs ADD COLUMN actor_username TEXT')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS app_settings (
@@ -1457,10 +1467,23 @@ def append_audit_log(cursor, action_type, entity_type, entity_id=None, details=N
             details_text = details
         else:
             details_text = json.dumps(details, ensure_ascii=False)
+    # Best-effort actor capture — reads the current request's session if one
+    # exists. Falls back to (None, None) outside a request context (e.g. a
+    # background sync/migration call) rather than raising, since audit
+    # logging must never be the reason a write fails.
+    actor_user_id = None
+    actor_username = None
+    try:
+        actor_user_id = session.get('uid')
+        actor_username = session.get('uname')
+    except RuntimeError:
+        pass  # outside an active Flask request/app context
     cursor.execute('''
-        INSERT INTO audit_logs (action_type, entity_type, entity_id, details)
-        VALUES (?, ?, ?, ?)
-    ''', (str(action_type or ''), str(entity_type or ''), entity_id, details_text))
+        INSERT INTO audit_logs (action_type, entity_type, entity_id, details,
+                                 actor_user_id, actor_username)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (str(action_type or ''), str(entity_type or ''), entity_id, details_text,
+          actor_user_id, actor_username))
 
 
 def normalize_datetime_input(value):

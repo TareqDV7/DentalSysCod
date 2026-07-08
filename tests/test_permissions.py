@@ -84,3 +84,47 @@ def test_new_user_with_no_permission_rows_gets_none_by_default(db):
     granted = permissions.get_permissions(cur, new_uid)
     conn.close()
     assert granted == set()
+
+
+def test_audit_log_captures_actor_from_session(tmp_path, monkeypatch):
+    # Test that audit_logs captures the acting staff member from session.
+    test_db = tmp_path / 'audit_test.db'
+    monkeypatch.setattr(dental_clinic, 'DB_NAME', str(test_db))
+    dental_clinic.init_database()
+
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+
+    # Create a test patient
+    conn = sqlite3.connect(str(test_db))
+    cur = conn.cursor()
+    cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
+                ('Test', 'Patient', '0500'))
+    patient_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    with app.test_client() as client:
+        # Set session uid=1 and uname='admin' (the pre-created admin from init)
+        with client.session_transaction() as sess:
+            sess['uid'] = 1
+            sess['uname'] = 'admin'
+
+        # POST to /api/billing which calls append_audit_log with entity_type='billing'
+        client.post('/api/billing', json={
+            'patient_id': patient_id,
+            'subtotal': 100.0,
+            'discount': 0,
+            'paid_amount': 0
+        })
+
+    # Query the audit log to verify actor fields are populated
+    conn = sqlite3.connect(str(test_db))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT actor_user_id, actor_username FROM audit_logs WHERE entity_type = 'billing' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    assert row['actor_user_id'] == 1
+    assert row['actor_username'] == 'admin'
