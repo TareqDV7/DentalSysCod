@@ -128,3 +128,62 @@ def test_audit_log_captures_actor_from_session(tmp_path, monkeypatch):
     conn.close()
     assert row['actor_user_id'] == 1
     assert row['actor_username'] == 'admin'
+
+
+def test_session_user_without_permission_gets_403(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO users (username, password_hash, display_name) VALUES (?,?,?)",
+        ('frontdesk', dental_clinic.hash_password('x'), 'Front Desk'))
+    uid = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess['uid'] = uid
+            sess['uname'] = 'frontdesk'
+        r = client.post('/api/expenses', json={
+            'category': 'Test', 'amount': 10, 'expense_date': '01/01/2026',
+            'payment_status': 'paid'})
+    assert r.status_code == 403
+    assert r.get_json()['reason'] == 'permission_denied'
+
+
+def test_session_user_with_permission_succeeds(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO users (username, password_hash, display_name) VALUES (?,?,?)",
+        ('frontdesk', dental_clinic.hash_password('x'), 'Front Desk'))
+    uid = cur.lastrowid
+    permissions.set_permission(cur, uid, 'expenses.edit', True)
+    conn.commit()
+    conn.close()
+
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess['uid'] = uid
+            sess['uname'] = 'frontdesk'
+        r = client.post('/api/expenses', json={
+            'category': 'Test', 'amount': 10, 'expense_date': '01/01/2026',
+            'payment_status': 'paid'})
+    assert r.status_code == 200
+
+
+def test_device_token_request_bypasses_permission_gate(db):
+    # Mobile's device-token path must be completely unaffected by RBAC — it
+    # never carries a session, so the gate must not apply to it at all.
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    with app.test_client() as client:
+        r = client.get('/api/patients', headers={'X-Device-Token': 'irrelevant-in-this-test'})
+    # No session at all and no permission gate applied — falls through to
+    # whatever the route's own logic does (200, or 401 from device-token
+    # validation elsewhere — NOT 403 permission_denied).
+    assert r.status_code != 403 or r.get_json().get('reason') != 'permission_denied'

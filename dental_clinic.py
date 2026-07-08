@@ -2109,6 +2109,7 @@ import db_merge
 import inventory
 import patient_dedupe
 import patient_import
+import permissions
 
 
 def _safe_next_url(target):
@@ -2178,6 +2179,119 @@ def _require_login_for_portal():
     if path.startswith('/api/'):
         return jsonify({'error': 'Authentication required'}), 401
     return redirect(url_for('login_page', next=path))
+
+
+# Route -> required-permission mapping for session-authenticated (desktop)
+# requests only. Checked in order; first prefix match wins. A route not
+# listed here requires no specific permission (only login, if it's already
+# in _AUTH_REQUIRED_EXACT/_AUTH_REQUIRED_PREFIXES) — this only ever ADDS
+# restriction on top of today's behavior, never removes it. Mobile/device
+# and clinic-token requests never reach this gate at all (see
+# _enforce_staff_permission below) — RBAC is desktop-portal-only per the
+# design spec.
+_PERMISSION_RULES = (
+    # (method_set_or_None, path_regex, permission_key) — order matters, first match wins.
+    # Money/financial sub-resources on a patient (checked before the generic
+    # patient rules below, since they're more specific paths).
+    (None, r'^/api/patients/\d+/(credit|invoice-summary|payment-history)$', 'billing.view'),
+    # Follow-up sheet, tooth-chart, medical-images: combined clinical+billing
+    # permission (see Global Constraints — no field-level split in this PR).
+    (frozenset({'GET'}), r'^/api/patients/\d+/(followups|tooth-chart)(/.*)?$', 'followups.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/patients/\d+/(followups|tooth-chart)(/.*)?$', 'followups.edit'),
+    (frozenset({'GET'}), r'^/api/medical-images(/.*)?$', 'followups.view'),
+    (frozenset({'POST'}), r'^/api/medical-images$', 'followups.edit'),
+    # Full-profile is a read-only aggregate — gated on the base view permission.
+    (frozenset({'GET'}), r'^/api/patients/\d+/full-profile$', 'patients.view'),
+    # Generic patient demographics.
+    (frozenset({'POST'}), r'^/api/patients$', 'patients.edit'),
+    (frozenset({'PUT', 'DELETE'}), r'^/api/patients/\d+$', 'patients.edit'),
+    (frozenset({'GET'}), r'^/api/patients(/check-duplicate)?$', 'patients.view'),
+
+    # Treatment plans — clinical, bucketed with follow-ups.
+    (frozenset({'GET'}), r'^/api/treatment-plans$', 'followups.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/treatment-plans(/.*)?$', 'followups.edit'),
+
+    # Appointments / visits / holidays (scheduling).
+    (frozenset({'GET'}), r'^/api/(appointments|visits)(/.*)?$', 'appointments.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/(appointments|visits)(/.*)?$', 'appointments.edit'),
+    (frozenset({'GET'}), r'^/api/holidays$', 'appointments.view'),
+    (frozenset({'POST', 'DELETE'}), r'^/api/holidays(/.*)?$', 'appointments.edit'),
+
+    # Billing.
+    (frozenset({'GET'}), r'^/api/billing(/.*)?$', 'billing.view'),
+    (frozenset({'POST', 'DELETE'}), r'^/api/billing(/.*)?$', 'billing.edit'),
+    (frozenset({'GET'}), r'^/invoice/\d+$', 'billing.view'),
+    (frozenset({'GET'}), r'^/api/reports/receivables$', 'billing.view'),
+
+    # Expenses.
+    (frozenset({'GET'}), r'^/api/expenses$', 'expenses.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/expenses(/.*)?$', 'expenses.edit'),
+
+    # Depo / inventory.
+    (frozenset({'GET'}), r'^/api/inventory(/.*)?$', 'depo.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/inventory/(items|procedures)(/.*)?$', 'depo.edit'),
+
+    # Reports (revenue/weekly summaries — distinct from receivables above).
+    (frozenset({'GET'}), r'^/api/reports/(summary|weekly)$', 'reports.view'),
+
+    # Post Studio: creating/deleting posts requires the permission; viewing
+    # (GET) stays open, matching the existing mobile-compat carve-out in
+    # _require_login_for_portal for the same paths.
+    (frozenset({'POST', 'DELETE'}), r'^/api/posts(/.*)?$', 'post_studio.use'),
+
+    # Data tools — dangerous, off by default for anyone but Owner.
+    (None, r'^/api/data/(export-bundle|export-bundle-file|merge|replace|clear-catalogs|'
+           r'duplicate-patients|merge-patients|import-patients/preview|import-patients/commit)$',
+           'data_tools.use'),
+    (None, r'^/api/backup(-file)?$', 'data_tools.use'),
+
+    # Catalog editing (procedures/tooth-conditions) and clinic-wide settings.
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/(treatment-procedures|tooth-conditions)(/.*)?$', 'settings.manage'),
+    (frozenset({'PUT'}), r'^/api/branding$', 'settings.manage'),
+    (frozenset({'POST'}), r'^/api/clinic-settings$', 'settings.manage'),
+    (frozenset({'POST'}), r'^/api/bt/configure$', 'settings.manage'),
+    (frozenset({'GET'}), r'^/api/audit-logs$', 'settings.manage'),
+
+    # Staff management itself (added in Task 4) — gated on staff.manage.
+    (None, r'^/api/staff(/.*)?$', 'staff.manage'),
+)
+
+_PERMISSION_RULE_CACHE = tuple((methods, re.compile(pattern), key) for methods, pattern, key in _PERMISSION_RULES)
+# (dental_clinic.py already imports `re` at module level — no new import needed.)
+
+
+def _permission_required_for(method, path):
+    for methods, compiled, key in _PERMISSION_RULE_CACHE:
+        if methods is not None and method not in methods:
+            continue
+        if compiled.match(path):
+            return key
+    return None
+
+
+@app.before_request
+def _enforce_staff_permission():
+    if request.method == 'OPTIONS':
+        return None
+    # Mobile/device requests are never subject to desktop RBAC.
+    if request.headers.get('X-Device-Token') or request.headers.get('X-Clinic-Token'):
+        return None
+    uid = session.get('uid')
+    if not uid:
+        return None  # not a desktop session at all — unrelated to this gate
+    path = request.path or '/'
+    required = _permission_required_for(request.method, path)
+    if required is None:
+        return None
+    conn = get_db_connection()
+    try:
+        granted = permissions.get_permissions(conn.cursor(), uid)
+    finally:
+        conn.close()
+    if required not in granted:
+        return jsonify({'error': 'You do not have permission to do that.',
+                        'reason': 'permission_denied'}), 403
+    return None
 
 
 # Endpoints that stay writable even in view-only mode: licensing (so you can renew),
