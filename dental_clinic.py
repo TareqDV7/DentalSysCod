@@ -1086,6 +1086,16 @@ def init_database():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id INTEGER NOT NULL,
+            permission_key TEXT NOT NULL,
+            granted INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, permission_key),
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS pairing_requests (
             pair_code TEXT PRIMARY KEY,
             device_name TEXT NOT NULL,
@@ -1427,6 +1437,9 @@ def init_database():
                 'VALUES (?, ?, ?, ?)',
                 ('admin', hash_password(default_pw), 'Administrator', must_change)
             )
+
+    import permissions as _permissions
+    _permissions.migrate_default_grants(cursor)
 
     conn.commit()
     conn.close()
