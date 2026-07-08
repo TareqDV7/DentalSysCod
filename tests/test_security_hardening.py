@@ -50,6 +50,7 @@ def test_csp_header_present_and_locked_down(local_client):
     assert "script-src 'self' 'unsafe-inline'" in csp
     assert "style-src 'self' 'unsafe-inline'" in csp
     assert "img-src 'self' data:" in csp
+    assert "font-src 'self' data:" in csp
     assert "frame-ancestors 'none'" in csp
     assert "object-src 'none'" in csp
     assert "base-uri 'self'" in csp
