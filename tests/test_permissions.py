@@ -261,3 +261,12 @@ def test_revoke_permission_from_self_when_another_owner_exists(db):
         'username': 'owner2', 'password': 'x', 'permissions': list(permissions.PERMISSION_KEYS)})
     r = client.put('/api/staff/1/permissions', json={'permission_key': 'staff.manage', 'granted': False})
     assert r.status_code == 200
+
+
+def test_auth_me_includes_permissions(db):
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    client = _owner_client(app)
+    r = client.get('/api/auth/me')
+    body = r.get_json()
+    assert set(body['permissions']) == set(permissions.PERMISSION_KEYS)

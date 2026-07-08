@@ -3031,6 +3031,7 @@ HTML_TEMPLATE = '''
                     <button class="btn btn-primary" type="button" onclick="changeAccountPassword()" data-i18n="change_password">Change Password</button>
                 </div>
 
+                <div id="manage-staff-section">
                 <h3 class="settings-group" data-i18n="manage_staff">Manage Staff</h3>
                 <div class="section-card" style="max-width:760px;margin-bottom:18px;">
                     <div class="section-card-header">
@@ -3053,6 +3054,7 @@ HTML_TEMPLATE = '''
                             <tbody id="staff-accounts-body"><tr><td colspan="5" data-i18n="no_data">No data</td></tr></tbody>
                         </table>
                     </div>
+                </div>
                 </div>
 
                 <h3 class="settings-group" data-en="Sync &amp; Connectivity" data-ar="المزامنة والاتصال">Sync &amp; Connectivity</h3>
@@ -3624,6 +3626,7 @@ HTML_TEMPLATE = '''
         let currentFinancialSubTab = localStorage.getItem('financial-subtab') || 'management';
         let currentCatalogSubTab = localStorage.getItem('catalog-subtab') || 'procedure';
         let currentAdministrationFocus = 'all';
+        let currentPermissions = new Set();
 
         // Language translations map
         const translations = {
@@ -9775,6 +9778,42 @@ HTML_TEMPLATE = '''
             window.location.reload();
         }
         document.addEventListener('DOMContentLoaded', applyLicenseGate);
+
+        // ── Permission-aware navigation ──
+        // Hides nav-tabs (and the Manage Staff settings group) the logged-in
+        // staff account isn't granted, using the same fetch-then-toggle
+        // display pattern as the license gate above. Fails open on a fetch
+        // error (leaves the nav as-is) — never hide anything over a
+        // transient network blip; the server-side permission gate (Task 3)
+        // is the real enforcement, this is UX only.
+        function hasPermission(key) {
+            return currentPermissions.has(key);
+        }
+        const _NAV_PERMISSION_MAP = {
+            'depo.view': '.nav-tab[data-tab="depo"]',
+            'billing.view': '.nav-tab[data-tab="financial"]',
+            'post_studio.use': '.nav-tab[data-tab="poststudio"]'
+        };
+        function applyPermissionGating() {
+            for (const key in _NAV_PERMISSION_MAP) {
+                if (hasPermission(key)) continue;
+                const navBtn = document.querySelector(_NAV_PERMISSION_MAP[key]);
+                if (navBtn) navBtn.style.display = 'none';
+            }
+            const staffSection = document.getElementById('manage-staff-section');
+            if (staffSection && !hasPermission('staff.manage')) {
+                staffSection.style.display = 'none';
+            }
+        }
+        async function applyAuthMe() {
+            try {
+                const res = await fetch('/api/auth/me');
+                const me = await res.json();
+                currentPermissions = new Set(me.permissions || []);
+                applyPermissionGating();
+            } catch (e) { /* offline/error: leave nav as-is, never hide over a fetch error */ }
+        }
+        document.addEventListener('DOMContentLoaded', applyAuthMe);
 
         // ── License card (Settings → License) ──
         // The active serial + license details live in Settings now (moved off the

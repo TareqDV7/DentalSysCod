@@ -2492,7 +2492,14 @@ def logout():
 
 @app.route('/api/auth/me')
 def auth_me():
-    return jsonify({'authenticated': bool(session.get('uid')), 'username': session.get('uname', '')})
+    uid = session.get('uid')
+    granted = []
+    if uid:
+        conn = get_db_connection()
+        granted = sorted(permissions.get_permissions(conn.cursor(), uid))
+        conn.close()
+    return jsonify({'authenticated': bool(uid), 'username': session.get('uname', ''),
+                    'permissions': granted})
 
 
 def _count_users_with_permission(cursor, permission_key, exclude_user_id=None):
