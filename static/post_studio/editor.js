@@ -33,7 +33,11 @@ const TPL_LABEL = {
         quad_grid: 'شبكة رباعية', single_feature: 'صورة واحدة' },
 };
 
-const PREVIEW_W = 360; // displayed width; the stage renders at native export px.
+let PREVIEW_W = 360; // displayed width; the stage renders at native export px.
+// Recomputed from the available container width so the editor fills the
+// screen instead of sitting at a fixed 360px in the corner of a wide window.
+const PREVIEW_W_MIN = 320;
+const PREVIEW_W_MAX = 820;
 const HANDLE_PX = { mouse: 10, touch: 32 }; // resize-handle size in screen-px, by pointerProfile
 
 function el(tag, attrs = {}, styles = {}) {
@@ -304,6 +308,20 @@ export function mountEditor(rootEl, host, opts = {}) {
   rootEl.appendChild(layout);
   rootEl.appendChild(gallery);
 
+  function updatePreviewWidth() {
+    const avail = previewCol.clientWidth || rootEl.clientWidth || PREVIEW_W;
+    PREVIEW_W = Math.max(PREVIEW_W_MIN, Math.min(PREVIEW_W_MAX, Math.floor(avail) - 4));
+  }
+
+  if (rootEl._psResizeHandler) { window.removeEventListener('resize', rootEl._psResizeHandler); }
+  let resizeTimer = null;
+  const onWindowResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { updatePreviewWidth(); renderPreview(); }, 120);
+  };
+  window.addEventListener('resize', onWindowResize);
+  rootEl._psResizeHandler = onWindowResize;
+
   function renderPreview() {
     const stage = renderComposition(state.comp);
     const [w, h] = EXPORT_PX[state.comp.size] || EXPORT_PX.square;
@@ -536,6 +554,7 @@ export function mountEditor(rootEl, host, opts = {}) {
   rootEl._psLangObserver = langObserver;
 
   // init
+  updatePreviewWidth();
   renderPreview();
   renderInspector();
   refreshGallery();
