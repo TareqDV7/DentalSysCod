@@ -3143,11 +3143,16 @@ def followup_detail(patient_id, followup_id):
         conn.close()
         return jsonify({'error': 'Follow-up not found'}), 404
 
-    # Keep the auto-created lab expense in sync with the edited entry.
-    cursor.execute("SELECT id FROM expenses WHERE source_type = 'followup' AND reference_id = ?", (followup_id,))
-    for (exp_id,) in cursor.fetchall():
-        cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
-        record_tombstone(cursor, 'expenses', exp_id)
+    # Keep the auto-created lab expense in sync with the edited entry — but
+    # preserve whatever payment_status it already had (e.g. the user marked it
+    # "paid" in Expense Tracking) instead of resetting it to postponed on
+    # every unrelated edit to the follow-up.
+    cursor.execute("SELECT id, payment_status FROM expenses WHERE source_type = 'followup' AND reference_id = ?", (followup_id,))
+    prior_rows = cursor.fetchall()
+    prior_status = prior_rows[0]['payment_status'] if prior_rows else 'postponed'
+    for row in prior_rows:
+        cursor.execute('DELETE FROM expenses WHERE id = ?', (row['id'],))
+        record_tombstone(cursor, 'expenses', row['id'])
     if lab_expense > 0:
         cursor.execute('SELECT first_name, last_name FROM patients WHERE id = ?', (patient_id,))
         prow = cursor.fetchone()
@@ -3160,7 +3165,7 @@ def followup_detail(patient_id, followup_id):
         ''', (
             treatment_procedure or 'Lab', lab_expense, parsed_date, pname,
             f"Auto from follow-up: {pname} - {treatment_procedure or ''}",
-            'postponed', patient_id, 'followup', followup_id
+            prior_status, patient_id, 'followup', followup_id
         ))
 
     append_audit_log(cursor, 'update', 'patient_followup', followup_id, {
