@@ -609,9 +609,13 @@ def ensure_updated_at_trigger(cursor, table_name):
 
 
 def get_db_connection(with_row_factory=False):
-    conn = sqlite3.connect(DB_NAME)
+    import sqlcipher3 as _sqlcipher  # see requirements.txt — sqlcipher3 fork confirmed by Task 1's spike
+    import encryption_key
+    key = encryption_key.get_or_create_key(_DATA_DIR)
+    conn = _sqlcipher.connect(DB_NAME)
+    conn.execute(f"PRAGMA key = \"x'{key.hex()}'\"")
     if with_row_factory:
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = _sqlcipher.Row
     return conn
 
 
