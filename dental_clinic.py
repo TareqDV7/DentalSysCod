@@ -176,14 +176,28 @@ def _add_security_headers(response):
     # meaningful on the HTML portal: nosniff stops MIME-confusion, DENY blocks
     # click-jacking via <iframe>, and the referrer/permissions policies trim what
     # leaks to third parties. setdefault() so a handler that sets its own wins.
-    #
-    # NOTE: a strict Content-Security-Policy is intentionally NOT set yet — the
-    # portal is built from fully inline <script>/<style> in templates.py, so a
-    # real CSP needs the template/static split first (docs/LAUNCH_READINESS.md).
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     response.headers.setdefault('X-Frame-Options', 'DENY')
     response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
     response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    # Pragmatic CSP: the portal is built entirely on inline onclick="..." handlers
+    # (hundreds of them in templates.py), so 'unsafe-inline' stays in script-src/
+    # style-src rather than forcing a large separate nonce-migration refactor
+    # (see docs/superpowers/specs/2026-07-07-security-hardening-rbac-design.md,
+    # Decision 2). Everything else is locked down: no external script/style/font
+    # sources (verified zero external fetch()/src= calls in templates.py), no
+    # framing, no <object>/<embed>, no base tag hijacking.
+    response.headers.setdefault('Content-Security-Policy', (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'; "
+        "base-uri 'self'"
+    ))
     # HSTS only over HTTPS (cloud node behind Caddy). Never on plain-HTTP LAN
     # access — a cached max-age would lock the clinic out of its own http:// server.
     if request.is_secure:
