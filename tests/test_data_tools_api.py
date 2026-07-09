@@ -112,6 +112,32 @@ def test_backup_file_writes_db_and_returns_path(client):
     assert body['success'] is True
     assert body['path'].endswith('.db')
     assert os.path.exists(body['path'])
+    # The live DB is SQLCipher-encrypted, but this is an explicit user-initiated
+    # off-machine backup — it must stay a plain, portable 'SQLite format 3' file
+    # (the DPAPI key never leaves this machine, so an encrypted download would be
+    # permanently unreadable anywhere else). Regression test for a real bug
+    # caught in whole-branch review: this endpoint used to hand back the raw
+    # encrypted snapshot.
+    assert dental_clinic._is_plaintext_sqlite(body['path'])
+    conn = sqlite3.connect(body['path'])
+    conn.execute('SELECT * FROM patients').fetchall()  # vanilla sqlite3 can open it
+    conn.close()
+
+
+def test_backup_get_route_returns_plaintext_download(client):
+    # Plain-browser equivalent of test_backup_file_writes_db_and_returns_path
+    # above — same regression, different route (GET /api/backup, streamed).
+    _login(client)
+    resp = client.get('/api/backup')
+    assert resp.status_code == 200
+    assert resp.data[:16] == b'SQLite format 3\x00'
+    tmp = str(dental_clinic._DATA_DIR / 'downloaded_backup.db')
+    with open(tmp, 'wb') as fh:
+        fh.write(resp.data)
+    conn = sqlite3.connect(tmp)
+    conn.execute('SELECT * FROM patients').fetchall()
+    conn.close()
+    os.remove(tmp)
 
 
 def test_backup_file_blocked_on_cloud(client, monkeypatch):

@@ -84,6 +84,27 @@ def test_secret_key_bootstrap_artifact_is_not_treated_as_a_pre_existing_db(tmp_p
     assert 'patients' in tables
 
 
+def test_migrates_db_when_data_dir_path_contains_a_single_quote(tmp_path, monkeypatch):
+    # ATTACH DATABASE takes the path as a SQL string literal, not a bound
+    # parameter -- a data dir like a Windows profile "C:\Users\O'Brien\..."
+    # would otherwise break the ATTACH statement with a syntax error.
+    quoted_dir = tmp_path / "O'Brien"
+    quoted_dir.mkdir()
+    db_path = quoted_dir / 'clinic.db'
+    _make_plaintext_db(db_path)
+    monkeypatch.setattr(dental_clinic, 'DB_NAME', str(db_path))
+    monkeypatch.setattr(dental_clinic, '_DATA_DIR', quoted_dir)
+    monkeypatch.setattr(dental_clinic, 'BACKUP_DIR', quoted_dir / 'backups')
+
+    migrated = dental_clinic.migrate_db_to_encrypted(str(db_path), quoted_dir)
+    assert migrated is True
+
+    conn = dental_clinic.get_db_connection()
+    rows = conn.execute('SELECT first_name FROM patients ORDER BY id').fetchall()
+    conn.close()
+    assert [r[0] for r in rows] == ['Alice', 'Bob']
+
+
 def test_nonexistent_db_is_a_no_op(tmp_path, monkeypatch):
     db_path = tmp_path / 'does_not_exist.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(db_path))

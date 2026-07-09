@@ -69,6 +69,26 @@ def test_single_tenant_flat_layout(single_tenant):
     assert len(files) == 1
 
 
+def test_automatic_backup_stays_encrypted(single_tenant):
+    # Default (decrypt_primary=False, used by the periodic _backup_loop) must
+    # keep writing SQLCipher-encrypted snapshots -- at-rest protection should
+    # cover backup files sitting on disk too, not just the live DB. Only the
+    # explicit, user-initiated "Download Backup" routes opt into plaintext
+    # (see tests/test_data_tools_api.py's backup_file/backup_get tests).
+    written = dental_clinic.run_database_backup()
+    assert len(written) == 1
+    assert not dental_clinic._is_plaintext_sqlite(written[0])
+
+
+def test_decrypt_primary_writes_plaintext_restorable_backup(single_tenant):
+    written = dental_clinic.run_database_backup(decrypt_primary=True)
+    assert len(written) == 1
+    assert dental_clinic._is_plaintext_sqlite(written[0])
+    conn = sqlite3.connect(written[0])
+    conn.execute('SELECT * FROM patients').fetchall()  # vanilla sqlite3 can open it
+    conn.close()
+
+
 def test_cloud_backs_up_master_and_each_clinic(cloud_dir):
     _seed_clinic_db(cloud_dir / 'clinic_1.db', 1)
     _seed_clinic_db(cloud_dir / 'clinic_2.db', 2)

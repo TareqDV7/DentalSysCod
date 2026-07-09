@@ -4713,7 +4713,25 @@ def delete_holiday(holiday_id):
 @app.route('/api/backup')
 def backup_database():
     backup_name = f"dental_clinic_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-    return send_file(DB_NAME, as_attachment=True, download_name=backup_name)
+    if _is_plaintext_sqlite(DB_NAME):
+        return send_file(DB_NAME, as_attachment=True, download_name=backup_name)
+    # DB_NAME is SQLCipher-encrypted — decrypt to a temp plaintext copy first so
+    # the downloaded file stays a portable, restorable 'SQLite format 3' file
+    # (mirrors data_export_bundle()). The DPAPI key never leaves this machine,
+    # so handing out the raw encrypted file would make the download permanently
+    # unopenable anywhere else.
+    tmpdir = tempfile.mkdtemp(prefix='dc_backup_')
+
+    @after_this_request
+    def _cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
+
+    snap = os.path.join(tmpdir, 'dental_clinic.db')
+    import encryption_key
+    key = encryption_key.get_or_create_key(_DATA_DIR)
+    _sqlcipher_decrypt_export(DB_NAME, snap, key.hex())
+    return send_file(snap, as_attachment=True, download_name=backup_name)
 
 
 @app.route('/api/backup-file', methods=['POST'])
@@ -4722,10 +4740,14 @@ def backup_database_file():
     download — a navigation to GET /api/backup silently does nothing — so write a
     consistent on-disk backup and hand the path back for the shell to reveal in
     Explorer (mirrors /api/data/export-bundle-file). Plain browsers keep using
-    the streamed GET /api/backup attachment."""
+    the streamed GET /api/backup attachment.
+
+    decrypt_primary=True: same reasoning as backup_database() above — this is an
+    explicit, user-initiated off-machine backup, so it must stay a plaintext,
+    portable file, unlike the automatic background snapshots in BACKUP_DIR."""
     if CLOUD_MODE:
         return jsonify({'error': 'Not available on the cloud node'}), 404
-    backups = run_database_backup()
+    backups = run_database_backup(decrypt_primary=True)
     if not backups:
         return jsonify({'error': 'Could not create the backup.'}), 500
     return jsonify({'success': True, 'path': backups[0]})
@@ -7659,12 +7681,23 @@ def _list_databases_to_back_up():
     return [('dental_clinic', str(DB_NAME), BACKUP_DIR)]
 
 
-def run_database_backup():
+def run_database_backup(decrypt_primary=False):
     """Snapshot every active database with SQLite's online backup API (consistent
     and safe while the server is running, including in WAL mode), then prune each
     target folder to the most recent BACKUP_RETENTION files. Returns the list of
     snapshot paths written (empty on full failure). One failing DB doesn't abort
-    the others."""
+    the others.
+
+    decrypt_primary: when True, the primary clinic DB's snapshot is written as a
+    plaintext 'SQLite format 3' file instead of an encrypted SQLCipher copy — for
+    the explicit, user-initiated "Download Backup" action (backup_database /
+    backup_database_file), which — like the export-bundle routes — intentionally
+    hands the file off-machine and must stay portable/restorable outside this
+    app (the DPAPI key never leaves this device). Automatic background snapshots
+    (_backup_loop) deliberately keep the default (encrypted) behavior: at-rest
+    protection should cover backup files sitting on disk too, not just the live
+    DB — a stolen disk shouldn't yield plaintext patient data via BACKUP_DIR.
+    Same-machine restore works identically either way."""
     written = []
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -7704,22 +7737,27 @@ def run_database_backup():
             # .backup() can't mix a SQLCipher source with a vanilla destination
             # (different Connection types), so both ends use the same helper.
             primary_encrypted = src_path == str(DB_NAME) and not _is_plaintext_sqlite(src_path)
-            if primary_encrypted:
-                src = get_db_connection()
+            if primary_encrypted and decrypt_primary:
+                import encryption_key
+                key = encryption_key.get_or_create_key(_DATA_DIR)
+                _sqlcipher_decrypt_export(src_path, str(dest_path), key.hex())
             else:
-                src = sqlite3.connect(src_path)
-            try:
                 if primary_encrypted:
-                    dst = get_db_connection(db_path=str(dest_path))
+                    src = get_db_connection()
                 else:
-                    dst = sqlite3.connect(str(dest_path))
+                    src = sqlite3.connect(src_path)
                 try:
-                    with dst:
-                        src.backup(dst)
+                    if primary_encrypted:
+                        dst = get_db_connection(db_path=str(dest_path))
+                    else:
+                        dst = sqlite3.connect(str(dest_path))
+                    try:
+                        with dst:
+                            src.backup(dst)
+                    finally:
+                        dst.close()
                 finally:
-                    dst.close()
-            finally:
-                src.close()
+                    src.close()
         except Exception as exc:  # noqa: BLE001 — one tenant's failure mustn't kill the rest
             print(f'⚠️  Database backup failed for {label}: {exc}')
             # sqlite3.connect(dst) creates the file before the backup runs, so a
@@ -7785,7 +7823,12 @@ def _sqlcipher_export(plaintext_path, encrypted_path, key_hex):
     import sqlcipher3 as _sqlcipher  # match Task 1/3's confirmed import
     conn = _sqlcipher.connect(str(encrypted_path))
     conn.execute(f"PRAGMA key = \"x'{key_hex}'\"")
-    conn.execute(f"ATTACH DATABASE '{plaintext_path}' AS plaintext KEY ''")
+    # ATTACH DATABASE takes the path as a SQL string literal, not a bound
+    # parameter — a single quote in the path (e.g. a Windows profile dir like
+    # C:\Users\O'Brien\...) would otherwise break the statement. Escape by
+    # doubling, the standard SQL string-literal escape.
+    escaped_path = str(plaintext_path).replace("'", "''")
+    conn.execute(f"ATTACH DATABASE '{escaped_path}' AS plaintext KEY ''")
     conn.execute("SELECT sqlcipher_export('main', 'plaintext')")
     conn.execute("DETACH DATABASE plaintext")
     conn.commit()
@@ -7805,7 +7848,8 @@ def _sqlcipher_decrypt_export(encrypted_path, plaintext_path, key_hex):
     import sqlcipher3 as _sqlcipher  # match Task 1/3's confirmed import
     conn = _sqlcipher.connect(str(encrypted_path))
     conn.execute(f"PRAGMA key = \"x'{key_hex}'\"")
-    conn.execute(f"ATTACH DATABASE '{plaintext_path}' AS plaintext KEY ''")
+    escaped_path = str(plaintext_path).replace("'", "''")  # see _sqlcipher_export
+    conn.execute(f"ATTACH DATABASE '{escaped_path}' AS plaintext KEY ''")
     conn.execute("SELECT sqlcipher_export('plaintext', 'main')")
     conn.execute("DETACH DATABASE plaintext")
     conn.close()
@@ -7857,6 +7901,16 @@ def migrate_db_to_encrypted(db_path, data_dir):
         if orig_counts != new_counts:
             raise RuntimeError(f'Row count mismatch after migration: {orig_counts} != {new_counts}')
 
+        # shutil.move, not os.replace: db_path may still have a lingering
+        # Windows-level lock at this point (e.g. reached via data_replace(),
+        # right after the live DB was rewritten) — os.replace's atomic
+        # ReplaceFile/MoveFileEx call was verified to raise "[WinError 5]
+        # Access is denied" in that real path (caught by this task's own
+        # tests), where shutil.move's fallback (in-place overwrite via
+        # copy2, not delete+rename) succeeds. shutil.move's own fallback is
+        # non-atomic on Windows when the destination exists, which is a real
+        # but narrower crash-window than trading it for a hard failure of an
+        # already-working flow.
         shutil.move(tmp_path, str(db_path))
         print(f'Database encrypted at rest ({sum(orig_counts.values())} rows verified).')
         return True
