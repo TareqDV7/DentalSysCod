@@ -2119,6 +2119,8 @@ HTML_TEMPLATE = '''
         .import-badge--valid { background:#dcfce7; color:#166534; }
         .import-badge--duplicate { background:#fef9c3; color:#854d0e; }
         .import-badge--problem { background:#fee2e2; color:#991b1b; }
+        .perm-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px 14px; margin:10px 0; }
+        .perm-grid label { display:flex; align-items:center; gap:8px; font-size:0.88em; font-weight:400; }
     </style>
 </head>
 <body>
@@ -3045,6 +3047,32 @@ HTML_TEMPLATE = '''
                     <button class="btn btn-primary" type="button" onclick="changeAccountPassword()" data-i18n="change_password">Change Password</button>
                 </div>
 
+                <div id="manage-staff-section">
+                <h3 class="settings-group" data-i18n="manage_staff">Manage Staff</h3>
+                <div class="section-card" style="max-width:760px;margin-bottom:18px;">
+                    <div class="section-card-header">
+                        <div>
+                            <p data-i18n="manage_staff_hint">Add staff accounts and control what each person can see and do.</p>
+                        </div>
+                        <div class="toolbar-row">
+                            <button class="btn btn-primary" type="button" onclick="openAddStaffModal()" data-i18n="add_staff">+ Add Staff</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr>
+                                <th data-i18n="username">Username</th>
+                                <th data-i18n="display_name">Display Name</th>
+                                <th class="center-cell" data-i18n="status">Status</th>
+                                <th data-i18n="last_login">Last Login</th>
+                                <th class="actions-cell" data-i18n="actions">Actions</th>
+                            </tr></thead>
+                            <tbody id="staff-accounts-body"><tr><td colspan="5" data-i18n="no_data">No data</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+                </div>
+
                 <h3 class="settings-group" data-en="Sync &amp; Connectivity" data-ar="المزامنة والاتصال">Sync &amp; Connectivity</h3>
                 <div class="section-card" style="max-width:560px;margin-bottom:18px;">
                     <p style="margin:0 0 12px;color:var(--muted);font-size:0.9em;line-height:1.6;"
@@ -3517,6 +3545,42 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
+    <div id="staff-add-modal" class="modal" onclick="if(event.target===this)closeModal('staff-add-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close-modal" onclick="closeModal('staff-add-modal')">&times;</span>
+                <h3 data-i18n="add_staff">Add Staff</h3>
+            </div>
+            <form id="staff-add-form" onsubmit="saveNewStaff(event)">
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="username">Username *</label>
+                        <input type="text" id="staff-add-username" autocomplete="off" required></div>
+                    <div class="form-group"><label data-i18n="password">Password *</label>
+                        <input type="password" id="staff-add-password" autocomplete="new-password" required></div>
+                </div>
+                <div class="form-group"><label data-i18n="display_name">Display Name</label>
+                    <input type="text" id="staff-add-display-name" autocomplete="off"></div>
+                <div class="form-group">
+                    <label data-i18n="permissions">Permissions</label>
+                    <div id="staff-add-permissions-grid" class="perm-grid"></div>
+                </div>
+                <div class="toolbar-row"><button class="btn btn-primary" type="submit" data-i18n="save">Save</button></div>
+            </form>
+        </div>
+    </div>
+
+    <div id="staff-permissions-modal" class="modal" onclick="if(event.target===this)closeModal('staff-permissions-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close-modal" onclick="closeModal('staff-permissions-modal')">&times;</span>
+                <h3 data-i18n="edit_permissions">Edit Permissions</h3>
+            </div>
+            <input type="hidden" id="staff-permissions-user-id" value="">
+            <div id="staff-permissions-grid" class="perm-grid"></div>
+            <div class="toolbar-row"><button class="btn btn-primary" type="button" onclick="saveStaffPermissions()" data-i18n="save">Save</button></div>
+        </div>
+    </div>
+
     <div id="confirm-modal" class="modal modal--confirm confirm-modal--danger" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-desc">
         <div class="modal-content">
             <div class="confirm-modal__icon" aria-hidden="true">⚠</div>
@@ -3578,6 +3642,7 @@ HTML_TEMPLATE = '''
         let currentFinancialSubTab = localStorage.getItem('financial-subtab') || 'management';
         let currentCatalogSubTab = localStorage.getItem('catalog-subtab') || 'procedure';
         let currentAdministrationFocus = 'all';
+        let currentPermissions = new Set();
 
         // Language translations map
         const translations = {
@@ -4078,6 +4143,42 @@ HTML_TEMPLATE = '''
                 stock_low_after: 'Low stock after issuing: ',
                 depo_report: 'Stock report', low_stock_items: 'Low-stock items',
                 expiring_soon: 'Expiring soon', on_hand_value: 'On-hand value', none: 'None',
+                manage_staff: 'Manage Staff',
+                manage_staff_hint: 'Add staff accounts and control what each person can see and do.',
+                add_staff: '+ Add Staff',
+                username: 'Username',
+                password: 'Password',
+                display_name: 'Display Name',
+                permissions: 'Permissions',
+                edit_permissions: 'Edit Permissions',
+                last_login: 'Last Login',
+                never_logged_in: 'Never',
+                reactivate: 'Reactivate',
+                no_staff_yet: 'No staff accounts yet',
+                add_staff_hint: 'Add a staff account to give them their own login.',
+                unable_save_staff: 'Unable to save staff account.',
+                staff_saved: 'Staff account saved.',
+                unable_save_permission: 'Unable to save a permission.',
+                permissions_saved: 'Permissions saved.',
+                staff_reactivated: 'Staff account reactivated.',
+                staff_deactivated: 'Staff account deactivated.',
+                perm_patients_view: 'View Patients',
+                perm_patients_edit: 'Edit Patients',
+                perm_followups_view: 'View Follow-ups',
+                perm_followups_edit: 'Edit Follow-ups',
+                perm_appointments_view: 'View Appointments',
+                perm_appointments_edit: 'Edit Appointments',
+                perm_billing_view: 'View Billing',
+                perm_billing_edit: 'Edit Billing',
+                perm_expenses_view: 'View Expenses',
+                perm_expenses_edit: 'Edit Expenses',
+                perm_depo_view: 'View Depo / Stock',
+                perm_depo_edit: 'Edit Depo / Stock',
+                perm_reports_view: 'View Reports',
+                perm_post_studio_use: 'Use Post Studio',
+                perm_data_tools_use: 'Use Data Tools',
+                perm_settings_manage: 'Manage Settings',
+                perm_staff_manage: 'Manage Staff Accounts',
             },
             ar: {
                 undo: 'تراجع',
@@ -4575,6 +4676,42 @@ HTML_TEMPLATE = '''
                 stock_low_after: 'مخزون منخفض بعد الصرف: ',
                 depo_report: 'تقرير المخزون', low_stock_items: 'مواد منخفضة المخزون',
                 expiring_soon: 'قريبة الانتهاء', on_hand_value: 'قيمة المتوفر', none: 'لا يوجد',
+                manage_staff: 'إدارة الموظفين',
+                manage_staff_hint: 'أضف حسابات الموظفين وتحكّم بما يمكن لكل شخص رؤيته والقيام به.',
+                add_staff: '+ إضافة موظف',
+                username: 'اسم المستخدم',
+                password: 'كلمة المرور',
+                display_name: 'الاسم المعروض',
+                permissions: 'الصلاحيات',
+                edit_permissions: 'تعديل الصلاحيات',
+                last_login: 'آخر تسجيل دخول',
+                never_logged_in: 'لم يسجّل الدخول بعد',
+                reactivate: 'إعادة التفعيل',
+                no_staff_yet: 'لا يوجد موظفون بعد',
+                add_staff_hint: 'أضف حساب موظف لمنحه تسجيل دخول خاص به.',
+                unable_save_staff: 'تعذّر حفظ حساب الموظف.',
+                staff_saved: 'تم حفظ حساب الموظف.',
+                unable_save_permission: 'تعذّر حفظ إحدى الصلاحيات.',
+                permissions_saved: 'تم حفظ الصلاحيات.',
+                staff_reactivated: 'تمت إعادة تفعيل حساب الموظف.',
+                staff_deactivated: 'تم إلغاء تفعيل حساب الموظف.',
+                perm_patients_view: 'عرض المرضى',
+                perm_patients_edit: 'تعديل المرضى',
+                perm_followups_view: 'عرض المتابعات',
+                perm_followups_edit: 'تعديل المتابعات',
+                perm_appointments_view: 'عرض المواعيد',
+                perm_appointments_edit: 'تعديل المواعيد',
+                perm_billing_view: 'عرض الفواتير',
+                perm_billing_edit: 'تعديل الفواتير',
+                perm_expenses_view: 'عرض المصروفات',
+                perm_expenses_edit: 'تعديل المصروفات',
+                perm_depo_view: 'عرض المخزن',
+                perm_depo_edit: 'تعديل المخزن',
+                perm_reports_view: 'عرض التقارير',
+                perm_post_studio_use: 'استخدام استوديو المنشورات',
+                perm_data_tools_use: 'استخدام أدوات البيانات',
+                perm_settings_manage: 'إدارة الإعدادات',
+                perm_staff_manage: 'إدارة حسابات الموظفين',
             }
         };
 
@@ -6686,6 +6823,7 @@ HTML_TEMPLATE = '''
             bindBluetoothSyncControls();
             loadLicenseCard();
             loadBranding();
+            loadStaffAccounts();
         }
 
         async function loadBranding() {
@@ -6719,6 +6857,212 @@ HTML_TEMPLATE = '''
                 showToast(t('ps_branding_saved', 'Branding saved'), 'success');
             } catch (err) {
                 showToast(t('ps_branding_save_failed', 'Could not save branding: ') + err, 'error');
+            }
+        }
+
+        // ── Manage Staff (RBAC) ─────────────────────────────────────────────
+        let staffAccountsCache = [];
+        let staffPermissionAllKeys = [];
+
+        const PERMISSION_LABEL_KEYS = {
+            'patients.view': 'perm_patients_view',
+            'patients.edit': 'perm_patients_edit',
+            'followups.view': 'perm_followups_view',
+            'followups.edit': 'perm_followups_edit',
+            'appointments.view': 'perm_appointments_view',
+            'appointments.edit': 'perm_appointments_edit',
+            'billing.view': 'perm_billing_view',
+            'billing.edit': 'perm_billing_edit',
+            'expenses.view': 'perm_expenses_view',
+            'expenses.edit': 'perm_expenses_edit',
+            'depo.view': 'perm_depo_view',
+            'depo.edit': 'perm_depo_edit',
+            'reports.view': 'perm_reports_view',
+            'post_studio.use': 'perm_post_studio_use',
+            'data_tools.use': 'perm_data_tools_use',
+            'settings.manage': 'perm_settings_manage',
+            'staff.manage': 'perm_staff_manage',
+        };
+
+        function permissionLabel(key) {
+            const i18nKey = PERMISSION_LABEL_KEYS[key];
+            return i18nKey ? t(i18nKey, key) : key;
+        }
+
+        // Permission keys have no dedicated endpoint (by design — see Task 5
+        // brief): the key vocabulary is read off the `all_keys` field returned
+        // by GET /api/staff/<id>/permissions for any existing user, then cached
+        // for the rest of the session.
+        async function ensureStaffPermissionKeys() {
+            if (staffPermissionAllKeys.length) return staffPermissionAllKeys;
+            const anyId = staffAccountsCache[0] && staffAccountsCache[0].id;
+            if (!anyId) return [];
+            try {
+                const data = await fetch(`/api/staff/${anyId}/permissions`).then(r => r.json());
+                staffPermissionAllKeys = Array.isArray(data.all_keys) ? data.all_keys : [];
+            } catch (_) { staffPermissionAllKeys = []; }
+            return staffPermissionAllKeys;
+        }
+
+        function renderPermissionGrid(containerId, allKeys, checkedKeys) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const checkedSet = new Set(checkedKeys || []);
+            container.innerHTML = allKeys.map(key => `
+                <label>
+                    <input type="checkbox" class="perm-checkbox" value="${escapeHtml(key)}" ${checkedSet.has(key) ? 'checked' : ''}>
+                    <span>${escapeHtml(permissionLabel(key))}</span>
+                </label>
+            `).join('');
+        }
+
+        async function loadStaffAccounts() {
+            let rows = [];
+            try {
+                rows = await fetch('/api/staff').then(r => r.json());
+                if (!Array.isArray(rows)) rows = [];
+            } catch (_) { rows = []; }
+            staffAccountsCache = rows;
+            renderStaffAccountsTable();
+            ensureStaffPermissionKeys();
+        }
+
+        function renderStaffAccountsTable() {
+            const tbody = document.getElementById('staff-accounts-body');
+            if (!tbody) return;
+            if (!staffAccountsCache.length) {
+                tbody.innerHTML = renderStateRow(t('no_staff_yet', 'No staff accounts yet'), {
+                    icon: '👤',
+                    title: t('no_staff_yet', 'No staff accounts yet'),
+                    text: t('add_staff_hint', 'Add a staff account to give them their own login.'),
+                    colSpan: 5
+                });
+                return;
+            }
+            tbody.innerHTML = staffAccountsCache.map(u => {
+                const isActive = parseInt(u.is_active, 10) === 1;
+                const statusText = isActive ? t('active', 'Active') : t('inactive', 'Inactive');
+                const lastLogin = u.last_login_at
+                    ? `${formatDateDisplay(String(u.last_login_at).slice(0, 10))} ${String(u.last_login_at).slice(11, 16)}`
+                    : t('never_logged_in', 'Never');
+                const toggleLabel = isActive ? t('deactivate', 'Deactivate') : t('reactivate', 'Reactivate');
+                const toggleClass = isActive ? 'btn-danger' : 'btn-secondary';
+                return `
+                    <tr>
+                        <td>${escapeHtml(u.username || '')}</td>
+                        <td>${escapeHtml(u.display_name || '')}</td>
+                        <td class="center-cell"><span class="badge ${isActive ? 'badge-active' : 'badge-blocked'}">${statusText}</span></td>
+                        <td>${lastLogin}</td>
+                        <td class="actions-cell">
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                <button class="btn btn-primary" type="button" onclick="openStaffPermissionsModal(${u.id})">${t('edit_permissions', 'Edit Permissions')}</button>
+                                <button class="btn ${toggleClass}" type="button" onclick="toggleStaffActive(${u.id}, ${!isActive})">${toggleLabel}</button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function openAddStaffModal() {
+            document.getElementById('staff-add-username').value = '';
+            document.getElementById('staff-add-password').value = '';
+            document.getElementById('staff-add-display-name').value = '';
+            const allKeys = await ensureStaffPermissionKeys();
+            renderPermissionGrid('staff-add-permissions-grid', allKeys, []);
+            document.getElementById('staff-add-modal').classList.add('active');
+        }
+
+        async function saveNewStaff(event) {
+            event.preventDefault();
+            const username = document.getElementById('staff-add-username').value.trim();
+            const password = document.getElementById('staff-add-password').value;
+            const displayName = document.getElementById('staff-add-display-name').value.trim();
+            if (!username || !password) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
+            const checked = Array.from(document.querySelectorAll('#staff-add-permissions-grid .perm-checkbox:checked')).map(el => el.value);
+            try {
+                const res = await fetch('/api/staff', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, display_name: displayName || username, permissions: checked })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) { showToast(payload.error || t('unable_save_staff', 'Unable to save staff account.'), 'error'); return; }
+                closeModal('staff-add-modal');
+                showToast(t('staff_saved', 'Staff account saved.'), 'success');
+                await loadStaffAccounts();
+            } catch (_) {
+                showToast(t('unable_save_staff', 'Unable to save staff account.'), 'error');
+            }
+        }
+
+        async function openStaffPermissionsModal(userId) {
+            document.getElementById('staff-permissions-user-id').value = userId;
+            let granted = [];
+            let allKeys = staffPermissionAllKeys;
+            try {
+                const data = await fetch(`/api/staff/${userId}/permissions`).then(r => r.json());
+                granted = Array.isArray(data.granted) ? data.granted : [];
+                if (Array.isArray(data.all_keys) && data.all_keys.length) {
+                    allKeys = data.all_keys;
+                    staffPermissionAllKeys = data.all_keys;
+                }
+            } catch (_) {}
+            renderPermissionGrid('staff-permissions-grid', allKeys, granted);
+            const grid = document.getElementById('staff-permissions-grid');
+            if (grid) grid.dataset.originalGranted = JSON.stringify(granted.slice().sort());
+            document.getElementById('staff-permissions-modal').classList.add('active');
+        }
+
+        // No batch-update endpoint exists (by design — see Task 4/5 briefs), so
+        // only the checkboxes whose state actually changed are PUT individually.
+        async function saveStaffPermissions() {
+            const userId = document.getElementById('staff-permissions-user-id').value;
+            if (!userId) return;
+            const grid = document.getElementById('staff-permissions-grid');
+            const originalGranted = new Set(JSON.parse((grid && grid.dataset.originalGranted) || '[]'));
+            const checkboxes = Array.from(grid ? grid.querySelectorAll('.perm-checkbox') : []);
+            const changed = checkboxes.filter(cb => cb.checked !== originalGranted.has(cb.value));
+            if (!changed.length) { closeModal('staff-permissions-modal'); return; }
+            let hadError = false;
+            for (const cb of changed) {
+                try {
+                    const res = await fetch(`/api/staff/${userId}/permissions`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ permission_key: cb.value, granted: cb.checked })
+                    });
+                    if (!res.ok) {
+                        hadError = true;
+                        const payload = await res.json().catch(() => ({}));
+                        showToast(payload.error || t('unable_save_permission', 'Unable to save a permission.'), 'error');
+                        cb.checked = !cb.checked;
+                    }
+                } catch (_) {
+                    hadError = true;
+                    showToast(t('unable_save_permission', 'Unable to save a permission.'), 'error');
+                }
+            }
+            if (!hadError) {
+                showToast(t('permissions_saved', 'Permissions saved.'), 'success');
+                closeModal('staff-permissions-modal');
+            }
+            await loadStaffAccounts();
+        }
+
+        async function toggleStaffActive(userId, makeActive) {
+            try {
+                const res = await fetch(`/api/staff/${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_active: makeActive })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) { showToast(payload.error || t('unable_save_staff', 'Unable to save staff account.'), 'error'); return; }
+                showToast(makeActive ? t('staff_reactivated', 'Staff account reactivated.') : t('staff_deactivated', 'Staff account deactivated.'), 'success');
+                await loadStaffAccounts();
+            } catch (_) {
+                showToast(t('unable_save_staff', 'Unable to save staff account.'), 'error');
             }
         }
 
@@ -9454,6 +9798,42 @@ HTML_TEMPLATE = '''
             window.location.reload();
         }
         document.addEventListener('DOMContentLoaded', applyLicenseGate);
+
+        // ── Permission-aware navigation ──
+        // Hides nav-tabs (and the Manage Staff settings group) the logged-in
+        // staff account isn't granted, using the same fetch-then-toggle
+        // display pattern as the license gate above. Fails open on a fetch
+        // error (leaves the nav as-is) — never hide anything over a
+        // transient network blip; the server-side permission gate (Task 3)
+        // is the real enforcement, this is UX only.
+        function hasPermission(key) {
+            return currentPermissions.has(key);
+        }
+        const _NAV_PERMISSION_MAP = {
+            'depo.view': '.nav-tab[data-tab="depo"]',
+            'billing.view': '.nav-tab[data-tab="financial"]',
+            'post_studio.use': '.nav-tab[data-tab="poststudio"]'
+        };
+        function applyPermissionGating() {
+            for (const key in _NAV_PERMISSION_MAP) {
+                if (hasPermission(key)) continue;
+                const navBtn = document.querySelector(_NAV_PERMISSION_MAP[key]);
+                if (navBtn) navBtn.style.display = 'none';
+            }
+            const staffSection = document.getElementById('manage-staff-section');
+            if (staffSection && !hasPermission('staff.manage')) {
+                staffSection.style.display = 'none';
+            }
+        }
+        async function applyAuthMe() {
+            try {
+                const res = await fetch('/api/auth/me');
+                const me = await res.json();
+                currentPermissions = new Set(me.permissions || []);
+                applyPermissionGating();
+            } catch (e) { /* offline/error: leave nav as-is, never hide over a fetch error */ }
+        }
+        document.addEventListener('DOMContentLoaded', applyAuthMe);
 
         // ── License card (Settings → License) ──
         // The active serial + license details live in Settings now (moved off the

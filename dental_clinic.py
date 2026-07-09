@@ -176,14 +176,28 @@ def _add_security_headers(response):
     # meaningful on the HTML portal: nosniff stops MIME-confusion, DENY blocks
     # click-jacking via <iframe>, and the referrer/permissions policies trim what
     # leaks to third parties. setdefault() so a handler that sets its own wins.
-    #
-    # NOTE: a strict Content-Security-Policy is intentionally NOT set yet — the
-    # portal is built from fully inline <script>/<style> in templates.py, so a
-    # real CSP needs the template/static split first (docs/LAUNCH_READINESS.md).
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     response.headers.setdefault('X-Frame-Options', 'DENY')
     response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
     response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    # Pragmatic CSP: the portal is built entirely on inline onclick="..." handlers
+    # (hundreds of them in templates.py), so 'unsafe-inline' stays in script-src/
+    # style-src rather than forcing a large separate nonce-migration refactor
+    # (see docs/superpowers/specs/2026-07-07-security-hardening-rbac-design.md,
+    # Decision 2). Everything else is locked down: no external script/style/font
+    # sources (verified zero external fetch()/src= calls in templates.py), no
+    # framing, no <object>/<embed>, no base tag hijacking.
+    response.headers.setdefault('Content-Security-Policy', (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'; "
+        "base-uri 'self'"
+    ))
     # HSTS only over HTTPS (cloud node behind Caddy). Never on plain-HTTP LAN
     # access — a cached max-age would lock the clinic out of its own http:// server.
     if request.is_secure:
@@ -1060,9 +1074,19 @@ def init_database():
             entity_type TEXT NOT NULL,
             entity_id INTEGER,
             details TEXT,
+            actor_user_id INTEGER,
+            actor_username TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # Migration: add actor fields to audit_logs for existing installations
+    cursor.execute("PRAGMA table_info(audit_logs)")
+    _audit_cols = {row[1] for row in cursor.fetchall()}
+    if 'actor_user_id' not in _audit_cols:
+        cursor.execute('ALTER TABLE audit_logs ADD COLUMN actor_user_id INTEGER')
+    if 'actor_username' not in _audit_cols:
+        cursor.execute('ALTER TABLE audit_logs ADD COLUMN actor_username TEXT')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS app_settings (
@@ -1082,6 +1106,16 @@ def init_database():
             must_change_password INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login_at TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id INTEGER NOT NULL,
+            permission_key TEXT NOT NULL,
+            granted INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, permission_key),
+            FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
 
@@ -1428,6 +1462,9 @@ def init_database():
                 ('admin', hash_password(default_pw), 'Administrator', must_change)
             )
 
+    import permissions as _permissions
+    _permissions.migrate_default_grants(cursor)
+
     conn.commit()
     conn.close()
     print("Database initialized successfully")
@@ -1444,10 +1481,23 @@ def append_audit_log(cursor, action_type, entity_type, entity_id=None, details=N
             details_text = details
         else:
             details_text = json.dumps(details, ensure_ascii=False)
+    # Best-effort actor capture — reads the current request's session if one
+    # exists. Falls back to (None, None) outside a request context (e.g. a
+    # background sync/migration call) rather than raising, since audit
+    # logging must never be the reason a write fails.
+    actor_user_id = None
+    actor_username = None
+    try:
+        actor_user_id = session.get('uid')
+        actor_username = session.get('uname')
+    except RuntimeError:
+        pass  # outside an active Flask request/app context
     cursor.execute('''
-        INSERT INTO audit_logs (action_type, entity_type, entity_id, details)
-        VALUES (?, ?, ?, ?)
-    ''', (str(action_type or ''), str(entity_type or ''), entity_id, details_text))
+        INSERT INTO audit_logs (action_type, entity_type, entity_id, details,
+                                 actor_user_id, actor_username)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (str(action_type or ''), str(entity_type or ''), entity_id, details_text,
+          actor_user_id, actor_username))
 
 
 def normalize_datetime_input(value):
@@ -2073,6 +2123,7 @@ import db_merge
 import inventory
 import patient_dedupe
 import patient_import
+import permissions
 
 
 def _safe_next_url(target):
@@ -2142,6 +2193,122 @@ def _require_login_for_portal():
     if path.startswith('/api/'):
         return jsonify({'error': 'Authentication required'}), 401
     return redirect(url_for('login_page', next=path))
+
+
+# Route -> required-permission mapping for session-authenticated (desktop)
+# requests only. Checked in order; first prefix match wins. A route not
+# listed here requires no specific permission (only login, if it's already
+# in _AUTH_REQUIRED_EXACT/_AUTH_REQUIRED_PREFIXES) — this only ever ADDS
+# restriction on top of today's behavior, never removes it. Mobile/device
+# and clinic-token requests never reach this gate at all (see
+# _enforce_staff_permission below) — RBAC is desktop-portal-only per the
+# design spec.
+_PERMISSION_RULES = (
+    # (method_set_or_None, path_regex, permission_key) — order matters, first match wins.
+    # Money/financial sub-resources on a patient (checked before the generic
+    # patient rules below, since they're more specific paths).
+    (None, r'^/api/patients/\d+/(credit|invoice-summary|payment-history)$', 'billing.view'),
+    # Follow-up sheet, tooth-chart, medical-images: combined clinical+billing
+    # permission (see Global Constraints — no field-level split in this PR).
+    (frozenset({'GET'}), r'^/api/patients/\d+/(followups|tooth-chart)(/.*)?$', 'followups.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/patients/\d+/(followups|tooth-chart)(/.*)?$', 'followups.edit'),
+    (frozenset({'GET'}), r'^/api/medical-images(/.*)?$', 'followups.view'),
+    (frozenset({'POST'}), r'^/api/medical-images$', 'followups.edit'),
+    # Full-profile is a read-only aggregate — gated on the base view permission.
+    (frozenset({'GET'}), r'^/api/patients/\d+/full-profile$', 'patients.view'),
+    # Generic patient demographics.
+    (frozenset({'POST'}), r'^/api/patients$', 'patients.edit'),
+    (frozenset({'PUT', 'DELETE'}), r'^/api/patients/\d+$', 'patients.edit'),
+    (frozenset({'GET'}), r'^/api/patients(/check-duplicate)?$', 'patients.view'),
+
+    # Treatment plans — clinical, bucketed with follow-ups.
+    (frozenset({'GET'}), r'^/api/treatment-plans$', 'followups.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/treatment-plans(/.*)?$', 'followups.edit'),
+
+    # Appointments / visits / holidays (scheduling).
+    (frozenset({'GET'}), r'^/api/(appointments|visits)(/.*)?$', 'appointments.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/(appointments|visits)(/.*)?$', 'appointments.edit'),
+    (frozenset({'GET'}), r'^/api/holidays$', 'appointments.view'),
+    (frozenset({'POST', 'DELETE'}), r'^/api/holidays(/.*)?$', 'appointments.edit'),
+
+    # Billing.
+    (frozenset({'GET'}), r'^/api/billing(/.*)?$', 'billing.view'),
+    (frozenset({'POST', 'DELETE'}), r'^/api/billing(/.*)?$', 'billing.edit'),
+    (frozenset({'GET'}), r'^/invoice/\d+$', 'billing.view'),
+    (frozenset({'GET'}), r'^/api/reports/receivables$', 'billing.view'),
+
+    # Expenses.
+    (frozenset({'GET'}), r'^/api/expenses$', 'expenses.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/expenses(/.*)?$', 'expenses.edit'),
+
+    # Depo / inventory.
+    (frozenset({'GET'}), r'^/api/inventory(/.*)?$', 'depo.view'),
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/inventory/(items|procedures)(/.*)?$', 'depo.edit'),
+
+    # Reports (revenue/weekly summaries — distinct from receivables above).
+    (frozenset({'GET'}), r'^/api/reports/(summary|weekly)$', 'reports.view'),
+
+    # Post Studio: creating/deleting posts requires the permission; viewing
+    # (GET) stays open, matching the existing mobile-compat carve-out in
+    # _require_login_for_portal for the same paths.
+    (frozenset({'POST', 'DELETE'}), r'^/api/posts(/.*)?$', 'post_studio.use'),
+
+    # Data tools — dangerous, off by default for anyone but Owner.
+    (None, r'^/api/data/(export-bundle|export-bundle-file|merge|replace|clear-catalogs|'
+           r'duplicate-patients|merge-patients|import-patients/preview|import-patients/commit)$',
+           'data_tools.use'),
+    (None, r'^/api/backup(-file)?$', 'data_tools.use'),
+
+    # Catalog editing (procedures/tooth-conditions) and clinic-wide settings.
+    (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/(treatment-procedures|tooth-conditions)(/.*)?$', 'settings.manage'),
+    (frozenset({'PUT'}), r'^/api/branding$', 'settings.manage'),
+    (frozenset({'POST'}), r'^/api/clinic-settings$', 'settings.manage'),
+    (frozenset({'POST'}), r'^/api/bt/configure$', 'settings.manage'),
+    (frozenset({'GET'}), r'^/api/audit-logs$', 'settings.manage'),
+
+    # Staff management itself (added in Task 4) — gated on staff.manage.
+    (None, r'^/api/staff(/.*)?$', 'staff.manage'),
+)
+
+_PERMISSION_RULE_CACHE = tuple((methods, re.compile(pattern), key) for methods, pattern, key in _PERMISSION_RULES)
+# (dental_clinic.py already imports `re` at module level — no new import needed.)
+
+
+def _permission_required_for(method, path):
+    for methods, compiled, key in _PERMISSION_RULE_CACHE:
+        if methods is not None and method not in methods:
+            continue
+        if compiled.match(path):
+            return key
+    return None
+
+
+@app.before_request
+def _enforce_staff_permission():
+    if request.method == 'OPTIONS':
+        return None
+    uid = session.get('uid')
+    if not uid:
+        # Not a desktop session at all — includes genuine mobile/device-token
+        # requests, which never carry a Flask session cookie. Deliberately NOT
+        # checked as "if device/clinic-token header: bypass" independent of
+        # session state — that would let a session-authenticated staffer
+        # attach an arbitrary X-Device-Token header to skip this gate on
+        # their own account. Once a session exists, headers are irrelevant.
+        return None
+    path = request.path or '/'
+    required = _permission_required_for(request.method, path)
+    if required is None:
+        return None
+    conn = get_db_connection()
+    try:
+        granted = permissions.get_permissions(conn.cursor(), uid)
+    finally:
+        conn.close()
+    if required not in granted:
+        return jsonify({'error': 'You do not have permission to do that.',
+                        'reason': 'permission_denied'}), 403
+    return None
 
 
 # Endpoints that stay writable even in view-only mode: licensing (so you can renew),
@@ -2342,7 +2509,126 @@ def logout():
 
 @app.route('/api/auth/me')
 def auth_me():
-    return jsonify({'authenticated': bool(session.get('uid')), 'username': session.get('uname', '')})
+    uid = session.get('uid')
+    granted = []
+    if uid:
+        conn = get_db_connection()
+        granted = sorted(permissions.get_permissions(conn.cursor(), uid))
+        conn.close()
+    return jsonify({'authenticated': bool(uid), 'username': session.get('uname', ''),
+                    'permissions': granted})
+
+
+def _count_users_with_permission(cursor, permission_key, exclude_user_id=None):
+    rows = cursor.execute(
+        'SELECT user_id FROM user_permissions WHERE permission_key = ? AND granted = 1',
+        (permission_key,)
+    ).fetchall()
+    ids = {r[0] for r in rows}
+    if exclude_user_id is not None:
+        ids.discard(exclude_user_id)
+    if not ids:
+        return 0
+    placeholders = ','.join('?' * len(ids))
+    active = cursor.execute(
+        f'SELECT COUNT(*) FROM users WHERE id IN ({placeholders}) AND is_active = 1',
+        tuple(ids)
+    ).fetchone()[0]
+    return active
+
+
+@app.route('/api/staff', methods=['GET', 'POST'])
+def staff_accounts():
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        rows = cursor.execute(
+            'SELECT id, username, display_name, is_active, created_at, last_login_at FROM users '
+            'ORDER BY username'
+        ).fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+    if not username or not password:
+        conn.close()
+        return jsonify({'error': 'Username and password are required'}), 400
+    existing = cursor.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({'error': 'That username is already in use'}), 400
+    cursor.execute(
+        'INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)',
+        (username, hash_password(password), data.get('display_name') or username))
+    new_id = cursor.lastrowid
+    requested_perms = data.get('permissions') or []
+    for key in requested_perms:
+        permissions.set_permission(cursor, new_id, key, True)
+    append_audit_log(cursor, 'create', 'staff_account', new_id, {'username': username})
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'id': new_id})
+
+
+@app.route('/api/staff/<int:user_id>', methods=['PUT'])
+def staff_account_update(user_id):
+    data = request.json or {}
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if 'is_active' in data and not data['is_active']:
+        # Refuse to deactivate the last active account holding staff.manage —
+        # that would lock the clinic out of Manage Staff entirely.
+        cursor.execute('SELECT 1 FROM user_permissions WHERE user_id = ? AND permission_key = ? AND granted = 1',
+                        (user_id, 'staff.manage'))
+        if cursor.fetchone():
+            remaining = _count_users_with_permission(cursor, 'staff.manage', exclude_user_id=user_id)
+            if remaining == 0:
+                conn.close()
+                return jsonify({'error': 'Cannot deactivate the last account with staff management access'}), 400
+    sets, vals = [], []
+    if 'is_active' in data:
+        sets.append('is_active = ?'); vals.append(1 if data['is_active'] else 0)
+    if 'display_name' in data:
+        sets.append('display_name = ?'); vals.append(data['display_name'])
+    if not sets:
+        conn.close()
+        return jsonify({'error': 'No fields to update'}), 400
+    vals.append(user_id)
+    cursor.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", vals)
+    append_audit_log(cursor, 'update', 'staff_account', user_id, data)
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/staff/<int:user_id>/permissions', methods=['GET', 'PUT'])
+def staff_permissions(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        granted = sorted(permissions.get_permissions(cursor, user_id))
+        conn.close()
+        return jsonify({'user_id': user_id, 'granted': granted, 'all_keys': list(permissions.PERMISSION_KEYS)})
+
+    data = request.json or {}
+    key = data.get('permission_key')
+    granted_flag = bool(data.get('granted'))
+    if not granted_flag and key == 'staff.manage':
+        remaining = _count_users_with_permission(cursor, 'staff.manage', exclude_user_id=user_id)
+        if remaining == 0:
+            conn.close()
+            return jsonify({'error': 'Cannot revoke the last account with staff management access'}), 400
+    try:
+        permissions.set_permission(cursor, user_id, key, granted_flag)
+    except ValueError as exc:
+        conn.close()
+        return jsonify({'error': str(exc)}), 400
+    append_audit_log(cursor, 'update', 'staff_permission', user_id, {'key': key, 'granted': granted_flag})
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 
 @app.route('/api/auth/change-password', methods=['POST'])

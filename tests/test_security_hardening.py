@@ -40,3 +40,17 @@ def test_hsts_only_over_https(local_client):
     # HTTPS: HSTS present.
     r2 = local_client.get('/healthz', base_url='https://localhost')
     assert 'Strict-Transport-Security' in r2.headers
+
+
+def test_csp_header_present_and_locked_down(local_client):
+    r = local_client.get('/healthz')
+    csp = r.headers.get('Content-Security-Policy')
+    assert csp is not None
+    assert "default-src 'self'" in csp
+    assert "script-src 'self' 'unsafe-inline'" in csp
+    assert "style-src 'self' 'unsafe-inline'" in csp
+    assert "img-src 'self' data:" in csp
+    assert "font-src 'self' data:" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "base-uri 'self'" in csp
