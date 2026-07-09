@@ -73,13 +73,26 @@ WINDOW_DATAS = COMMON_DATAS + [
     ('window/assets/icon.png', 'window/assets'),
 ]
 
+# Hidden imports specific to the headless service. The service opens and
+# migrates the database directly via SQLCipher (see
+# docs/superpowers/plans/2026-07-07-security-encryption-at-rest.md), so the
+# encryption-at-rest deps must ship here. The window launcher never touches
+# the DB or imports dental_clinic — it only talks to the service over HTTP
+# (see dentacare_window.py) — so these are intentionally NOT added to
+# COMMON_HIDDEN / window_a.
+SERVICE_HIDDEN = COMMON_HIDDEN + [
+    'sqlcipher3',
+    'win32crypt',
+    'win32api',
+]
+
 # --- The headless service ----------------------------------------------------
 service_a = Analysis(
     ['dental_clinic.py'],
     pathex=[],
     binaries=[],
     datas=COMMON_DATAS,
-    hiddenimports=COMMON_HIDDEN,
+    hiddenimports=SERVICE_HIDDEN,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
