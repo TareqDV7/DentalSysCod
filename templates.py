@@ -714,7 +714,19 @@ HTML_TEMPLATE = '''
             display: none;
         }
         body.sidebar-collapsed .nav-tab span:not(.tab-icon) { display: none; }
-        body.sidebar-collapsed .nav-tabs-label { display: none; }
+        /* Keep the label clickable when collapsed (icon-only glyph instead of
+           the word "Navigation") so the sidebar can be re-expanded — display:none
+           here used to remove the only click target, leaving no way back. */
+        body.sidebar-collapsed .nav-tabs-label {
+            font-size: 0;
+            text-align: center;
+            padding: 4px 0 10px;
+        }
+        body.sidebar-collapsed .nav-tabs-label::after {
+            content: '»';
+            font-size: 1rem;
+        }
+        html[dir="rtl"] body.sidebar-collapsed .nav-tabs-label::after { content: '«'; }
 
         @media (max-width: 980px) {
             .nav-tabs { width: 72px; min-width: 72px; }
@@ -2232,7 +2244,7 @@ HTML_TEMPLATE = '''
                 <span data-en="Catalog" data-ar="الفهرس">Catalog</span>
             </button>
             <button class="nav-tab" data-tab="depo" onclick="switchTab('depo', this)">
-                <span class="tab-icon"><svg class="ic"><use href="#i-folders"/></svg></span>
+                <span class="tab-icon"><svg class="ic"><use href="#i-package"/></svg></span>
                 <span data-en="Depo" data-ar="مخزن">Depo</span>
             </button>
             <button class="nav-tab" data-tab="support" onclick="switchTab('support', this)">
@@ -2763,6 +2775,7 @@ HTML_TEMPLATE = '''
                     <button class="sub-tab active" onclick="switchFinancialSubTab('management', this)" data-i18n="management_tab">Management</button>
                     <button class="sub-tab" onclick="switchFinancialSubTab('billing', this)" data-i18n="payments_tab">💳 Payments</button>
                     <button class="sub-tab" onclick="switchFinancialSubTab('invoices', this)" data-i18n="statement_tab">📄 Statement</button>
+                    <button class="sub-tab" onclick="switchFinancialSubTab('expenses', this)" data-i18n="expenses_tab">🧾 Expenses</button>
                     </div>
 
                     <div id="financial-subtab-management" class="sub-tab-content active section-card">
@@ -2787,6 +2800,9 @@ HTML_TEMPLATE = '''
                         <tbody id="receivables-body"><tr><td colspan="6" data-i18n="no_data">No data</td></tr></tbody>
                     </table>
                 </div>
+                </div>
+
+                    <div id="financial-subtab-expenses" class="sub-tab-content section-card">
 
                 <details class="form-panel" open>
                 <summary>➕ <span data-i18n="expense_tracking">Expense Tracking</span></summary>
@@ -3685,6 +3701,7 @@ HTML_TEMPLATE = '''
                 invoices_tab: 'Invoices',
                 payments_tab: '💳 Payments',
                 statement_tab: '📄 Statement',
+                expenses_tab: '🧾 Expenses',
                 record_payment: 'Record Payment',
                 payment_management: 'Payment Record',
                 payment_history: 'Payment History',
@@ -4182,6 +4199,7 @@ HTML_TEMPLATE = '''
                 invoices_tab: 'ملخص الفواتير',
                 payments_tab: '💳 المدفوعات',
                 statement_tab: '📄 كشف الحساب',
+                expenses_tab: '🧾 المصروفات',
                 record_payment: 'تسجيل دفعة',
                 payment_management: 'تسجيل دفعة',
                 payment_history: 'سجل المدفوعات',
@@ -5507,11 +5525,12 @@ HTML_TEMPLATE = '''
             if (!shouldLoad) return;
             if (tabName === 'management') {
                 loadReceivables();
-                loadExpenses();
             } else if (tabName === 'billing') {
                 loadBilling();
             } else if (tabName === 'invoices') {
                 loadPatientsSelect('invoice-patient-select');
+            } else if (tabName === 'expenses') {
+                loadExpenses();
             }
         }
 
@@ -6652,9 +6671,10 @@ HTML_TEMPLATE = '''
             switchFinancialSubTab(currentFinancialSubTab, null, false);
             if (currentFinancialSubTab === 'management') {
                 await loadReceivables();
-                await loadExpenses();
             } else if (currentFinancialSubTab === 'billing') {
                 await loadBilling();
+            } else if (currentFinancialSubTab === 'expenses') {
+                await loadExpenses();
             } else {
                 await loadPatientsSelect('invoice-patient-select');
             }

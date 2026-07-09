@@ -22,7 +22,13 @@ CORE = f"https://unpkg.com/@phosphor-icons/core@{PHOSPHOR_VER}/assets"
 ICONS = ["house", "users", "calendar-dots", "receipt", "gear", "magnifying-glass",
          "bell", "caret-down", "moon", "sun", "sign-out", "user", "user-plus",
          # added in Task 5 to cover the real shell's nav (Reports, Catalog):
-         "chart-bar", "folders"]
+         "chart-bar", "folders",
+         # Post Studio nav icon (was added to the shipped web_assets.py without
+         # ever landing in this generator's list — restored here so a re-run
+         # doesn't silently drop it):
+         "image",
+         # Depo (inventory) gets its own icon instead of reusing Catalog's "folders":
+         "package"]
 FILL_ICONS = ["house"]  # active-item only
 
 def _get(url: str) -> bytes:
