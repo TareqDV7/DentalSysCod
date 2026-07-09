@@ -17,8 +17,7 @@ def _new_db(path):
         dental_clinic.init_database()
     finally:
         dental_clinic.DB_NAME = prev
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True, db_path=str(path))
     return conn
 
 
@@ -174,7 +173,7 @@ def _login(client):
 
 
 def _seed_dupes(client):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     s = conn.execute("INSERT INTO patients (first_name, last_name) VALUES ('Nour', 'Hadi')").lastrowid
     d = conn.execute("INSERT INTO patients (first_name, last_name) VALUES ('nour', ' hadi ')").lastrowid
     conn.execute('INSERT INTO appointments (patient_id, appointment_date) VALUES (?, ?)', (d, '2026-01-01'))
@@ -217,7 +216,7 @@ def test_merge_patients_route_merges(client):
     resp = client.post('/api/data/merge-patients', json={'survivor_id': s, 'duplicate_ids': [d]})
     assert resp.status_code == 200
     assert resp.get_json()['success'] is True
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     assert conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0] == 1
     assert conn.execute('SELECT patient_id FROM appointments').fetchone()[0] == s
     conn.close()

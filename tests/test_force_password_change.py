@@ -25,7 +25,7 @@ def _init_db(tmp_path, monkeypatch, admin_password=None):
 
 
 def _flag(db):
-    return sqlite3.connect(str(db)).execute(
+    return dental_clinic.get_db_connection().execute(
         "SELECT must_change_password FROM users WHERE username='admin'").fetchone()[0]
 
 

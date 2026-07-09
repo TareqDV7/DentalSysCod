@@ -23,8 +23,7 @@ def _make_cloud_shim(cloud_db):
     def shim(method, url, headers=None, body=None, timeout=15):
         path = urlsplit(url).path
         query = urlsplit(url).query
-        cc = sqlite3.connect(cloud_db)
-        cc.row_factory = sqlite3.Row
+        cc = dental_clinic.get_db_connection(with_row_factory=True, db_path=cloud_db)
         cur = cc.cursor()
         try:
             if path == '/api/clinics/register':
@@ -69,7 +68,7 @@ def env(tmp_path, monkeypatch):
 #  sub-second-fast tests.)
 
 def _add_patient(db, first_name, pid, created_at=None, last_name='X', phone='000'):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection(db_path=db)
     cur = conn.cursor()
     if created_at:
         cur.execute('INSERT INTO patients (id, first_name, last_name, phone, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -83,14 +82,14 @@ def _add_patient(db, first_name, pid, created_at=None, last_name='X', phone='000
 
 
 def _patient_names(db):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection(db_path=db)
     rows = conn.execute('SELECT first_name FROM patients ORDER BY first_name').fetchall()
     conn.close()
     return [r[0] for r in rows]
 
 
 def _delete_patient_with_tombstone(db, pid, deleted_at='2099-01-01 00:00:00'):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection(db_path=db)
     cur = conn.cursor()
     cur.execute('DELETE FROM patients WHERE id = ?', (pid,))
     dental_clinic.record_tombstone(cur, 'patients', pid, deleted_at)
@@ -99,7 +98,7 @@ def _delete_patient_with_tombstone(db, pid, deleted_at='2099-01-01 00:00:00'):
 
 
 def _setting(db, key):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection(db_path=db)
     row = conn.execute('SELECT value FROM app_settings WHERE key = ?', (key,)).fetchone()
     conn.close()
     return row[0] if row else None

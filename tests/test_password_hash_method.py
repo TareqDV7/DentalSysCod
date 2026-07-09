@@ -35,7 +35,7 @@ def _init_db(tmp_path, monkeypatch, admin_password=None):
 
 
 def _admin_hash(db):
-    return sqlite3.connect(str(db)).execute(
+    return dental_clinic.get_db_connection().execute(
         "SELECT password_hash FROM users WHERE username='admin'").fetchone()[0]
 
 

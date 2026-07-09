@@ -17,7 +17,7 @@ def db(tmp_path, monkeypatch):
 
 
 def test_existing_admin_auto_granted_all_permissions(db):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     uid = cur.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()[0]
     granted = permissions.get_permissions(cur, uid)
@@ -26,7 +26,7 @@ def test_existing_admin_auto_granted_all_permissions(db):
 
 
 def test_set_permission_revokes_and_grants(db):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     uid = cur.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()[0]
     permissions.set_permission(cur, uid, 'billing.edit', False)
@@ -41,7 +41,7 @@ def test_set_permission_revokes_and_grants(db):
 
 
 def test_set_permission_rejects_unknown_key(db):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     uid = cur.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()[0]
     with pytest.raises(ValueError):
@@ -53,7 +53,7 @@ def test_migration_does_not_regrant_after_explicit_revoke(db):
     # Re-running the migration (as happens on every init_database() call, e.g.
     # every app start) must not silently re-grant a permission an Owner
     # deliberately revoked from themselves or another account.
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     uid = cur.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()[0]
     permissions.set_permission(cur, uid, 'data_tools.use', False)
@@ -62,7 +62,7 @@ def test_migration_does_not_regrant_after_explicit_revoke(db):
 
     dental_clinic.init_database()  # re-run migration
 
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     granted = permissions.get_permissions(cur, uid)
     conn.close()
@@ -70,7 +70,7 @@ def test_migration_does_not_regrant_after_explicit_revoke(db):
 
 
 def test_new_user_with_no_permission_rows_gets_none_by_default(db):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO users (username, password_hash, display_name) VALUES (?,?,?)",
@@ -96,7 +96,7 @@ def test_audit_log_captures_actor_from_session(tmp_path, monkeypatch):
     app.config['TESTING'] = True
 
     # Create a test patient
-    conn = sqlite3.connect(str(test_db))
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 ('Test', 'Patient', '0500'))
@@ -119,8 +119,7 @@ def test_audit_log_captures_actor_from_session(tmp_path, monkeypatch):
         })
 
     # Query the audit log to verify actor fields are populated
-    conn = sqlite3.connect(str(test_db))
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     row = conn.execute(
         "SELECT actor_user_id, actor_username FROM audit_logs WHERE entity_type = 'billing' "
         "ORDER BY id DESC LIMIT 1"
@@ -133,7 +132,7 @@ def test_audit_log_captures_actor_from_session(tmp_path, monkeypatch):
 def test_session_user_without_permission_gets_403(db):
     app = dental_clinic.app
     app.config['TESTING'] = True
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO users (username, password_hash, display_name) VALUES (?,?,?)",
@@ -156,7 +155,7 @@ def test_session_user_without_permission_gets_403(db):
 def test_session_user_with_permission_succeeds(db):
     app = dental_clinic.app
     app.config['TESTING'] = True
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO users (username, password_hash, display_name) VALUES (?,?,?)",
@@ -196,7 +195,7 @@ def test_session_user_cannot_bypass_gate_with_device_token_header(db):
     # NO session at all (genuine mobile traffic never carries one).
     app = dental_clinic.app
     app.config['TESTING'] = True
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO users (username, password_hash, display_name) VALUES (?,?,?)",

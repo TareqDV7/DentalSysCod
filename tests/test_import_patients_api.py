@@ -110,7 +110,7 @@ def test_commit_writes_audit_log(client):
     _login(client)
     _commit(client, 'First Name,Last Name\nAli,Hassan\n')
     import sqlite3
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     n = conn.execute("SELECT COUNT(*) FROM audit_logs WHERE action_type='import'").fetchone()[0]
     conn.close()
     assert n == 1

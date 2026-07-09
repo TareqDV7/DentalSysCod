@@ -53,11 +53,17 @@ def test_already_encrypted_db_is_a_no_op(tmp_path, monkeypatch):
 def test_secret_key_bootstrap_artifact_is_not_treated_as_a_pre_existing_db(tmp_path, monkeypatch):
     """_load_or_create_secret_key() runs at module *import* time (well before
     __main__ / migrate_db_to_encrypted() is even reached) and always leaves a
-    plaintext DB_NAME file behind holding just the Flask secret-key row — even
-    on a brand-new install that has never run init_database(). This must NOT
-    be mistaken for a genuine pre-existing clinic database: encrypting it here
-    would beat init_database() to the file and crash it (still raw sqlite3
-    until Task 5 converts it) on what looks like a corrupt file."""
+    DB_NAME file behind holding just the Flask secret-key row — even on a
+    brand-new install that has never run init_database(). This must NOT be
+    mistaken for a genuine pre-existing clinic database that needs migrating.
+
+    Since Task 5, both _load_or_create_secret_key() and init_database() open
+    DB_NAME via get_db_connection(), so this bootstrap artifact is encrypted
+    from the moment it's created — _is_plaintext_sqlite() already excludes it
+    from migration for that reason. _has_clinic_schema()'s bootstrap check
+    (guarding the case where the file *is* plaintext, e.g. pre-migration on an
+    existing install) is exercised by test_nonexistent_db_is_a_no_op and the
+    already-encrypted case below."""
     db_path = tmp_path / 'clinic.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(db_path))
     monkeypatch.setattr(dental_clinic, '_DATA_DIR', tmp_path)
@@ -68,10 +74,10 @@ def test_secret_key_bootstrap_artifact_is_not_treated_as_a_pre_existing_db(tmp_p
     assert migrated is False
 
     # init_database() must still be able to build the real schema on top of
-    # the untouched plaintext file — this is what would crash if the bootstrap
-    # artifact got encrypted out from under it.
+    # the untouched bootstrap file — this is what would crash if the bootstrap
+    # artifact got wrongly treated as a stale/corrupt file.
     dental_clinic.init_database()
-    conn = sqlite3.connect(str(db_path))
+    conn = dental_clinic.get_db_connection()
     tables = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     conn.close()

@@ -109,7 +109,7 @@ def test_query_arg_clinic_token_does_not_exempt(client):
 
 def test_index_html_contains_csrf_meta_and_interceptor(client):
     import sqlite3
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute('UPDATE users SET must_change_password = 0')
     conn.commit()
     conn.close()

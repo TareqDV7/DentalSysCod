@@ -4,23 +4,36 @@ Builds two independent clinic DBs with COLLIDING primary-key ids, merges
 source into destination, and asserts the destination keeps its own data while
 the source's records arrive under fresh ids with every foreign key rewritten.
 """
+import os
 import sqlite3
 
 import pytest
 
 import dental_clinic
 import db_merge
+import encryption_key
 
 
 def _new_db(path):
     """Create a real, fully-migrated clinic DB at `path` and return a Row-factory
-    connection. Reuses dental_clinic.init_database by pointing DB_NAME at it."""
+    connection. Reuses dental_clinic.init_database by pointing DB_NAME at it.
+
+    The file on disk is kept PLAINTEXT: db_merge.merge_database() re-opens its
+    `src_db_path` argument with a vanilla sqlite3.connect (deliberately out of
+    scope for encryption-at-rest — see dental_clinic.py's data_merge() route),
+    and several tests here pass one of these paths straight to it. init_database()
+    now always builds an encrypted DB, so the schema is built at a throwaway
+    encrypted path and decrypted into `path`."""
     prev = dental_clinic.DB_NAME
-    dental_clinic.DB_NAME = str(path)
+    tmp_encrypted = str(path) + '.tmp-encrypted'
+    dental_clinic.DB_NAME = tmp_encrypted
     try:
         dental_clinic.init_database()
     finally:
         dental_clinic.DB_NAME = prev
+    key = encryption_key.get_or_create_key(dental_clinic._DATA_DIR)
+    dental_clinic._sqlcipher_decrypt_export(tmp_encrypted, str(path), key.hex())
+    os.remove(tmp_encrypted)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     return conn

@@ -27,7 +27,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _patient(name='Tooth', last='Chart', phone='0590'):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 (name, last, phone))
@@ -48,7 +48,7 @@ def _post_conditions(client, pid, tooth, items):
 
 
 def test_chart_table_exists(client):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patient_tooth_chart'")
     assert cur.fetchone() is not None
@@ -88,7 +88,7 @@ def test_post_conditions_replaces_set(client):
     _post_conditions(client, pid, '16', [{'condition_id': crown}, {'condition_id': rc}])
     conds = client.get(f'/api/patients/{pid}/tooth-chart').get_json()['teeth']['16']['conditions']
     assert {c['condition_name'] for c in conds} == {'Crown', 'Root canal'}
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     n = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='patient_tooth_chart'").fetchone()[0]
     conn.close()
     assert n >= 1

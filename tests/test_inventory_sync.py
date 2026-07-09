@@ -2,6 +2,7 @@
 import sqlite3
 import pytest
 import dental_clinic
+import encryption_key
 
 
 @pytest.fixture()
@@ -9,8 +10,7 @@ def db(tmp_path, monkeypatch):
     path = tmp_path / 'clinic_test.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(path))
     dental_clinic.init_database()
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     yield conn
     conn.close()
 
@@ -47,7 +47,7 @@ def test_insight_only_no_expense_or_profit_writes(tmp_path, monkeypatch):
         item = c.post('/api/inventory/items', json={'name': 'C'}).get_json()['id']
         c.post(f'/api/inventory/items/{item}/restock', json={'base_qty': 10, 'unit_cost': 9.0})
         patient = c.post('/api/patients', json={'first_name': 'A', 'last_name': 'B'}).get_json()['id']
-        raw = sqlite3.connect(str(db))
+        raw = dental_clinic.get_db_connection()
         pid = raw.execute('INSERT INTO treatment_procedures (name) VALUES (?)', ('P',)).lastrowid
         raw.execute('INSERT INTO procedure_materials (procedure_id, item_id, default_qty) '
                     'VALUES (?,?,?)', (pid, item, 2))
@@ -55,20 +55,33 @@ def test_insight_only_no_expense_or_profit_writes(tmp_path, monkeypatch):
         c.post(f'/api/patients/{patient}/followups',
                json={'followup_date': '01/01/2026', 'procedure_id': pid, 'price': 0})
         # The follow-up deducted stock (item is now 8) but no Depo path wrote money.
-        raw = sqlite3.connect(str(db))
+        raw = dental_clinic.get_db_connection()
         assert raw.execute('SELECT COUNT(*) FROM expenses').fetchone()[0] == 0
         assert raw.execute('SELECT quantity FROM inventory_items WHERE id=?', (item,)).fetchone()[0] == 8
         raw.close()
 
 
 def _seed_inventory_db(path):
-    """Init a fresh clinic DB at `path` and give it one stocked item."""
+    """Init a fresh clinic DB at `path` and give it one stocked item.
+
+    Kept PLAINTEXT on disk: this file is later either uploaded to
+    /api/data/replace (which validates plaintext 'SQLite format 3' — see
+    is_sqlite_file()) or passed straight to db_merge.merge_database() as
+    src_db_path, which opens it with a vanilla sqlite3.connect — both
+    deliberately out of scope for encryption-at-rest. init_database() now
+    always builds an encrypted DB, so the schema is built at a throwaway
+    encrypted path and decrypted into `path`."""
     prev = dental_clinic.DB_NAME
-    dental_clinic.DB_NAME = str(path)
+    tmp_encrypted = str(path) + '.tmp-encrypted'
+    dental_clinic.DB_NAME = tmp_encrypted
     try:
         dental_clinic.init_database()
     finally:
         dental_clinic.DB_NAME = prev
+    key = encryption_key.get_or_create_key(dental_clinic._DATA_DIR)
+    dental_clinic._sqlcipher_decrypt_export(tmp_encrypted, str(path), key.hex())
+    import os
+    os.remove(tmp_encrypted)
     sc = sqlite3.connect(str(path))
     sc.execute("INSERT INTO treatment_procedures (id, name) VALUES (1, 'Filling')")
     sc.execute("INSERT INTO inventory_items (id, name, quantity, cost_per_unit) "
@@ -107,7 +120,7 @@ def test_replace_db_preserves_inventory(tmp_path, monkeypatch):
         resp = client.post('/api/data/replace', data=data, content_type='multipart/form-data')
     assert resp.status_code == 200
 
-    raw = sqlite3.connect(str(dental_clinic.DB_NAME))
+    raw = dental_clinic.get_db_connection()
     items = [(r[0], r[1]) for r in raw.execute('SELECT name, quantity FROM inventory_items').fetchall()]
     moves = raw.execute('SELECT COUNT(*) FROM stock_movements').fetchone()[0]
     raw.close()
@@ -126,7 +139,7 @@ def test_additive_merge_carries_inventory(tmp_path, monkeypatch):
     src = tmp_path / 'src.db'
     _seed_inventory_db(src)
 
-    dconn = sqlite3.connect(str(dst))
+    dconn = dental_clinic.get_db_connection()
     db_merge.merge_database(dconn, str(src))
     dconn.commit()
     items = [(r[0], r[1]) for r in dconn.execute('SELECT name, quantity FROM inventory_items').fetchall()]

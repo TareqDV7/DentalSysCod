@@ -30,14 +30,14 @@ def local(tmp_path, monkeypatch):
 
 
 def _set_setting(key, value):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     conn.commit(); conn.close()
 
 
 def _get_setting(key):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
     conn.close()
     return row[0] if row else None

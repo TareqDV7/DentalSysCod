@@ -34,7 +34,7 @@ def _login(client):
 
 
 def _pair(db_path, url='https://cloud.example', token='TOK-abc-123'):
-    conn = sqlite3.connect(db_path)
+    conn = dental_clinic.get_db_connection(db_path=db_path)
     cur = conn.cursor()
     dental_clinic.write_app_setting(cur, 'cloud_url', url)
     dental_clinic.write_app_setting(cur, 'cloud_clinic_token', token)

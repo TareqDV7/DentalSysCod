@@ -26,7 +26,7 @@ def client(tmp_path, monkeypatch):
     test_db = tmp_path / 'clinic_test.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(test_db))
     dental_clinic.init_database()
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO paired_devices (device_id, device_name, device_token) VALUES (?,?,?)',
                 ('dev-test', 'Test Device', 'test-token'))
@@ -47,7 +47,7 @@ def test_new_tables_in_sync_export(client):
 
 
 def _patient():
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 ('Sync', 'Tooth', '0593'))

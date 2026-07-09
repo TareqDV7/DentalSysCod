@@ -223,7 +223,7 @@ def local(tmp_path, monkeypatch):
 
 
 def _active_settings():
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     rows = dict(conn.execute(
         "SELECT key, value FROM app_settings WHERE key IN "
         "('active_serial_number','active_serial_token')").fetchall())

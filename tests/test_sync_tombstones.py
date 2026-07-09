@@ -22,7 +22,7 @@ def client(tmp_path, monkeypatch):
     dental_clinic.init_database()
 
     # A paired device so the /api/sync/* endpoints accept our requests.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         'INSERT INTO paired_devices (device_id, device_name, device_token) VALUES (?, ?, ?)',
@@ -36,7 +36,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _insert_patient(first_name='John', last_name='Doe', phone='0500000000'):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         'INSERT INTO patients (first_name, last_name, phone) VALUES (?, ?, ?)',
@@ -51,7 +51,7 @@ def _insert_patient(first_name='John', last_name='Doe', phone='0500000000'):
 def _set_patient_timestamps(pid, ts):
     # The AFTER-UPDATE trigger would otherwise reset updated_at to CURRENT_TIMESTAMP,
     # so drop it for the write and put it back exactly as the app defines it.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('DROP TRIGGER IF EXISTS trg_patients_updated_at')
     cur.execute('UPDATE patients SET updated_at = ?, created_at = ? WHERE id = ?', (ts, ts, pid))
@@ -61,7 +61,7 @@ def _set_patient_timestamps(pid, ts):
 
 
 def _patient_exists(pid):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT id FROM patients WHERE id = ?', (pid,))
     row = cur.fetchone()
@@ -70,7 +70,7 @@ def _patient_exists(pid):
 
 
 def _tombstone(table_name, row_id):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         'SELECT deleted_at FROM sync_tombstones WHERE table_name = ? AND row_id = ?',

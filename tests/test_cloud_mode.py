@@ -338,7 +338,7 @@ def test_cloud_pair_forwards_offline_token_from_body(tmp_path, monkeypatch):
 
     # And it persisted the token for future re-pairs.
     import sqlite3
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     assert dental_clinic.read_app_setting(cur, 'cloud_offline_token', '') == 'PAYLOAD.SIG'
     conn.close()

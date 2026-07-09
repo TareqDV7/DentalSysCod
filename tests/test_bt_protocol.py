@@ -4,6 +4,7 @@ to response, reusing _collect_sync_export / _apply_sync_import."""
 import sqlite3
 import pytest
 
+import dental_clinic
 from dental_clinic import (
     BT_PROTOCOL_VERSION,
     _bt_handle_request,
@@ -16,8 +17,7 @@ def cursor(tmp_path, monkeypatch):
     db = tmp_path / 'test.db'
     monkeypatch.setattr('dental_clinic.DB_NAME', str(db))
     init_database()
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     # Seed a paired device so hello succeeds.
     cur.execute(

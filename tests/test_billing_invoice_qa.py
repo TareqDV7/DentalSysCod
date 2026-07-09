@@ -27,7 +27,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _patient():
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 ('Inv', 'Oice', '0500'))
@@ -121,7 +121,7 @@ def test_billing_invoice_page_renders_correct_math(client):
 
     # The printable invoice page shows the same figures (auth-gated route).
     _login(client)
-    bid = sqlite3.connect(dental_clinic.DB_NAME).execute(
+    bid = dental_clinic.get_db_connection().execute(
         'SELECT id FROM billing WHERE patient_id = ?', (pid,)).fetchone()[0]
     html = client.get(f'/invoice/{bid}').get_data(as_text=True)
     assert '150.00' in html        # total
@@ -187,7 +187,7 @@ def test_invoice_embed_suppresses_autoprint(client):
     _login(client)
     pid = _patient()
     client.post('/api/billing', json={'patient_id': pid, 'subtotal': 50, 'paid_amount': 50})
-    bid = sqlite3.connect(dental_clinic.DB_NAME).execute(
+    bid = dental_clinic.get_db_connection().execute(
         'SELECT id FROM billing WHERE patient_id = ?', (pid,)).fetchone()[0]
 
     standalone = client.get(f'/invoice/{bid}').get_data(as_text=True)
