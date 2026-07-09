@@ -189,6 +189,34 @@ def test_device_token_request_bypasses_permission_gate(db):
     assert r.status_code != 403 or r.get_json().get('reason') != 'permission_denied'
 
 
+def test_session_user_cannot_bypass_gate_with_device_token_header(db):
+    # A session-authenticated staffer must not be able to escape the
+    # permission gate by simply attaching a device/clinic-token header
+    # alongside their session cookie — the bypass is only for requests with
+    # NO session at all (genuine mobile traffic never carries one).
+    app = dental_clinic.app
+    app.config['TESTING'] = True
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO users (username, password_hash, display_name) VALUES (?,?,?)",
+        ('frontdesk', dental_clinic.hash_password('x'), 'Front Desk'))
+    uid = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess['uid'] = uid
+            sess['uname'] = 'frontdesk'
+        r = client.post('/api/expenses',
+            json={'category': 'Test', 'amount': 10, 'expense_date': '01/01/2026',
+                  'payment_status': 'paid'},
+            headers={'X-Device-Token': 'attacker-supplied'})
+    assert r.status_code == 403
+    assert r.get_json()['reason'] == 'permission_denied'
+
+
 def _owner_client(app, uid=1, uname='admin'):
     client = app.test_client()
     with client.session_transaction() as sess:

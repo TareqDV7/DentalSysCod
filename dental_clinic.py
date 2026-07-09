@@ -2273,12 +2273,15 @@ def _permission_required_for(method, path):
 def _enforce_staff_permission():
     if request.method == 'OPTIONS':
         return None
-    # Mobile/device requests are never subject to desktop RBAC.
-    if request.headers.get('X-Device-Token') or request.headers.get('X-Clinic-Token'):
-        return None
     uid = session.get('uid')
     if not uid:
-        return None  # not a desktop session at all — unrelated to this gate
+        # Not a desktop session at all — includes genuine mobile/device-token
+        # requests, which never carry a Flask session cookie. Deliberately NOT
+        # checked as "if device/clinic-token header: bypass" independent of
+        # session state — that would let a session-authenticated staffer
+        # attach an arbitrary X-Device-Token header to skip this gate on
+        # their own account. Once a session exists, headers are irrelevant.
+        return None
     path = request.path or '/'
     required = _permission_required_for(request.method, path)
     if required is None:
