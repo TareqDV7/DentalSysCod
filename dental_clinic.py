@@ -7683,6 +7683,115 @@ def run_database_backup():
     return written
 
 
+def _is_plaintext_sqlite(path):
+    """True if path opens successfully with vanilla sqlite3 and looks like a
+    real database (has at least one table) — i.e. it predates encryption."""
+    try:
+        conn = sqlite3.connect(str(path))
+        conn.execute("SELECT name FROM sqlite_master LIMIT 1")
+        conn.close()
+        return True
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _has_clinic_schema(path):
+    """True once init_database() has actually built the real schema on this
+    file (it has the core ``patients`` table).
+
+    ``_load_or_create_secret_key()`` (called at module import time, well
+    before ``init_database()`` runs) always creates DB_NAME as a plaintext
+    file holding one row — the Flask session secret — so that it works "before
+    init_database() runs and when the module is imported by tests" (its own
+    docstring). On a brand-new install that means a plaintext file already
+    exists at the moment ``migrate_db_to_encrypted()`` checks it, even though
+    there is no real clinic data yet. Without this check that transient
+    bootstrap artifact would be mistaken for a genuine pre-existing clinic
+    database, get encrypted, and then crash init_database() — which still
+    opens the file with vanilla sqlite3 until Task 5 converts it — on what
+    looks to it like a corrupt/unreadable file."""
+    try:
+        conn = sqlite3.connect(str(path))
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='patients'"
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _sqlcipher_export(plaintext_path, encrypted_path, key_hex):
+    """Use SQLCipher's ATTACH + sqlcipher_export() to produce an encrypted
+    copy of a plaintext database. Isolated into its own function so tests can
+    monkeypatch a failure here without needing a real SQLCipher error."""
+    import sqlcipher3 as _sqlcipher  # match Task 1/3's confirmed import
+    conn = _sqlcipher.connect(str(encrypted_path))
+    conn.execute(f"PRAGMA key = \"x'{key_hex}'\"")
+    conn.execute(f"ATTACH DATABASE '{plaintext_path}' AS plaintext KEY ''")
+    conn.execute("SELECT sqlcipher_export('main', 'plaintext')")
+    conn.execute("DETACH DATABASE plaintext")
+    conn.commit()
+    conn.close()
+
+
+def migrate_db_to_encrypted(db_path, data_dir):
+    """One-time migration: if db_path is an existing plaintext SQLite
+    database, back it up, encrypt it in place, verify row counts, and
+    replace the original. Returns True if a migration actually ran, False
+    for every no-op case (already encrypted, or doesn't exist yet — a brand
+    new install's DB is created encrypted from the start by init_database()).
+    Never leaves db_path in a broken or partially-migrated state: on any
+    failure, the original plaintext file is left completely untouched (the
+    encrypted copy is built in a temp file first, never in place)."""
+    if not os.path.exists(db_path):
+        return False
+    if not _is_plaintext_sqlite(db_path):
+        return False  # already encrypted (or corrupt — leave it for the operator, don't touch)
+    if not _has_clinic_schema(db_path):
+        # Just the _load_or_create_secret_key() bootstrap row, not a real
+        # pre-existing clinic DB — leave it for init_database() to build on.
+        return False
+
+    backups = run_database_backup()
+    if not backups:
+        print('Encryption migration skipped: could not create a safety backup first.')
+        return False
+
+    import encryption_key
+    key = encryption_key.get_or_create_key(data_dir)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix='.db', dir=os.path.dirname(str(db_path)) or '.')
+    os.close(tmp_fd)
+    os.remove(tmp_path)  # sqlcipher_export needs to create this file itself
+    try:
+        _sqlcipher_export(db_path, tmp_path, key.hex())
+        # Verify row counts match across every user table before trusting the copy.
+        orig_conn = sqlite3.connect(str(db_path))
+        tables = [r[0] for r in orig_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        orig_counts = {t: orig_conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in tables}
+        orig_conn.close()
+
+        import sqlcipher3 as _sqlcipher
+        new_conn = _sqlcipher.connect(tmp_path)
+        new_conn.execute(f"PRAGMA key = \"x'{key.hex()}'\"")
+        new_counts = {t: new_conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in tables}
+        new_conn.close()
+
+        if orig_counts != new_counts:
+            raise RuntimeError(f'Row count mismatch after migration: {orig_counts} != {new_counts}')
+
+        shutil.move(tmp_path, str(db_path))
+        print(f'Database encrypted at rest ({sum(orig_counts.values())} rows verified).')
+        return True
+    except Exception as exc:
+        print(f'Encryption migration failed ({exc}); restoring pre-migration backup.')
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        shutil.copy2(backups[0], str(db_path))
+        return False
+
+
 def _backup_loop():
     """Background worker: one backup shortly after startup, then every
     BACKUP_INTERVAL_HOURS hours."""
@@ -8675,6 +8784,8 @@ if __name__ == '__main__':
     print("="*60)
 
     print('\n📊 Initializing database...')
+    if not CLOUD_MODE:  # DPAPI/SQLCipher migration is desktop/service-only, never cloud
+        migrate_db_to_encrypted(DB_NAME, _DATA_DIR)
     init_database()
 
     # Warn if the default admin password is still in use.
