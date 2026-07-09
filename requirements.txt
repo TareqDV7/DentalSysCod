@@ -10,3 +10,11 @@ cryptography>=42.0
 openpyxl>=3.1
 arabic-reshaper>=3.0
 python-bidi>=0.4
+# Encryption-at-rest (spike-validated 2026-07-09, see .superpowers/sdd/task-1-report.md):
+# sqlcipher3-binary and pysqlcipher3 (named in the original spec) have NO Windows
+# wheels at all (manylinux-only / sdist-only, no MSVC toolchain available to build
+# pysqlcipher3 from source). `sqlcipher3` (coleifer/laggykiller fork) ships
+# win_amd64 wheels cp310-cp314 with SQLCipher+OpenSSL statically linked into the
+# .pyd -- use this import name instead in all subsequent tasks.
+sqlcipher3>=0.6.2
+pywin32>=306
