@@ -17,4 +17,9 @@ python-bidi>=0.4
 # win_amd64 wheels cp310-cp314 with SQLCipher+OpenSSL statically linked into the
 # .pyd -- use this import name instead in all subsequent tasks.
 sqlcipher3>=0.6.2
-pywin32>=306
+# pywin32 has no Linux distribution at all ("from versions: none" on pip) --
+# marker-gated so `pip install -r requirements.txt` still succeeds on the
+# ubuntu-latest CI runner. sqlcipher3 itself ships real manylinux wheels and
+# runs fine there; only the DPAPI key-wrapping layer (encryption_key.py) is
+# Windows-only, and tests/conftest.py stands that in on non-Windows.
+pywin32>=306; sys_platform == 'win32'

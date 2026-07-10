@@ -5,12 +5,33 @@ interceptor: it seeds a session CSRF token and attaches a matching X-CSRFToken
 header (and a csrf_token form field) on unsafe methods. Pass csrf=False to opt
 out and exercise the rejection path."""
 import secrets
+import sys
 
 from flask.testing import FlaskClient
 
 import dental_clinic
+import encryption_key
 
 _UNSAFE = {'POST', 'PUT', 'PATCH', 'DELETE'}
+
+if sys.platform != 'win32':
+    # encryption_key._protect/_unprotect wrap Windows DPAPI (win32crypt), which
+    # has no Linux/macOS build at all -- pywin32 isn't even installed there
+    # (see requirements.txt's platform marker). Stand in with the same
+    # reversible XOR the DPAPI-key module's own unit tests already use
+    # (tests/test_encryption_key.py) so the rest of the suite -- which
+    # genuinely exercises SQLCipher (real manylinux wheels, no stub needed)
+    # through get_db_connection() -- can still run on non-Windows CI. Real
+    # DPAPI itself is validated separately by Task 1's frozen-build spike;
+    # nothing here is a substitute for that.
+    def _fake_protect(raw_bytes):
+        return bytes(b ^ 0xFF for b in raw_bytes)
+
+    def _fake_unprotect(blob):
+        return bytes(b ^ 0xFF for b in blob)
+
+    encryption_key._protect = _fake_protect
+    encryption_key._unprotect = _fake_unprotect
 
 
 class _CsrfTestClient(FlaskClient):
