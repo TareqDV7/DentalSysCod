@@ -16,7 +16,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _insert_patient(first_name='John', last_name='Doe'):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         '''
@@ -86,7 +86,7 @@ def test_calendar_api_returns_non_null_fields(client):
     # insert patient and an appointment with some nullable fields
     patient_id = _insert_patient('Legacy', 'Patient')
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         '''
@@ -134,7 +134,7 @@ def test_update_appointment_status_with_put(client):
     assert update_response.status_code == 200
     assert update_response.get_json().get('success') is True
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT status FROM appointments WHERE id = ?', (appointment_id,))
     row = cursor.fetchone()
@@ -162,7 +162,7 @@ def test_delete_appointment_endpoint(client):
     assert delete_response.status_code == 200
     assert delete_response.get_json().get('success') is True
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id FROM appointments WHERE id = ?', (appointment_id,))
     row = cursor.fetchone()

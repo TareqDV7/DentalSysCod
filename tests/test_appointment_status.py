@@ -21,7 +21,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _make_appointment(client):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 ('A', 'B', '0500'))
@@ -41,7 +41,7 @@ def test_valid_statuses_accepted(client, status):
     r = client.put(f'/api/appointments/{aid}/status', json={'status': status})
     assert r.status_code == 200
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute('SELECT status FROM appointments WHERE id = ?', (aid,)).fetchone()
     conn.close()
     assert row[0] == status

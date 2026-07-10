@@ -19,7 +19,7 @@ def _seed_license(serial, status='active', days=365, grace_extra=14, token=None)
     today = datetime.now(timezone.utc).date()
     expires = (today + timedelta(days=days)).strftime('%Y-%m-%d')
     grace = (today + timedelta(days=days + grace_extra)).strftime('%Y-%m-%d')
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute('''INSERT INTO licenses (serial_number, clinic_name, plan_name, status,
                     max_devices, expires_at, grace_until) VALUES (?,?,?,?,?,?,?)''',
                  (serial, 'C', 'standard', status, 3, expires, grace))
@@ -32,7 +32,7 @@ def _seed_license(serial, status='active', days=365, grace_extra=14, token=None)
 
 
 def _state(local):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     s = dental_clinic._license_gate_state(cur)
     conn.close()
@@ -122,7 +122,7 @@ def test_write_guard_fails_open_on_error(local, monkeypatch):
 
 
 def _has_cloud_setting(key):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute('SELECT value FROM app_settings WHERE key=?', (key,)).fetchone()
     conn.close()
     return bool(row and str(row[0] or '').strip())
@@ -148,7 +148,7 @@ def test_activation_does_not_enable_cloud_sync(local, monkeypatch):
 
 
 def _license_status_value(serial):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute('SELECT status FROM licenses WHERE serial_number=?', (serial.upper(),)).fetchone()
     conn.close()
     return row[0] if row else None
@@ -162,7 +162,7 @@ def test_recheck_applies_cloud_revocation(local, monkeypatch):
     dental_clinic.license_recheck_once()
     # Cached status now maps to view_only.
     assert _license_status_value('DENTAL-A3-RC') in ('revoked', 'suspended')
-    conn = sqlite3.connect(dental_clinic.DB_NAME); cur = conn.cursor()
+    conn = dental_clinic.get_db_connection(); cur = conn.cursor()
     assert dental_clinic._license_gate_state(cur)['state'] == 'view_only'
     conn.close()
 

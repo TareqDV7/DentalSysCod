@@ -148,7 +148,7 @@ def _load_or_create_secret_key():
     module is imported by tests. Falls back to an ephemeral key on any error.
     """
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
@@ -232,8 +232,9 @@ _DATA_DIR.mkdir(parents=True, exist_ok=True)
 # DB (cloud_master.db) tracks clinics, and each clinic gets its own SQLite file
 # (clinic_<id>.db). Requests carry a clinic token; a before_request hook resolves
 # it and points DB_NAME at that clinic's file for the duration of the request, so
-# every existing `sqlite3.connect(DB_NAME)` handler works unchanged. Off (the
-# default — i.e. the clinic's own local server), none of this is active.
+# every existing `get_db_connection()` handler works unchanged (it falls back to
+# a plain, unencrypted connection whenever CLOUD_MODE is on — see its docstring).
+# Off (the default — i.e. the clinic's own local server), none of this is active.
 CLOUD_MODE = os.environ.get('CLINIC_CLOUD_MODE', '0').strip().lower() in ('1', 'true', 'yes', 'on')
 app.wsgi_app = _wrap_proxyfix_if_cloud(app, CLOUD_MODE)
 MASTER_DB_PATH = str(_DATA_DIR / 'cloud_master.db')
@@ -478,13 +479,13 @@ def _resolve_offline_token(request_body=None):
     if token:
         return token
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db_connection()
         cur = conn.cursor()
         token = str(read_app_setting(cur, 'cloud_offline_token', '') or '').strip()
         if not token:
             token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
         conn.close()
-    except sqlite3.Error:
+    except _db_errors('Error'):
         token = ''
     if token:
         return token
@@ -608,11 +609,60 @@ def ensure_updated_at_trigger(cursor, table_name):
     ''')
 
 
-def get_db_connection(with_row_factory=False):
-    conn = sqlite3.connect(DB_NAME)
+def get_db_connection(with_row_factory=False, db_path=None):
+    """Open the primary clinic database.
+
+    Encrypted at rest (SQLCipher + a DPAPI-protected key) for the clinic's own
+    single-tenant desktop/service deployment — the actual target of the
+    encryption-at-rest work. In CLOUD_MODE the multi-tenant registry
+    (MASTER_DB_PATH) and per-clinic databases are explicitly OUT OF SCOPE: the
+    cloud node runs on Linux, where DPAPI (win32crypt) doesn't exist, so this
+    falls back to a plain, unencrypted connection there — every call site that
+    goes through this function keeps working exactly as it did before
+    encryption-at-rest when CLOUD_MODE is on.
+
+    db_path overrides DB_NAME for callers that need a connection to a specific
+    file (e.g. a short-lived BT session, or a backup destination) rather than
+    the app's live primary database.
+    """
+    target = db_path or DB_NAME
+    if CLOUD_MODE:
+        conn = sqlite3.connect(target)
+        if with_row_factory:
+            conn.row_factory = sqlite3.Row
+        return conn
+    import sqlcipher3 as _sqlcipher  # see requirements.txt — sqlcipher3 fork confirmed by Task 1's spike
+    import encryption_key
+    key = encryption_key.get_or_create_key(_DATA_DIR)
+    conn = _sqlcipher.connect(target)
+    conn.execute(f"PRAGMA key = \"x'{key.hex()}'\"")
     if with_row_factory:
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = _sqlcipher.Row
     return conn
+
+
+_DB_ERROR_CACHE = {}
+
+
+def _db_errors(*names):
+    """Exception classes covering both stdlib sqlite3 and sqlcipher3's own
+    (separate, unrelated) hierarchy for each name (e.g. 'Error',
+    'IntegrityError', 'DatabaseError'). get_db_connection() returns a plain
+    sqlite3.Connection in CLOUD_MODE and a sqlcipher3.dbapi2.Connection
+    otherwise, and the two libraries raise unrelated exception classes (one
+    isn't a subclass of the other) — so an except clause guarding a
+    get_db_connection()-sourced operation must catch both to work correctly
+    in either mode. Cached; safe to call even where sqlcipher3 isn't
+    installed (e.g. a Linux cloud node)."""
+    if names not in _DB_ERROR_CACHE:
+        classes = [getattr(sqlite3, n) for n in names]
+        try:
+            import sqlcipher3
+            classes.extend(getattr(sqlcipher3.dbapi2, n) for n in names)
+        except ImportError:
+            pass
+        _DB_ERROR_CACHE[names] = tuple(classes)
+    return _DB_ERROR_CACHE[names]
 
 
 def _naive_utc_now():
@@ -781,7 +831,7 @@ def get_table_columns(cursor, table_name):
 
 
 def init_database():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     # Enable WAL: readers no longer block on the single writer, which avoids
@@ -790,7 +840,7 @@ def init_database():
     # applies to every future connection.
     try:
         cursor.execute('PRAGMA journal_mode=WAL')
-    except sqlite3.Error:
+    except _db_errors('Error'):
         pass
 
     cursor.execute('''
@@ -1943,7 +1993,7 @@ def _apply_sync_import(cursor, payload):
                     )
             try:
                 ok = upsert_row(cursor, table_name, row_data)
-            except sqlite3.Error:
+            except _db_errors('Error'):
                 # A single malformed row (e.g. NOT NULL violation from an outdated
                 # client schema) must not kill the whole batch. Count it and keep going.
                 ok = False
@@ -2287,6 +2337,17 @@ def _permission_required_for(method, path):
 def _enforce_staff_permission():
     if request.method == 'OPTIONS':
         return None
+    if CLOUD_MODE:
+        # RBAC is desktop-portal-only (see the comment above _PERMISSION_RULES)
+        # — the staff login page is only ever served by a clinic's local
+        # server, so a real cloud request never carries a session cookie
+        # anyway. Checked explicitly (defense in depth) rather than relying
+        # solely on "no session ever reaches the cloud node": individual
+        # /api/data/* routes enforce their own CLOUD_MODE 404 before this
+        # hook would otherwise reach get_db_connection(), which — correctly —
+        # refuses to touch DB_NAME as if it were the desktop's encrypted file
+        # while CLOUD_MODE is on.
+        return None
     uid = session.get('uid')
     if not uid:
         # Not a desktop session at all — includes genuine mobile/device-token
@@ -2345,7 +2406,7 @@ def _user_must_change_password(uid):
     (seeded admin on the default password). Cheap PK lookup; fails OPEN so a
     transient DB error never locks a doctor out of their own portal."""
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db_connection()
         row = conn.execute(
             'SELECT must_change_password FROM users WHERE id = ?', (uid,)
         ).fetchone()
@@ -2446,8 +2507,7 @@ def change_password_page():
         return _fail('New password must be at least 4 characters.')
     if new != confirm:
         return _fail('The two new passwords do not match.')
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM users WHERE id = ?', (session['uid'],))
     user = cursor.fetchone()
@@ -2477,8 +2537,7 @@ def login_page():
                 next_url=next_url, csrf_token=_get_or_create_csrf_token()), 400
         username = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
-        conn = sqlite3.connect(DB_NAME)
-        conn.row_factory = sqlite3.Row
+        conn = get_db_connection(with_row_factory=True)
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM users WHERE username = ? AND is_active = 1', (username,))
         user = cursor.fetchone()
@@ -2640,8 +2699,7 @@ def auth_change_password():
     new = data.get('new_password') or ''
     if len(new) < 4:
         return jsonify({'error': 'New password must be at least 4 characters.'}), 400
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM users WHERE id = ?', (session['uid'],))
     user = cursor.fetchone()
@@ -2714,7 +2772,7 @@ def download_ios_package():
 # API Routes
 @app.route('/api/stats')
 def get_stats():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # Total patients
@@ -2762,8 +2820,7 @@ def get_stats():
 
 @app.route('/api/patients', methods=['GET', 'POST'])
 def patients():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     if request.method == 'GET':
@@ -2837,8 +2894,7 @@ def check_patient_duplicate():
     first_name = (request.args.get('first_name') or '').strip()
     last_name  = (request.args.get('last_name')  or '').strip()
     phone      = (request.args.get('phone')      or '').strip()
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     name_matches, phone_matches = [], []
     if first_name and last_name:
@@ -2860,7 +2916,7 @@ def check_patient_duplicate():
 
 @app.route('/api/patients/<int:patient_id>', methods=['DELETE'])
 def delete_patient(patient_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     # Soft-delete dependent records first to avoid orphans
     cursor.execute('UPDATE patient_followups SET is_deleted = 1 WHERE patient_id = ?', (patient_id,))
@@ -2873,8 +2929,7 @@ def delete_patient(patient_id):
 
 @app.route('/api/patients/<int:patient_id>/full-profile')
 def patient_full_profile(patient_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     cursor.execute('SELECT * FROM patients WHERE id = ?', (patient_id,))
@@ -2945,8 +3000,7 @@ def patient_full_profile(patient_id):
 
 @app.route('/api/tooth-conditions', methods=['GET', 'POST'])
 def tooth_conditions_collection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     if request.method == 'GET':
@@ -2985,7 +3039,7 @@ def tooth_conditions_collection():
             as_int(data.get('sort_order'), 0),
         ))
         conn.commit()
-    except sqlite3.IntegrityError:
+    except _db_errors('IntegrityError'):
         conn.close()
         return jsonify({'error': 'Condition already exists'}), 409
 
@@ -2995,7 +3049,7 @@ def tooth_conditions_collection():
 
 @app.route('/api/tooth-conditions/<int:condition_id>', methods=['PUT', 'DELETE'])
 def tooth_condition_item(condition_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     if request.method == 'DELETE':
@@ -3033,7 +3087,7 @@ def tooth_condition_item(condition_id):
             condition_id,
         ))
         conn.commit()
-    except sqlite3.IntegrityError:
+    except _db_errors('IntegrityError'):
         conn.close()
         return jsonify({'error': 'Condition already exists'}), 409
 
@@ -3043,8 +3097,7 @@ def tooth_condition_item(condition_id):
 
 @app.route('/api/treatment-procedures', methods=['GET', 'POST'])
 def treatment_procedures_collection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     if request.method == 'GET':
@@ -3091,7 +3144,7 @@ def treatment_procedures_collection():
             VALUES (?, ?, ?, ?, 1)
         ''', (name, requires_lab, default_price, default_lab_expense))
         conn.commit()
-    except sqlite3.IntegrityError:
+    except _db_errors('IntegrityError'):
         conn.close()
         return jsonify({'error': 'Procedure already exists'}), 409
 
@@ -3100,7 +3153,7 @@ def treatment_procedures_collection():
 
 @app.route('/api/treatment-procedures/<int:procedure_id>', methods=['PUT'])
 def treatment_procedure_update(procedure_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     data = request.json or {}
 
@@ -3126,7 +3179,7 @@ def treatment_procedure_update(procedure_id):
             SET name = ?, requires_lab = ?, default_price = ?, default_lab_expense = ?, active = ?
             WHERE id = ?
         ''', (name, requires_lab, as_float(data.get('default_price')), as_float(data.get('default_lab_expense')), active, procedure_id))
-    except sqlite3.IntegrityError:
+    except _db_errors('IntegrityError'):
         conn.close()
         return jsonify({'error': 'Procedure already exists'}), 409
 
@@ -3162,8 +3215,7 @@ def _recompute_followup_balances(cursor, patient_id):
 
 @app.route('/api/patients/<int:patient_id>/followups', methods=['GET', 'POST'])
 def patient_followups(patient_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     cursor.execute('SELECT id, first_name, last_name FROM patients WHERE id = ?', (patient_id,))
@@ -3351,8 +3403,7 @@ def patient_followups(patient_id):
 
 @app.route('/api/patients/<int:patient_id>/followups/<int:followup_id>', methods=['DELETE', 'PUT'])
 def followup_detail(patient_id, followup_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     if request.method == 'DELETE':
@@ -3491,8 +3542,7 @@ def _item_dict(row):
 
 @app.route('/api/inventory/items', methods=['GET', 'POST'])
 def inventory_items():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     if request.method == 'GET':
         include_inactive = request.args.get('include_inactive')
@@ -3525,8 +3575,7 @@ def inventory_items():
 
 @app.route('/api/inventory/items/<int:item_id>', methods=['PUT'])
 def inventory_item_update(item_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     data = request.json or {}
     fields = ['name', 'name_ar', 'category', 'base_unit', 'pack_unit', 'pack_size',
@@ -3556,8 +3605,7 @@ def inventory_item_update(item_id):
 
 @app.route('/api/inventory/items/<int:item_id>/restock', methods=['POST'])
 def inventory_restock(item_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     data = request.json or {}
     item = cursor.execute('SELECT pack_size FROM inventory_items WHERE id=?', (item_id,)).fetchone()
@@ -3592,8 +3640,7 @@ def inventory_restock(item_id):
 
 @app.route('/api/inventory/items/<int:item_id>/adjust', methods=['POST'])
 def inventory_adjust(item_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     data = request.json or {}
     counted = float(data.get('counted_qty') or 0)
@@ -3615,8 +3662,7 @@ def inventory_adjust(item_id):
 
 @app.route('/api/inventory/items/<int:item_id>/writeoff', methods=['POST'])
 def inventory_writeoff(item_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     data = request.json or {}
     qty = float(data.get('qty') or 0)
@@ -3634,8 +3680,7 @@ def inventory_writeoff(item_id):
 
 @app.route('/api/inventory/report', methods=['GET'])
 def inventory_report():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     low = cursor.execute(
         'SELECT * FROM inventory_items WHERE active=1 AND quantity <= low_stock_threshold '
@@ -3659,8 +3704,7 @@ def inventory_report():
 @app.route('/api/inventory/procedures/<int:procedure_id>/materials',
            methods=['GET', 'POST', 'DELETE'])
 def inventory_procedure_materials(procedure_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     if request.method == 'GET':
         rows = cursor.execute(
@@ -3693,7 +3737,7 @@ def inventory_procedure_materials(procedure_id):
 
 @app.route('/api/appointments', methods=['GET', 'POST'])
 def appointments():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     if request.method == 'GET':
@@ -3791,7 +3835,7 @@ def appointments():
 
 @app.route('/api/appointments/recent')
 def recent_appointments():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
@@ -3806,7 +3850,7 @@ def recent_appointments():
 
 @app.route('/api/appointments/<int:appointment_id>/status', methods=['PUT'])
 def update_appointment_status(appointment_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     data = request.get_json(silent=True) or {}
     status = str(data.get('status') or '').strip().lower()
@@ -3824,7 +3868,7 @@ def update_appointment_status(appointment_id):
 
 @app.route('/api/appointments/<int:appointment_id>', methods=['DELETE'])
 def delete_appointment(appointment_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM appointments WHERE id = ?', (appointment_id,))
     if cursor.rowcount == 0:
@@ -3860,9 +3904,8 @@ def _set_plan_teeth(cursor, plan_id, teeth):
 
 @app.route('/api/treatment-plans', methods=['GET', 'POST'])
 def treatment_plans():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection(with_row_factory=True)
     if request.method == 'GET':
-        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('''
             SELECT tp.*, p.first_name || ' ' || p.last_name AS patient_name
@@ -3907,7 +3950,7 @@ def treatment_plans():
 
 @app.route('/api/treatment-plans/<int:plan_id>', methods=['PUT', 'DELETE'])
 def treatment_plan_detail(plan_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if request.method == 'DELETE':
         _set_plan_teeth(cursor, plan_id, [])  # delete + tombstone every linked tooth
@@ -3937,8 +3980,7 @@ def treatment_plan_detail(plan_id):
 
 @app.route('/api/patients/<int:patient_id>/tooth-chart', methods=['GET', 'POST'])
 def patient_tooth_chart_collection(patient_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     if request.method == 'POST':
@@ -4097,7 +4139,7 @@ def patient_tooth_chart_collection(patient_id):
 def patient_tooth_chart_delete(patient_id, tooth_no):
     if not _is_valid_fdi(str(tooth_no)):
         return jsonify({'error': 'Invalid FDI tooth number'}), 400
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         'SELECT id FROM patient_tooth_chart WHERE patient_id = ? AND tooth_no = ?',
@@ -4113,7 +4155,7 @@ def patient_tooth_chart_delete(patient_id, tooth_no):
 
 @app.route('/api/expenses', methods=['GET', 'POST'])
 def expenses():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if request.method == 'GET':
         cursor.execute('SELECT id, category, amount, expense_date, vendor, notes, payment_status, created_at FROM expenses ORDER BY expense_date DESC, id DESC')
@@ -4170,7 +4212,7 @@ def expenses():
 
 @app.route('/api/expenses/<int:expense_id>', methods=['DELETE', 'PUT'])
 def delete_or_update_expense(expense_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if request.method == 'DELETE':
         cursor.execute('DELETE FROM expenses WHERE id = ?', (expense_id,))
@@ -4195,7 +4237,7 @@ def reports_summary():
         return jsonify({'error': 'Invalid start_date'}), 400
     if request.args.get('end_date') and not end_date:
         return jsonify({'error': 'Invalid end_date'}), 400
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     clause, params = build_date_clause('appointment_date', start_date, end_date)
@@ -4267,7 +4309,7 @@ def reports_weekly():
     start_str = week_start.isoformat()
     end_str = week_end.isoformat()
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute('SELECT COUNT(*) FROM appointments WHERE date(appointment_date) BETWEEN ? AND ?', (start_str, end_str))
@@ -4348,8 +4390,7 @@ def reports_weekly():
 
 @app.route('/api/reports/receivables')
 def reports_receivables():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     # Charges and payments summed across BOTH ledgers (sheet + billing) so a
@@ -4421,8 +4462,7 @@ def patient_invoice_summary(patient_id):
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
 
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     cursor.execute('SELECT id, first_name, last_name, phone FROM patients WHERE id = ?', (patient_id,))
@@ -4520,8 +4560,7 @@ def patient_payment_history(patient_id):
     `billing` payment records. Sorted oldest-first so the staff member
     sees the full collection history when they pick a patient in the
     Billing → Payment Record tab."""
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
 
     cursor.execute('SELECT id, first_name, last_name, phone FROM patients WHERE id = ?', (patient_id,))
@@ -4611,8 +4650,7 @@ def audit_logs():
     except ValueError:
         limit = 200
 
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     cursor.execute('''
         SELECT id, action_type, entity_type, entity_id, details, created_at
@@ -4626,7 +4664,7 @@ def audit_logs():
 
 @app.route('/api/holidays', methods=['GET', 'POST'])
 def holidays():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if request.method == 'GET':
         cursor.execute('SELECT id, holiday_date, name, notes, created_at FROM holidays ORDER BY holiday_date DESC')
@@ -4664,7 +4702,7 @@ def holidays():
 
 @app.route('/api/holidays/<int:holiday_id>', methods=['DELETE'])
 def delete_holiday(holiday_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM holidays WHERE id = ?', (holiday_id,))
     record_tombstone(cursor, 'holidays', holiday_id)
@@ -4675,7 +4713,25 @@ def delete_holiday(holiday_id):
 @app.route('/api/backup')
 def backup_database():
     backup_name = f"dental_clinic_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-    return send_file(DB_NAME, as_attachment=True, download_name=backup_name)
+    if _is_plaintext_sqlite(DB_NAME):
+        return send_file(DB_NAME, as_attachment=True, download_name=backup_name)
+    # DB_NAME is SQLCipher-encrypted — decrypt to a temp plaintext copy first so
+    # the downloaded file stays a portable, restorable 'SQLite format 3' file
+    # (mirrors data_export_bundle()). The DPAPI key never leaves this machine,
+    # so handing out the raw encrypted file would make the download permanently
+    # unopenable anywhere else.
+    tmpdir = tempfile.mkdtemp(prefix='dc_backup_')
+
+    @after_this_request
+    def _cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
+
+    snap = os.path.join(tmpdir, 'dental_clinic.db')
+    import encryption_key
+    key = encryption_key.get_or_create_key(_DATA_DIR)
+    _sqlcipher_decrypt_export(DB_NAME, snap, key.hex())
+    return send_file(snap, as_attachment=True, download_name=backup_name)
 
 
 @app.route('/api/backup-file', methods=['POST'])
@@ -4684,10 +4740,14 @@ def backup_database_file():
     download — a navigation to GET /api/backup silently does nothing — so write a
     consistent on-disk backup and hand the path back for the shell to reveal in
     Explorer (mirrors /api/data/export-bundle-file). Plain browsers keep using
-    the streamed GET /api/backup attachment."""
+    the streamed GET /api/backup attachment.
+
+    decrypt_primary=True: same reasoning as backup_database() above — this is an
+    explicit, user-initiated off-machine backup, so it must stay a plaintext,
+    portable file, unlike the automatic background snapshots in BACKUP_DIR."""
     if CLOUD_MODE:
         return jsonify({'error': 'Not available on the cloud node'}), 404
-    backups = run_database_backup()
+    backups = run_database_backup(decrypt_primary=True)
     if not backups:
         return jsonify({'error': 'Could not create the backup.'}), 500
     return jsonify({'success': True, 'path': backups[0]})
@@ -4705,17 +4765,17 @@ def data_export_bundle():
         shutil.rmtree(tmpdir, ignore_errors=True)
         return response
 
+    # Decrypt into a plaintext snapshot — the bundle must stay a plain 'SQLite
+    # format 3' file so db_import.is_sqlite_file()'s magic-header check (and
+    # db_merge.py's own vanilla sqlite3.connect on a later re-import) keep
+    # working on it unchanged; both are deliberately out of scope for
+    # encryption-at-rest. A raw sqlite3 .backup() can't be used here since the
+    # live DB is opened via SQLCipher and its Connection type isn't
+    # interchangeable with a vanilla sqlite3.Connection destination.
     snap = os.path.join(tmpdir, 'dental_clinic.db')
-    src = sqlite3.connect(str(DB_NAME))
-    try:
-        dst = sqlite3.connect(snap)
-        try:
-            with dst:
-                src.backup(dst)
-        finally:
-            dst.close()
-    finally:
-        src.close()
+    import encryption_key
+    key = encryption_key.get_or_create_key(_DATA_DIR)
+    _sqlcipher_decrypt_export(DB_NAME, snap, key.hex())
     bundle = os.path.join(tmpdir, 'dentacare_bundle.zip')
     db_import.build_bundle(bundle, snap, str(UPLOAD_FOLDER))
     name = f"dentacare_bundle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
@@ -4738,16 +4798,9 @@ def data_export_bundle_file():
     tmpdir = tempfile.mkdtemp(prefix='dc_export_')
     try:
         snap = os.path.join(tmpdir, 'dental_clinic.db')
-        src = sqlite3.connect(str(DB_NAME))
-        try:
-            dst = sqlite3.connect(snap)
-            try:
-                with dst:
-                    src.backup(dst)
-            finally:
-                dst.close()
-        finally:
-            src.close()
+        import encryption_key
+        key = encryption_key.get_or_create_key(_DATA_DIR)
+        _sqlcipher_decrypt_export(DB_NAME, snap, key.hex())
         name = f"dentacare_bundle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         out_path = os.path.join(export_dir, name)
         db_import.build_bundle(out_path, snap, str(UPLOAD_FOLDER))
@@ -4788,7 +4841,7 @@ def data_merge():
             return jsonify({'error': err}), 400
         backups = run_database_backup()
         backup_path = backups[0] if backups else None
-        conn = sqlite3.connect(str(DB_NAME))
+        conn = get_db_connection()
         try:
             report = db_merge.merge_database(
                 conn, db_path, src_uploads=uploads_dir, dst_uploads=str(UPLOAD_FOLDER),
@@ -4830,14 +4883,14 @@ def _snapshot_device_settings(db_path):
     non-empty ones as a dict, or {} on any error."""
     out = {}
     try:
-        conn = sqlite3.connect(db_path)
+        conn = get_db_connection(db_path=db_path)
         cur = conn.cursor()
         for key in _DEVICE_LOCAL_SETTINGS:
             val = read_app_setting(cur, key, None)
             if val is not None and str(val).strip() != '':
                 out[key] = val
         conn.close()
-    except sqlite3.Error:
+    except Exception:  # noqa: BLE001 — best-effort snapshot; sqlcipher3 raises its own exception types
         pass
     return out
 
@@ -4846,7 +4899,7 @@ def _restore_device_settings(db_path, snapshot):
     """Write snapshotted device-local settings back into db_path's app_settings."""
     if not snapshot:
         return
-    conn = sqlite3.connect(db_path)
+    conn = get_db_connection(db_path=db_path)
     cur = conn.cursor()
     for key, val in snapshot.items():
         write_app_setting(cur, key, val)
@@ -4866,8 +4919,7 @@ def _snapshot_device_license(db_path):
     when not activated, the tables are absent (older DB), or on any error."""
     out = {}
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_db_connection(with_row_factory=True, db_path=db_path)
         cur = conn.cursor()
         serial = read_app_setting(cur, 'active_serial_number', None)
         if not serial or not str(serial).strip():
@@ -4880,14 +4932,14 @@ def _snapshot_device_license(db_path):
                 'SELECT clinic_name, plan_name, status, max_devices, expires_at, '
                 'grace_until, activated_at, created_at, updated_at '
                 'FROM licenses WHERE serial_number = ?', (serial,)).fetchone()
-        except sqlite3.Error:
+        except Exception:  # noqa: BLE001 — sqlcipher3 raises its own exception types
             lic = None
         devices = []
         try:
             devices = cur.execute(
                 'SELECT device_id, device_name, first_seen_at, last_seen_at, is_active '
                 'FROM license_devices WHERE serial_number = ?', (serial,)).fetchall()
-        except sqlite3.Error:
+        except Exception:  # noqa: BLE001 — sqlcipher3 raises its own exception types
             devices = []
         conn.close()
         if lic is None and not devices:
@@ -4897,7 +4949,7 @@ def _snapshot_device_license(db_path):
             'license': dict(lic) if lic is not None else None,
             'devices': [dict(d) for d in devices],
         }
-    except sqlite3.Error:
+    except Exception:  # noqa: BLE001 — best-effort snapshot; sqlcipher3 raises its own exception types
         return {}
     return out
 
@@ -4908,7 +4960,7 @@ def _restore_device_license(db_path, snapshot):
     if not snapshot or not snapshot.get('serial'):
         return
     serial = snapshot['serial']
-    conn = sqlite3.connect(db_path)
+    conn = get_db_connection(db_path=db_path)
     cur = conn.cursor()
     lic = snapshot.get('license')
     if lic:
@@ -4973,10 +5025,10 @@ def data_replace():
             preserved_license = _snapshot_device_license(target)
             # Release WAL sidecars on the live DB before overwriting.
             try:
-                c = sqlite3.connect(target)
+                c = get_db_connection()
                 c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
                 c.close()
-            except sqlite3.Error:
+            except Exception:  # noqa: BLE001 — sqlcipher3 raises its own exception types
                 pass
             for sidecar in (target + '-wal', target + '-shm'):
                 try:
@@ -4989,6 +5041,14 @@ def data_replace():
                 if UPLOAD_FOLDER.exists():
                     shutil.rmtree(UPLOAD_FOLDER, ignore_errors=True)
                 shutil.copytree(uploads_dir, str(UPLOAD_FOLDER))
+            # The uploaded file just copied onto `target` is a PLAINTEXT database
+            # (merge/replace uploads are validated as plain 'SQLite format 3' —
+            # see _save_and_resolve_upload / is_sqlite_file()), but every DB access
+            # from here on goes through get_db_connection(), which expects the
+            # primary DB to be encrypted. Encrypt it in place — the same one-time
+            # migration used for a legacy plaintext install at startup — before
+            # init_database() (which now opens `target` via SQLCipher) touches it.
+            migrate_db_to_encrypted(target, _DATA_DIR)
             # Migrate the incoming DB forward to the current schema.
             init_database()
             # Re-stamp this workstation's activation + pairing onto the new DB,
@@ -5024,8 +5084,7 @@ def data_clear_catalogs():
     """
     if CLOUD_MODE:
         return jsonify({'error': 'Not available on the cloud node'}), 404
-    conn = sqlite3.connect(str(DB_NAME))
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     procedures = 0
     conditions = 0
@@ -5052,8 +5111,7 @@ def data_duplicate_patients():
     can flag the empty shell. Read-only; never auto-merges. Disabled on cloud."""
     if CLOUD_MODE:
         return jsonify({'error': 'Not available on the cloud node'}), 404
-    conn = sqlite3.connect(str(DB_NAME))
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     try:
         groups = patient_dedupe.find_duplicate_groups(conn.cursor())
     finally:
@@ -5082,8 +5140,7 @@ def data_merge_patients():
 
     backups = run_database_backup()
     backup_path = backups[0] if backups else None
-    conn = sqlite3.connect(str(DB_NAME))
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     try:
         summary = patient_dedupe.merge_patients(cursor, survivor_id, duplicate_ids)
@@ -5148,7 +5205,7 @@ def data_import_patients_preview():
         mapping = patient_import.guess_mapping(headers)
 
     clean, problems = patient_import.validate_rows(rows, mapping, date_format)
-    conn = sqlite3.connect(str(DB_NAME))
+    conn = get_db_connection()
     try:
         index = patient_import.build_existing_index(conn.cursor())
     finally:
@@ -5205,7 +5262,7 @@ def data_import_patients_commit():
 
     backups = run_database_backup()
     backup_path = backups[0] if backups else None
-    conn = sqlite3.connect(str(DB_NAME))
+    conn = get_db_connection()
     cursor = conn.cursor()
     try:
         index = patient_import.build_existing_index(cursor)
@@ -5241,7 +5298,7 @@ def data_import_patients_commit():
 
 @app.route('/api/medical-images', methods=['GET', 'POST'])
 def medical_images():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if request.method == 'GET':
         patient_id = request.args.get('patient_id')
@@ -5294,7 +5351,7 @@ def medical_image_file(image_id):
     (the mobile app) can download and cache it. The desktop UI embeds images
     inline, but the mobile app needs the raw file to view/sync. file_path is
     written by our own upload handler, so it is not request-controlled."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT file_path, file_name FROM medical_images WHERE id = ?', (image_id,))
     row = cursor.fetchone()
@@ -5325,7 +5382,7 @@ def support_messages():
         ])
 
     data = request.json
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('INSERT INTO support_messages (subject, message) VALUES (?, ?)', (data['subject'], data['message']))
     conn.commit()
@@ -5337,7 +5394,7 @@ _VALID_POST_THEMES = ('dark_premium', 'clean_clinical', 'soft_mint', 'bold_edito
 
 @app.route('/api/branding', methods=['GET', 'PUT'])
 def branding():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if request.method == 'GET':
         out = {
@@ -5413,7 +5470,7 @@ def posts_photos():
 @app.route('/api/posts', methods=['GET', 'POST'])
 def posts_collection():
     import json as _json
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'GET':
         cur.execute('''SELECT id, title, theme, size, doctor_name, created_at
@@ -5465,7 +5522,7 @@ def posts_collection():
 
 @app.route('/api/posts/<int:post_id>', methods=['GET'])
 def posts_get(post_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('''SELECT id, title, theme, size, doctor_name, template_json, created_at
                    FROM marketing_posts WHERE id=?''', (post_id,))
@@ -5479,7 +5536,7 @@ def posts_get(post_id):
 
 @app.route('/api/posts/<int:post_id>/image')
 def posts_image(post_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT file_path FROM marketing_posts WHERE id=?', (post_id,))
     row = cur.fetchone()
@@ -5491,7 +5548,7 @@ def posts_image(post_id):
 
 @app.route('/api/posts/<int:post_id>', methods=['DELETE'])
 def posts_delete(post_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT file_path FROM marketing_posts WHERE id=?', (post_id,))
     row = cur.fetchone()
@@ -5507,7 +5564,7 @@ def posts_delete(post_id):
 
 @app.route('/api/visits', methods=['GET', 'POST'])
 def visits():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     if request.method == 'GET':
@@ -5564,7 +5621,7 @@ def visits():
 
 @app.route('/api/visits/<int:visit_id>/status', methods=['PUT'])
 def update_visit_status(visit_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     data = request.json
     cursor.execute('UPDATE visits SET status = ? WHERE id = ?', (data['status'], visit_id))
@@ -5574,7 +5631,7 @@ def update_visit_status(visit_id):
 
 @app.route('/api/visits/from-appointment/<int:appointment_id>', methods=['POST'])
 def create_visit_from_appointment(appointment_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute('''
@@ -5607,7 +5664,7 @@ def create_visit_from_appointment(appointment_id):
 
 @app.route('/api/treatments', methods=['GET', 'POST'])
 def treatments():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     if request.method == 'GET':
@@ -5647,7 +5704,7 @@ def treatments():
 
 @app.route('/api/treatments/<int:treatment_id>', methods=['DELETE'])
 def delete_treatment(treatment_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM treatments WHERE id = ?', (treatment_id,))
     record_tombstone(cursor, 'treatments', treatment_id)
@@ -5657,8 +5714,7 @@ def delete_treatment(treatment_id):
 
 @app.route('/api/billing', methods=['GET', 'POST'])
 def billing():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     
     if request.method == 'GET':
@@ -5795,7 +5851,7 @@ def billing():
 
 @app.route('/api/billing/<int:billing_id>', methods=['DELETE'])
 def delete_billing(billing_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM billing WHERE id = ?', (billing_id,))
     record_tombstone(cursor, 'billing', billing_id)
@@ -5813,8 +5869,7 @@ def billing_invoice(billing_id):
     direction = 'rtl' if is_ar else 'ltr'
     align = 'right' if is_ar else 'left'
 
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     cursor.execute('''
         SELECT b.*, p.first_name || ' ' || p.last_name AS patient_name
@@ -6584,7 +6639,7 @@ def _link_clinic_to_cloud(cloud_url, serial, offline_token):
     if status != 200 or not (isinstance(resp, dict) and resp.get('clinic_token')):
         return {'error': f'Cloud registration failed (HTTP {status})', 'detail': resp}, 502
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cur = conn.cursor()
     write_app_setting(cur, 'cloud_url', cloud_url)
     write_app_setting(cur, 'cloud_clinic_token', resp['clinic_token'])
@@ -6633,7 +6688,7 @@ def cloud_enable():
     change."""
     if CLOUD_MODE:
         return jsonify({'error': 'Not applicable on the cloud node'}), 400
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cur = conn.cursor()
     serial = str(read_app_setting(cur, 'active_serial_number', '') or '').strip().upper()
     token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
@@ -6647,8 +6702,7 @@ def cloud_enable():
 
 @app.route('/api/cloud/status')
 def cloud_status():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     url, token, interval = _cloud_sync_config()
     activated = bool(str(read_app_setting(cur, 'active_serial_number', '') or '').strip())
@@ -6737,7 +6791,7 @@ def cloud_sync_now():
 def cloud_unpair():
     if CLOUD_MODE:
         return jsonify({'error': 'Not applicable on the cloud node'}), 400
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cur = conn.cursor()
     for k in ('cloud_url', 'cloud_clinic_token', 'cloud_clinic_id',
               'cloud_last_sync_at', 'cloud_last_sync_result', 'cloud_last_pull_at', 'cloud_last_push_at'):
@@ -6795,8 +6849,7 @@ def _bt_pick_default_port():
 def bt_status():
     if CLOUD_MODE:
         return jsonify({'error': 'Bluetooth sync is local-server only'}), 400
-    conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     enabled = read_app_setting(cur, 'bt_sync_enabled', '0') == '1'
     com_port = read_app_setting(cur, 'bt_sync_com_port', '') or ''
@@ -6811,7 +6864,7 @@ def bt_status():
             'FROM paired_devices ORDER BY last_seen_at DESC LIMIT 20'
         )
         paired_rows = cur.fetchall()
-    except sqlite3.Error:
+    except _db_errors('Error'):
         paired_rows = []
     conn.close()
     paired = [
@@ -6868,8 +6921,7 @@ def bt_configure():
     if enabled and not com_port:
         com_port = _bt_pick_default_port()
         auto_picked = bool(com_port)
-    conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     write_app_setting(cur, 'bt_sync_enabled', '1' if enabled else '0')
     write_app_setting(cur, 'bt_sync_com_port', com_port)
@@ -7456,8 +7508,11 @@ def healthz():
         # On the cloud node, _cloud_tenant_routing skips this path, so the
         # global DB_NAME default is whatever was last set — try opening the
         # master/single DB directly to keep this independent of routing state.
+        # Cloud stays on a plain, short-timeout connection (MASTER_DB_PATH is
+        # out of scope for encryption-at-rest); the local/desktop DB goes
+        # through get_db_connection() like everything else.
         target_db = MASTER_DB_PATH if CLOUD_MODE else str(DB_NAME)
-        conn = sqlite3.connect(target_db, timeout=2.0)
+        conn = sqlite3.connect(target_db, timeout=2.0) if CLOUD_MODE else get_db_connection()
         try:
             conn.execute('SELECT 1')
         finally:
@@ -7498,7 +7553,7 @@ def system_readiness():
 
 @app.route('/api/patients/<int:patient_id>', methods=['PUT'])
 def update_patient(patient_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     data = request.json or {}
     fields = []
@@ -7626,12 +7681,23 @@ def _list_databases_to_back_up():
     return [('dental_clinic', str(DB_NAME), BACKUP_DIR)]
 
 
-def run_database_backup():
+def run_database_backup(decrypt_primary=False):
     """Snapshot every active database with SQLite's online backup API (consistent
     and safe while the server is running, including in WAL mode), then prune each
     target folder to the most recent BACKUP_RETENTION files. Returns the list of
     snapshot paths written (empty on full failure). One failing DB doesn't abort
-    the others."""
+    the others.
+
+    decrypt_primary: when True, the primary clinic DB's snapshot is written as a
+    plaintext 'SQLite format 3' file instead of an encrypted SQLCipher copy — for
+    the explicit, user-initiated "Download Backup" action (backup_database /
+    backup_database_file), which — like the export-bundle routes — intentionally
+    hands the file off-machine and must stay portable/restorable outside this
+    app (the DPAPI key never leaves this device). Automatic background snapshots
+    (_backup_loop) deliberately keep the default (encrypted) behavior: at-rest
+    protection should cover backup files sitting on disk too, not just the live
+    DB — a stolen disk shouldn't yield plaintext patient data via BACKUP_DIR.
+    Same-machine restore works identically either way."""
     written = []
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -7645,20 +7711,53 @@ def run_database_backup():
         try:
             subdir.mkdir(parents=True, exist_ok=True)
             dest_path = subdir / f'{label}_{stamp}.db'
+            # A same-second re-run (e.g. data_replace()'s own safety backup,
+            # immediately followed by migrate_db_to_encrypted()'s internal one,
+            # possibly with a different src encryption state) would otherwise
+            # reuse this exact filename — sqlite3's backup API can't write a
+            # fresh snapshot over a file that already holds a *different*
+            # connection type's content (plain vs. SQLCipher), raising "file
+            # is not a database". Always start from a clean destination.
+            for stale in (dest_path, Path(str(dest_path) + '-wal'), Path(str(dest_path) + '-shm')):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
         except OSError as exc:
             print(f'⚠️  Database backup failed for {label}: {exc}')
             continue
         try:
-            src = sqlite3.connect(src_path)
-            try:
-                dst = sqlite3.connect(str(dest_path))
+            # The single-tenant primary DB (src_path == str(DB_NAME)) is opened via
+            # SQLCipher — UNLESS it's still the plaintext file from before a
+            # migrate_db_to_encrypted() run, e.g. this same function's own
+            # pre-migration safety backup. Every other source (MASTER_DB_PATH /
+            # per-clinic DBs in CLOUD_MODE, always out of scope for
+            # encryption-at-rest) stays on a plain sqlite3 connection, matching
+            # get_db_connection()'s own CLOUD_MODE fallback. A raw sqlite3
+            # .backup() can't mix a SQLCipher source with a vanilla destination
+            # (different Connection types), so both ends use the same helper.
+            primary_encrypted = src_path == str(DB_NAME) and not _is_plaintext_sqlite(src_path)
+            if primary_encrypted and decrypt_primary:
+                import encryption_key
+                key = encryption_key.get_or_create_key(_DATA_DIR)
+                _sqlcipher_decrypt_export(src_path, str(dest_path), key.hex())
+            else:
+                if primary_encrypted:
+                    src = get_db_connection()
+                else:
+                    src = sqlite3.connect(src_path)
                 try:
-                    with dst:
-                        src.backup(dst)
+                    if primary_encrypted:
+                        dst = get_db_connection(db_path=str(dest_path))
+                    else:
+                        dst = sqlite3.connect(str(dest_path))
+                    try:
+                        with dst:
+                            src.backup(dst)
+                    finally:
+                        dst.close()
                 finally:
-                    dst.close()
-            finally:
-                src.close()
+                    src.close()
         except Exception as exc:  # noqa: BLE001 — one tenant's failure mustn't kill the rest
             print(f'⚠️  Database backup failed for {label}: {exc}')
             # sqlite3.connect(dst) creates the file before the backup runs, so a
@@ -7677,6 +7776,150 @@ def run_database_backup():
             except OSError:
                 pass
     return written
+
+
+def _is_plaintext_sqlite(path):
+    """True if path opens successfully with vanilla sqlite3 and looks like a
+    real database (has at least one table) — i.e. it predates encryption."""
+    try:
+        conn = sqlite3.connect(str(path))
+        conn.execute("SELECT name FROM sqlite_master LIMIT 1")
+        conn.close()
+        return True
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _has_clinic_schema(path):
+    """True once init_database() has actually built the real schema on this
+    file (it has the core ``patients`` table).
+
+    ``_load_or_create_secret_key()`` (called at module import time, well
+    before ``init_database()`` runs) always creates DB_NAME as a plaintext
+    file holding one row — the Flask session secret — so that it works "before
+    init_database() runs and when the module is imported by tests" (its own
+    docstring). On a brand-new install that means a plaintext file already
+    exists at the moment ``migrate_db_to_encrypted()`` checks it, even though
+    there is no real clinic data yet. Without this check that transient
+    bootstrap artifact would be mistaken for a genuine pre-existing clinic
+    database, get encrypted, and then crash init_database() — which still
+    opens the file with vanilla sqlite3 until Task 5 converts it — on what
+    looks to it like a corrupt/unreadable file."""
+    try:
+        conn = sqlite3.connect(str(path))
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='patients'"
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _sqlcipher_export(plaintext_path, encrypted_path, key_hex):
+    """Use SQLCipher's ATTACH + sqlcipher_export() to produce an encrypted
+    copy of a plaintext database. Isolated into its own function so tests can
+    monkeypatch a failure here without needing a real SQLCipher error."""
+    import sqlcipher3 as _sqlcipher  # match Task 1/3's confirmed import
+    conn = _sqlcipher.connect(str(encrypted_path))
+    conn.execute(f"PRAGMA key = \"x'{key_hex}'\"")
+    # ATTACH DATABASE takes the path as a SQL string literal, not a bound
+    # parameter — a single quote in the path (e.g. a Windows profile dir like
+    # C:\Users\O'Brien\...) would otherwise break the statement. Escape by
+    # doubling, the standard SQL string-literal escape.
+    escaped_path = str(plaintext_path).replace("'", "''")
+    conn.execute(f"ATTACH DATABASE '{escaped_path}' AS plaintext KEY ''")
+    conn.execute("SELECT sqlcipher_export('main', 'plaintext')")
+    conn.execute("DETACH DATABASE plaintext")
+    conn.commit()
+    conn.close()
+
+
+def _sqlcipher_decrypt_export(encrypted_path, plaintext_path, key_hex):
+    """Reverse of ``_sqlcipher_export()``: write a PLAINTEXT copy of an
+    encrypted SQLCipher database at ``plaintext_path``.
+
+    Needed wherever this app hands out a portable, plain 'SQLite format 3'
+    file — the export/bundle routes (Settings → Data Tools) — so that
+    downstream tooling which deliberately stays out of scope for
+    encryption-at-rest (db_import.is_sqlite_file()'s plaintext magic-header
+    check, db_merge.py's own vanilla sqlite3.connect on a merge source) keeps
+    working unchanged on the resulting file."""
+    import sqlcipher3 as _sqlcipher  # match Task 1/3's confirmed import
+    conn = _sqlcipher.connect(str(encrypted_path))
+    conn.execute(f"PRAGMA key = \"x'{key_hex}'\"")
+    escaped_path = str(plaintext_path).replace("'", "''")  # see _sqlcipher_export
+    conn.execute(f"ATTACH DATABASE '{escaped_path}' AS plaintext KEY ''")
+    conn.execute("SELECT sqlcipher_export('plaintext', 'main')")
+    conn.execute("DETACH DATABASE plaintext")
+    conn.close()
+
+
+def migrate_db_to_encrypted(db_path, data_dir):
+    """One-time migration: if db_path is an existing plaintext SQLite
+    database, back it up, encrypt it in place, verify row counts, and
+    replace the original. Returns True if a migration actually ran, False
+    for every no-op case (already encrypted, or doesn't exist yet — a brand
+    new install's DB is created encrypted from the start by init_database()).
+    Never leaves db_path in a broken or partially-migrated state: on any
+    failure, the original plaintext file is left completely untouched (the
+    encrypted copy is built in a temp file first, never in place)."""
+    if not os.path.exists(db_path):
+        return False
+    if not _is_plaintext_sqlite(db_path):
+        return False  # already encrypted (or corrupt — leave it for the operator, don't touch)
+    if not _has_clinic_schema(db_path):
+        # Just the _load_or_create_secret_key() bootstrap row, not a real
+        # pre-existing clinic DB — leave it for init_database() to build on.
+        return False
+
+    backups = run_database_backup()
+    if not backups:
+        print('Encryption migration skipped: could not create a safety backup first.')
+        return False
+
+    import encryption_key
+    key = encryption_key.get_or_create_key(data_dir)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix='.db', dir=os.path.dirname(str(db_path)) or '.')
+    os.close(tmp_fd)
+    os.remove(tmp_path)  # sqlcipher_export needs to create this file itself
+    try:
+        _sqlcipher_export(db_path, tmp_path, key.hex())
+        # Verify row counts match across every user table before trusting the copy.
+        orig_conn = sqlite3.connect(str(db_path))
+        tables = [r[0] for r in orig_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        orig_counts = {t: orig_conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in tables}
+        orig_conn.close()
+
+        import sqlcipher3 as _sqlcipher
+        new_conn = _sqlcipher.connect(tmp_path)
+        new_conn.execute(f"PRAGMA key = \"x'{key.hex()}'\"")
+        new_counts = {t: new_conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in tables}
+        new_conn.close()
+
+        if orig_counts != new_counts:
+            raise RuntimeError(f'Row count mismatch after migration: {orig_counts} != {new_counts}')
+
+        # shutil.move, not os.replace: db_path may still have a lingering
+        # Windows-level lock at this point (e.g. reached via data_replace(),
+        # right after the live DB was rewritten) — os.replace's atomic
+        # ReplaceFile/MoveFileEx call was verified to raise "[WinError 5]
+        # Access is denied" in that real path (caught by this task's own
+        # tests), where shutil.move's fallback (in-place overwrite via
+        # copy2, not delete+rename) succeeds. shutil.move's own fallback is
+        # non-atomic on Windows when the destination exists, which is a real
+        # but narrower crash-window than trading it for a hard failure of an
+        # already-working flow.
+        shutil.move(tmp_path, str(db_path))
+        print(f'Database encrypted at rest ({sum(orig_counts.values())} rows verified).')
+        return True
+    except Exception as exc:
+        print(f'Encryption migration failed ({exc}); restoring pre-migration backup.')
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        shutil.copy2(backups[0], str(db_path))
+        return False
 
 
 def _backup_loop():
@@ -7876,8 +8119,7 @@ def _bt_serve_session(stream_in, stream_out, db_path=None):
     Opens its own short-lived SQLite connection so the caller (the BT
     server thread) doesn't have to manage one. `db_path` defaults to
     DB_NAME — exposed for tests."""
-    conn = sqlite3.connect(db_path or DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True, db_path=db_path)
     cursor = conn.cursor()
     authed = False
     processed_any = False
@@ -8282,13 +8524,12 @@ def bt_sync_server(stop_event=None):
     global _bt_server_listening
     while stop_event is None or not stop_event.is_set():
         try:
-            conn = get_db_connection()
-            conn.row_factory = sqlite3.Row
+            conn = get_db_connection(with_row_factory=True)
             cur = conn.cursor()
             enabled = read_app_setting(cur, 'bt_sync_enabled', '0') == '1'
             com_port_setting = (read_app_setting(cur, 'bt_sync_com_port', '') or '').strip()
             conn.close()
-        except sqlite3.Error:
+        except _db_errors('Error'):
             enabled, com_port_setting = False, ''
         if not enabled:
             _bt_server_listening = False
@@ -8355,26 +8596,24 @@ def _bt_sleep(seconds, stop_event):
 
 def _bt_record_success():
     try:
-        conn = get_db_connection()
-        conn.row_factory = sqlite3.Row
+        conn = get_db_connection(with_row_factory=True)
         cur = conn.cursor()
         write_app_setting(cur, 'bt_last_sync_at', _naive_utc_now().isoformat())
         write_app_setting(cur, 'bt_last_error', '')
         conn.commit()
         conn.close()
-    except sqlite3.Error:
+    except _db_errors('Error'):
         pass
 
 
 def _bt_record_error(message):
     try:
-        conn = get_db_connection()
-        conn.row_factory = sqlite3.Row
+        conn = get_db_connection(with_row_factory=True)
         cur = conn.cursor()
         write_app_setting(cur, 'bt_last_error', message[:300])
         conn.commit()
         conn.close()
-    except sqlite3.Error:
+    except _db_errors('Error'):
         pass
 
 
@@ -8405,12 +8644,12 @@ def _cloud_sync_config():
     token = os.environ.get('CLINIC_CLOUD_TOKEN', '').strip()
     if not (url and token):
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = get_db_connection()
             cur = conn.cursor()
             url = url or (read_app_setting(cur, 'cloud_url', '') or '')
             token = token or (read_app_setting(cur, 'cloud_clinic_token', '') or '')
             conn.close()
-        except sqlite3.Error:
+        except _db_errors('Error'):
             pass
     return (url.rstrip('/') or None), (token or None), CLOUD_SYNC_INTERVAL_MINUTES
 
@@ -8423,8 +8662,7 @@ def _run_cloud_sync_once(cloud_url, clinic_token, http=None):
     cloud_url = (cloud_url or '').rstrip('/')
     headers = {'X-Clinic-Token': clinic_token}
     result = {'ok': False, 'pulled': 0, 'pushed': 0, 'tombstones_applied': 0, 'at': utc_now_iso()}
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     try:
         # --- pull ---
@@ -8459,7 +8697,7 @@ def _run_cloud_sync_once(cloud_url, clinic_token, http=None):
             write_app_setting(cur, 'cloud_last_sync_at', result['at'])
             write_app_setting(cur, 'cloud_last_sync_result', f'error: {exc}'[:300])
             conn.commit()
-        except sqlite3.Error:
+        except _db_errors('Error'):
             pass
     finally:
         conn.close()
@@ -8484,12 +8722,12 @@ def _try_auto_cloud_pair():
     if not _auto_cloud_sync_enabled():
         return False
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db_connection()
         cur = conn.cursor()
         serial = str(read_app_setting(cur, 'active_serial_number', '') or '').strip().upper()
         token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
         conn.close()
-    except sqlite3.Error:
+    except _db_errors('Error'):
         return False
     if not serial:
         return False  # not activated yet — nothing to link with
@@ -8528,7 +8766,7 @@ def license_recheck_once(http=None):
     cloud sync. Offline (no URL / network down) is a no-op — offline NEVER downgrades
     a clinic to view-only. Never raises."""
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db_connection()
         cur = conn.cursor()
         serial = str(read_app_setting(cur, 'active_serial_number', '') or '').strip()
         token = str(read_app_setting(cur, 'active_serial_token', '') or '').strip()
@@ -8582,10 +8820,31 @@ def _read_active_serial(db_path):
     """Best-effort, read-only fetch of ``active_serial_number`` from a DB file.
 
     Opens the file in SQLite read-only URI mode so it never locks or mutates a
-    live database; returns '' on any error (missing file, missing table, …)."""
+    live database; returns '' on any error (missing file, missing table, …).
+
+    Candidate files (see ``_canonical_db_candidates``) may be a plaintext
+    legacy DB (not yet migrated) or an encrypted one, and may belong to an
+    entirely different install — so a plain sqlite3 read is tried first (the
+    common case pre-migration and the cheapest check), falling back to
+    SQLCipher only if that fails."""
     try:
         conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
         try:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = 'active_serial_number'"
+            ).fetchone()
+        finally:
+            conn.close()
+        return str(row[0]).strip() if row and row[0] else ''
+    except Exception:
+        pass
+    try:
+        import sqlcipher3 as _sqlcipher
+        import encryption_key
+        key = encryption_key.get_or_create_key(_DATA_DIR)
+        conn = _sqlcipher.connect(f'file:{db_path}?mode=ro', uri=True)
+        try:
+            conn.execute(f"PRAGMA key = \"x'{key.hex()}'\"")
             row = conn.execute(
                 "SELECT value FROM app_settings WHERE key = 'active_serial_number'"
             ).fetchone()
@@ -8671,12 +8930,13 @@ if __name__ == '__main__':
     print("="*60)
 
     print('\n📊 Initializing database...')
+    if not CLOUD_MODE:  # DPAPI/SQLCipher migration is desktop/service-only, never cloud
+        migrate_db_to_encrypted(DB_NAME, _DATA_DIR)
     init_database()
 
     # Warn if the default admin password is still in use.
     try:
-        _c = sqlite3.connect(DB_NAME)
-        _c.row_factory = sqlite3.Row
+        _c = get_db_connection(with_row_factory=True)
         _u = _c.execute("SELECT password_hash FROM users WHERE username = 'admin'").fetchone()
         _c.close()
         if _u and check_password_hash(_u['password_hash'], 'admin'):

@@ -69,7 +69,7 @@ def test_baked_public_key_is_real():
 # ── Task 3: token-sourced fields ────────────────────────────────────────────
 
 def _license_row(serial):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute(
         'SELECT max_devices, expires_at, grace_until, plan_name FROM licenses WHERE serial_number=?',
         (serial.upper(),)).fetchone()
@@ -219,7 +219,7 @@ def test_status_without_device_answers_from_state(local):
 def test_server_fingerprint_is_stable_and_client_cannot_override(local):
     s = 'DENTAL-A2-FP'
     _activate(local, _sign(local, s, max_devices=3), device_id='attacker-claims-this')
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     fp = conn.execute("SELECT value FROM app_settings WHERE key='device_fingerprint'").fetchone()[0]
     # The desktop's own slot is bound to the server fingerprint, never the client claim.
     rows = [r[0] for r in conn.execute(

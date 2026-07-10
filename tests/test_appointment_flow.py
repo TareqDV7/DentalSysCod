@@ -16,7 +16,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _insert_patient(first_name='John', last_name='Doe'):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         '''
@@ -88,7 +88,7 @@ def test_create_appointment_rejects_missing_required_fields(client):
 def test_appointments_list_never_returns_null_display_fields(client):
     patient_id = _insert_patient('Legacy', 'Patient')
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         '''

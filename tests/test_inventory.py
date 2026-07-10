@@ -30,8 +30,7 @@ def conn(tmp_path, monkeypatch):
     path = tmp_path / 'inv.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(path))
     dental_clinic.init_database()
-    c = sqlite3.connect(str(path))
-    c.row_factory = sqlite3.Row
+    c = dental_clinic.get_db_connection(with_row_factory=True)
     yield c
     c.close()
 

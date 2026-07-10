@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
     dental_clinic.init_database()
 
     # Seed a paired device + a patient so /api/sync/import is authorized.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute(
         "INSERT INTO paired_devices (device_id, device_name, device_token) VALUES (?, ?, ?)",
         ('dev-test', 'Mobile', 'tok-test'),
@@ -68,7 +68,7 @@ def test_bad_row_does_not_crash_batch(client):
     assert body['applied_total'] == 1, body
     assert body['skipped_total'] >= 1, body
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     assert conn.execute('SELECT id FROM patients WHERE id = 10').fetchone() is not None
     assert conn.execute('SELECT id FROM billing WHERE id = 99').fetchone() is None
     conn.close()
@@ -91,7 +91,7 @@ def test_billing_with_amount_is_accepted(client):
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json()['applied_total'] == 1
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute(
         'SELECT amount, subtotal, discount, paid_amount FROM billing WHERE id = 50'
     ).fetchone()
@@ -116,7 +116,7 @@ def test_treatment_procedure_drift_terms(client):
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json()['applied_total'] == 1
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute(
         'SELECT name, default_price, default_lab_expense, requires_lab, active '
         'FROM treatment_procedures WHERE id = 100'

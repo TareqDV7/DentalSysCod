@@ -78,7 +78,7 @@ def test_branding_get_has_no_wizard_field(client):
 
 def test_marketing_posts_schema_has_template_json_not_photo_count(client):
     # client fixture has already run init_database() against a fresh temp DB.
-    conn = _sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cols = {row[1] for row in conn.execute('PRAGMA table_info(marketing_posts)')}
     conn.close()
     assert 'template_json' in cols

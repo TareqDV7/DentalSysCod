@@ -18,7 +18,7 @@ def client(tmp_path, monkeypatch):
     db = tmp_path / 'fuzz.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(db))
     dental_clinic.init_database()
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute(
         "INSERT INTO paired_devices (device_id, device_name, device_token) VALUES (?, ?, ?)",
         ('dev', 'Dev', 'tok'),

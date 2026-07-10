@@ -78,7 +78,7 @@ def test_report_low_stock_and_value(client):
 def test_materials_crud_and_unique(client):
     _login(client)
     item_id = client.post('/api/inventory/items', json={'name': 'X'}).get_json()['id']
-    proc = dental_clinic.sqlite3.connect(dental_clinic.DB_NAME)
+    proc = dental_clinic.get_db_connection()
     pid = proc.execute('INSERT INTO treatment_procedures (name) VALUES (?)', ('Crown',)).lastrowid
     proc.commit(); proc.close()
     r = client.post(f'/api/inventory/procedures/{pid}/materials',
@@ -96,7 +96,7 @@ def _make_patient(client):
 
 def _make_linked_proc(client, item_id, default_qty=2):
     import dental_clinic as dc
-    c = dc.sqlite3.connect(dc.DB_NAME)
+    c = dc.get_db_connection()
     pid = c.execute('INSERT INTO treatment_procedures (name) VALUES (?)', ('Filling',)).lastrowid
     c.execute('INSERT INTO procedure_materials (procedure_id, item_id, default_qty) VALUES (?,?,?)',
               (pid, item_id, default_qty))

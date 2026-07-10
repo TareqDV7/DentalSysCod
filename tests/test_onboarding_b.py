@@ -37,7 +37,7 @@ def test_pair_uses_baked_url_when_omitted(local, monkeypatch):
     assert r.status_code == 200
     assert calls['url'].startswith(dental_clinic._BAKED_CLOUD_BASE_URL)
     # And it persisted the baked URL as the clinic's cloud_url.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     val = conn.execute("SELECT value FROM app_settings WHERE key='cloud_url'").fetchone()[0]
     conn.close()
     assert val == dental_clinic._BAKED_CLOUD_BASE_URL.rstrip('/')
@@ -45,7 +45,7 @@ def test_pair_uses_baked_url_when_omitted(local, monkeypatch):
 
 def _seed_active_license(serial='DENTAL-B-ONB'):
     today = datetime.now(timezone.utc).date()
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute('''INSERT INTO licenses (serial_number, clinic_name, plan_name, status,
                     max_devices, expires_at, grace_until) VALUES (?,?,?,?,?,?,?)''',
                  (serial, 'C', 'standard', 'active', 3,
@@ -57,7 +57,7 @@ def _seed_active_license(serial='DENTAL-B-ONB'):
 
 
 def _set_setting(key, value):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     conn.commit(); conn.close()

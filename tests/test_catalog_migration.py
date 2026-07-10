@@ -24,7 +24,7 @@ def fresh_db(tmp_path, monkeypatch):
 def legacy_db(tmp_path, monkeypatch):
     db_path = str(tmp_path / 'legacy.db')
     # Pre-create a treatment_catalog table with some rows (the old schema).
-    conn = sqlite3.connect(db_path)
+    conn = dental_clinic.get_db_connection(db_path=db_path)
     conn.execute('''
         CREATE TABLE treatment_catalog (
             id INTEGER PRIMARY KEY,
@@ -55,7 +55,7 @@ def legacy_db(tmp_path, monkeypatch):
 
 
 def _proc_names(db_path):
-    conn = sqlite3.connect(db_path)
+    conn = dental_clinic.get_db_connection(db_path=db_path)
     rows = [r[0] for r in conn.execute(
         'SELECT name FROM treatment_procedures ORDER BY name COLLATE NOCASE')]
     conn.close()
@@ -63,7 +63,7 @@ def _proc_names(db_path):
 
 
 def _table_exists(db_path, table):
-    conn = sqlite3.connect(db_path)
+    conn = dental_clinic.get_db_connection(db_path=db_path)
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone()
@@ -72,7 +72,7 @@ def _table_exists(db_path, table):
 
 
 def _flag(db_path):
-    conn = sqlite3.connect(db_path)
+    conn = dental_clinic.get_db_connection(db_path=db_path)
     row = conn.execute(
         "SELECT value FROM app_settings WHERE key='treatment_catalog_migrated'"
     ).fetchone()

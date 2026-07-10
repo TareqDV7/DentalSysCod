@@ -31,7 +31,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _seed_paired_device(db_path, device_id, device_name, token='tok-xyz', active=1):
-    conn = sqlite3.connect(db_path)
+    conn = dental_clinic.get_db_connection(db_path=db_path)
     conn.execute(
         'INSERT INTO paired_devices (device_id, device_name, device_token, '
         'paired_at, last_seen_at, is_active) '
@@ -70,8 +70,7 @@ def test_recent_attempts_records_pair_and_hello(client):
     """A successful bt_pair + hello should each leave a breadcrumb with the
     right op/outcome, newest-first."""
     # Drive the dispatcher directly — no socket needed.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     resp, authed = dental_clinic._bt_handle_request(
         cur, {'op': 'bt_pair', 'device_id': 'dev-Z', 'device_name': 'Phone Z'},
@@ -102,8 +101,7 @@ def test_recent_attempts_records_pair_and_hello(client):
 def test_recent_attempts_records_unauthorized_hello(client):
     """A bad-token hello must leave an 'unauthorized' breadcrumb so the
     user can see the connection attempt in the UI."""
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     resp, _ = dental_clinic._bt_handle_request(
         cur, {'op': 'hello', 'device_token': 'not-a-real-token'}, authed=False,
@@ -123,7 +121,7 @@ def test_recent_attempts_is_bounded_to_maxlen_20(client):
     """The ring buffer caps at 20 entries; /api/bt/status returns the last
     10 so the UI stays compact even under heavy churn."""
     # Hammer the dispatcher with 30 unauthorized hellos.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     for _i in range(30):
         dental_clinic._bt_handle_request(

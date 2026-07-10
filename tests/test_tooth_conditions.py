@@ -91,7 +91,7 @@ def test_soft_delete_condition(seeded_client):
     all_rows = seeded_client.get('/api/tooth-conditions?all=1').get_json()
     implant = next(c for c in all_rows if c['id'] == implant_id)
     assert implant['active'] == 0
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='tooth_conditions' AND row_id=?", (implant_id,))
     assert cur.fetchone()[0] == 1

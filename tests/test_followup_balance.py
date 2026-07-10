@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _patient(name='Bal', last='Ance', phone='0599'):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 (name, last, phone))
@@ -85,7 +85,7 @@ def test_editing_earlier_entry_fixes_downstream_balance(client):
 def test_deleting_entry_recomputes_balances_and_removes_lab_expense(client):
     pid = _patient()
     # A procedure that requires lab so the auto-expense is created.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO treatment_procedures (name, requires_lab, default_price, default_lab_expense, active) '
                 'VALUES (?,?,?,?,?)', ('LabProc', 1, 500, 100, 1))
@@ -102,7 +102,7 @@ def test_deleting_entry_recomputes_balances_and_removes_lab_expense(client):
     fid = rows[0]['id']
 
     # Auto-expense was created.
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM expenses WHERE source_type='followup' AND reference_id=?", (fid,))
     assert cur.fetchone()[0] == 1
@@ -113,7 +113,7 @@ def test_deleting_entry_recomputes_balances_and_removes_lab_expense(client):
     assert r.status_code == 200
     assert _rows(client, pid) == []
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM expenses WHERE source_type='followup' AND reference_id=?", (fid,))
     assert cur.fetchone()[0] == 0
@@ -149,7 +149,7 @@ def test_editing_followup_preserves_paid_lab_expense_status(client):
     edit to the follow-up entry — the PUT handler used to always recreate the
     linked expense row as 'postponed', silently reverting the paid status."""
     pid = _patient()
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO treatment_procedures (name, requires_lab, default_price, default_lab_expense, active) '
                 'VALUES (?,?,?,?,?)', ('LabProc', 1, 500, 100, 1))
@@ -164,8 +164,7 @@ def test_editing_followup_preserves_paid_lab_expense_status(client):
     assert r.status_code == 200
     fid = _rows(client, pid)[0]['id']
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     exp_id = cur.execute(
         "SELECT id FROM expenses WHERE source_type='followup' AND reference_id=?", (fid,)
@@ -182,8 +181,7 @@ def test_editing_followup_preserves_paid_lab_expense_status(client):
     })
     assert r.status_code == 200
 
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     cur = conn.cursor()
     status = cur.execute(
         "SELECT payment_status FROM expenses WHERE source_type='followup' AND reference_id=?", (fid,)

@@ -26,7 +26,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _patient():
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 ('Cre', 'Dit', '055'))

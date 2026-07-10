@@ -4,7 +4,23 @@ without one, so this test-client subclass mirrors the real frontend fetch
 interceptor: it seeds a session CSRF token and attaches a matching X-CSRFToken
 header (and a csrf_token form field) on unsafe methods. Pass csrf=False to opt
 out and exercise the rejection path."""
+import os
 import secrets
+import sys
+
+# encryption_key.py wraps Windows DPAPI (win32crypt), which has no Linux/macOS
+# build at all -- pywin32 isn't even installed there (see requirements.txt's
+# platform marker). CLINIC_TEST_FAKE_DPAPI swaps in a reversible XOR stand-in
+# (read by encryption_key.py at its own import time, so this must be set
+# BEFORE `import dental_clinic` below pulls it in transitively). Also
+# propagates to any subprocess a test spawns via env={**os.environ, ...} (see
+# tests/test_service_mode.py, which runs dental_clinic.py as a real child
+# process -- a same-process monkeypatch wouldn't reach it). Real DPAPI itself
+# is validated separately by Task 1's frozen-build spike; this only lets the
+# rest of the suite exercise real SQLCipher (genuine manylinux wheels, no
+# stub needed) through get_db_connection() on non-Windows CI.
+if sys.platform != 'win32':
+    os.environ['CLINIC_TEST_FAKE_DPAPI'] = '1'
 
 from flask.testing import FlaskClient
 

@@ -17,7 +17,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _patient(name='Plan', last='Teeth', phone='0591'):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 (name, last, phone))
@@ -28,7 +28,7 @@ def _patient(name='Plan', last='Teeth', phone='0591'):
 
 
 def test_plan_teeth_table_exists(client):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='treatment_plan_teeth'")
     assert cur.fetchone() is not None
@@ -71,7 +71,7 @@ def test_update_plan_teeth_diffs(client):
     })
     assert r.status_code == 200
     assert sorted(_plan(client, plan_id)['teeth']) == ['26', '46']
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='treatment_plan_teeth'")
     assert cur.fetchone()[0] == 1
@@ -82,7 +82,7 @@ def test_delete_plan_cascades_teeth(client):
     pid = _patient()
     plan_id = _create_plan(client, pid, ['16', '26', '36'])
     assert client.delete(f'/api/treatment-plans/{plan_id}').status_code == 200
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT COUNT(*) FROM treatment_plan_teeth WHERE plan_id = ?', (plan_id,))
     assert cur.fetchone()[0] == 0

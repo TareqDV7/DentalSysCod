@@ -24,7 +24,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _patient(first='Pay', last='Hist', phone='0500'):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute('INSERT INTO patients (first_name, last_name, phone) VALUES (?,?,?)',
                 (first, last, phone))
@@ -108,7 +108,7 @@ def test_deleted_followup_excluded(client):
         'followup_date': '01/02/2026', 'treatment_procedure': 'Filling',
         'price': 200, 'payment': 80,
     })
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     fid = conn.execute('SELECT id FROM patient_followups WHERE patient_id=?',
                        (pid,)).fetchone()[0]
     conn.close()

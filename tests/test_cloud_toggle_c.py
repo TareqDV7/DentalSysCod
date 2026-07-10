@@ -35,13 +35,13 @@ def test_cloud_pair_still_works(local, monkeypatch):
     r = local.post('/api/cloud/pair',
                    json={'cloud_url': 'https://c.example.test', 'serial_number': 'DENTAL-C-PAIR1'})
     assert r.status_code == 200
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     assert conn.execute("SELECT value FROM app_settings WHERE key='cloud_clinic_token'").fetchone()[0] == 'tok-xyz'
     conn.close()
 
 
 def _set_setting(key, value):
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     conn.commit(); conn.close()
@@ -64,7 +64,7 @@ def test_enable_uses_active_serial_and_baked_url(local, monkeypatch):
     assert sink['url'].startswith(dental_clinic._BAKED_CLOUD_BASE_URL)
     assert sink['body']['serial_number'] == 'DENTAL-C-EN1'
     assert sink['body']['offline_token'] == 'signed.token.here'
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     assert conn.execute("SELECT value FROM app_settings WHERE key='cloud_clinic_token'").fetchone()[0] == 'tok-xyz'
     conn.close()
 
@@ -105,14 +105,14 @@ def test_resolve_offline_token_precedence(local, monkeypatch):
 
 
 def _license_count():
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     n = conn.execute("SELECT COUNT(*) FROM licenses").fetchone()[0]
     conn.close()
     return n
 
 
 def dental_clinic_active_serial():
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     row = conn.execute("SELECT value FROM app_settings WHERE key='active_serial_number'").fetchone()
     conn.close()
     return row[0] if row else None

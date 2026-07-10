@@ -8,6 +8,7 @@ import zipfile
 import pytest
 
 import dental_clinic
+import encryption_key
 
 
 @pytest.fixture()
@@ -72,13 +73,25 @@ def test_export_bundle_file_disabled_on_cloud(client, monkeypatch):
 
 
 def _make_source_db(path):
-    """A second clinic's DB with one patient, colliding id 1."""
+    """A second clinic's DB with one patient, colliding id 1.
+
+    Built as a PLAINTEXT sqlite file: merge/replace source uploads are
+    validated as plain 'SQLite format 3' files (is_sqlite_file()'s
+    magic-header check) and db_merge.py opens them with a vanilla
+    sqlite3.connect — both deliberately out of scope for encryption-at-rest.
+    init_database() now always builds an encrypted DB (via
+    get_db_connection()), so the schema is built at a throwaway encrypted
+    path and then decrypted into `path`."""
     prev = dental_clinic.DB_NAME
-    dental_clinic.DB_NAME = str(path)
+    tmp_encrypted = str(path) + '.tmp-encrypted'
+    dental_clinic.DB_NAME = tmp_encrypted
     try:
         dental_clinic.init_database()
     finally:
         dental_clinic.DB_NAME = prev
+    key = encryption_key.get_or_create_key(dental_clinic._DATA_DIR)
+    dental_clinic._sqlcipher_decrypt_export(tmp_encrypted, str(path), key.hex())
+    os.remove(tmp_encrypted)
     conn = sqlite3.connect(str(path))
     conn.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Imported', 'Patient')")
     conn.commit()
@@ -99,6 +112,32 @@ def test_backup_file_writes_db_and_returns_path(client):
     assert body['success'] is True
     assert body['path'].endswith('.db')
     assert os.path.exists(body['path'])
+    # The live DB is SQLCipher-encrypted, but this is an explicit user-initiated
+    # off-machine backup — it must stay a plain, portable 'SQLite format 3' file
+    # (the DPAPI key never leaves this machine, so an encrypted download would be
+    # permanently unreadable anywhere else). Regression test for a real bug
+    # caught in whole-branch review: this endpoint used to hand back the raw
+    # encrypted snapshot.
+    assert dental_clinic._is_plaintext_sqlite(body['path'])
+    conn = sqlite3.connect(body['path'])
+    conn.execute('SELECT * FROM patients').fetchall()  # vanilla sqlite3 can open it
+    conn.close()
+
+
+def test_backup_get_route_returns_plaintext_download(client):
+    # Plain-browser equivalent of test_backup_file_writes_db_and_returns_path
+    # above — same regression, different route (GET /api/backup, streamed).
+    _login(client)
+    resp = client.get('/api/backup')
+    assert resp.status_code == 200
+    assert resp.data[:16] == b'SQLite format 3\x00'
+    tmp = str(dental_clinic._DATA_DIR / 'downloaded_backup.db')
+    with open(tmp, 'wb') as fh:
+        fh.write(resp.data)
+    conn = sqlite3.connect(tmp)
+    conn.execute('SELECT * FROM patients').fetchall()
+    conn.close()
+    os.remove(tmp)
 
 
 def test_backup_file_blocked_on_cloud(client, monkeypatch):
@@ -125,7 +164,7 @@ def test_merge_rejects_non_sqlite(client):
 def test_merge_adds_imported_patient_and_keeps_existing(client, tmp_path):
     _login(client)
     # Destination already has a patient at id 1.
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     conn.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Local', 'Owner')")
     conn.commit(); conn.close()
 
@@ -139,7 +178,7 @@ def test_merge_adds_imported_patient_and_keeps_existing(client, tmp_path):
     assert body['report']['total_added'] >= 1
     assert body['backup_path']                      # safety backup was taken
 
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     names = {r[0] for r in conn.execute("SELECT first_name FROM patients").fetchall()}
     conn.close()
     assert {'Local', 'Imported'} <= names
@@ -200,7 +239,7 @@ def test_replace_requires_login(client):
 
 def test_replace_swaps_database(client, tmp_path):
     _login(client)
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     conn.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Local', 'Owner')")
     conn.commit(); conn.close()
 
@@ -212,7 +251,7 @@ def test_replace_swaps_database(client, tmp_path):
     assert resp.status_code == 200
     assert resp.get_json()['backup_path']
 
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     names = {r[0] for r in conn.execute("SELECT first_name FROM patients").fetchall()}
     conn.close()
     assert names == {'Imported'}              # local data replaced, not merged
@@ -236,7 +275,7 @@ def test_replace_preserves_device_activation(client, tmp_path):
         'cloud_clinic_token': 'clinic-tok-mine',
         'cloud_clinic_id': '7',
     }
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     for k, v in preserved.items():
         conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
@@ -250,7 +289,7 @@ def test_replace_preserves_device_activation(client, tmp_path):
         resp = client.post('/api/data/replace', data=data, content_type='multipart/form-data')
     assert resp.status_code == 200
 
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     names = {r[0] for r in conn.execute('SELECT first_name FROM patients').fetchall()}
 
     def _get(key):
@@ -273,7 +312,7 @@ def test_replace_preserves_cached_license_record(client, tmp_path):
     """
     _login(client)
     serial = 'DENTAL-MINE-0002'
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     for k, v in (('active_serial_number', serial),
                  ('active_serial_token', 'signed.mine.token')):
         conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) "
@@ -296,7 +335,7 @@ def test_replace_preserves_cached_license_record(client, tmp_path):
         resp = client.post('/api/data/replace', data=data, content_type='multipart/form-data')
     assert resp.status_code == 200
 
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     state = dental_clinic._license_gate_state(conn.cursor())
     record = dental_clinic.fetch_license_record(conn.cursor(), serial)
     device = conn.execute(
@@ -339,7 +378,7 @@ def test_replace_aborts_when_backup_fails(client, monkeypatch, tmp_path):
     """Fix C: replace is aborted with 500 when the safety backup cannot be created."""
     _login(client)
     # Seed the live DB with a known patient.
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     conn.execute("INSERT INTO patients (id, first_name, last_name) VALUES (1, 'Local', 'Owner')")
     conn.commit()
     conn.close()
@@ -357,7 +396,7 @@ def test_replace_aborts_when_backup_fails(client, monkeypatch, tmp_path):
     assert 'backup' in body.get('error', '').lower()
 
     # The live DB must not have been changed — 'Local Owner' still present, 'Imported' absent.
-    conn = sqlite3.connect(str(dental_clinic.DB_NAME))
+    conn = dental_clinic.get_db_connection()
     names = {r[0] for r in conn.execute('SELECT first_name FROM patients').fetchall()}
     conn.close()
     assert 'Local' in names
@@ -390,7 +429,7 @@ def test_clear_catalogs_empties_active_lists_and_tombstones(client):
     assert client.get('/api/tooth-conditions').get_json() == []
 
     import sqlite3, dental_clinic
-    conn = sqlite3.connect(dental_clinic.DB_NAME)
+    conn = dental_clinic.get_db_connection()
     tp = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='treatment_procedures'").fetchone()[0]
     tc = conn.execute("SELECT COUNT(*) FROM sync_tombstones WHERE table_name='tooth_conditions'").fetchone()[0]
     conn.close()

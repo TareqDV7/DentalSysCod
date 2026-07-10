@@ -5,6 +5,7 @@ import io
 import sqlite3
 import pytest
 
+import dental_clinic
 from dental_clinic import (
     encode_bt_frame, decode_bt_frame,
     _bt_serve_session, init_database,
@@ -16,7 +17,7 @@ def db_path(tmp_path, monkeypatch):
     db = tmp_path / 'sess.db'
     monkeypatch.setattr('dental_clinic.DB_NAME', str(db))
     init_database()
-    conn = sqlite3.connect(str(db))
+    conn = dental_clinic.get_db_connection()
     conn.execute(
         'INSERT INTO paired_devices (device_id, device_name, device_token, paired_at, last_seen_at, is_active) '
         "VALUES ('test-dev', 'Test', 'good-token', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)"
