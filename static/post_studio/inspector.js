@@ -24,7 +24,15 @@ function elt(tag, attrs = {}, styles = {}) {
 }
 
 function fieldLabel(text) {
-  return elt('label', { text }, { display: 'block', fontSize: '0.8em', opacity: '0.75', marginBottom: '2px' });
+  return elt('label', { text }, { fontSize: '0.8em', opacity: '0.75' });
+}
+
+// Reuses the app-wide `.form-group` styling (rounded, themed input/select/
+// textarea — see templates.py) instead of bare unstyled native controls.
+function fieldWrap(labelText) {
+  const wrap = elt('div', { class: 'form-group' }, { marginBottom: '0' });
+  wrap.appendChild(fieldLabel(labelText));
+  return wrap;
 }
 
 function colorRow(palette, current, onColor) {
@@ -46,15 +54,22 @@ function colorRow(palette, current, onColor) {
 
 // run: { text, font, size, weight, color }
 // opts: { lang, palette, onText, onTypography, onFont }
+// run.text === undefined means "typography-only" (e.g. a block label's font/
+// size/weight/color, not a text run) — the Text field is skipped rather than
+// shown wired to a no-op, which previously looked editable but silently
+// discarded whatever was typed into it.
 export function buildTextInspector(run, opts) {
   const ar = opts.lang === 'ar';
   const root = elt('div', { 'data-ps-inspector-text': '' },
     { display: 'flex', flexDirection: 'column', gap: '10px' });
 
-  const text = elt('input', { type: 'text', 'data-ps-field': 'text', value: run.text || '' }, { width: '100%' });
-  text.addEventListener('input', () => opts.onText(text.value));
-  const textWrap = elt('div'); textWrap.appendChild(fieldLabel(ar ? 'النص' : 'Text')); textWrap.appendChild(text);
-  root.appendChild(textWrap);
+  if (run.text !== undefined) {
+    const text = elt('input', { type: 'text', 'data-ps-field': 'text', value: run.text || '' }, { width: '100%' });
+    text.addEventListener('input', () => opts.onText(text.value));
+    const textWrap = fieldWrap(ar ? 'النص' : 'Text');
+    textWrap.appendChild(text);
+    root.appendChild(textWrap);
+  }
 
   const font = elt('select', { 'data-ps-field': 'font' }, { width: '100%' });
   for (const o of FONT_OPTIONS) {
@@ -63,14 +78,18 @@ export function buildTextInspector(run, opts) {
     font.appendChild(opt);
   }
   font.addEventListener('change', () => opts.onFont(font.value));
-  const fontWrap = elt('div'); fontWrap.appendChild(fieldLabel(ar ? 'الخط' : 'Font')); fontWrap.appendChild(font);
+  const fontWrap = fieldWrap(ar ? 'الخط' : 'Font');
+  fontWrap.appendChild(font);
   root.appendChild(fontWrap);
 
   const size = elt('input', { type: 'range', 'data-ps-field': 'size',
-    min: String(SIZE_MIN), max: String(SIZE_MAX), value: String(run.size || 40) }, { width: '100%' });
-  size.addEventListener('input', () => opts.onTypography({ size: Number(size.value) }));
-  const sizeWrap = elt('div');
-  sizeWrap.appendChild(fieldLabel((ar ? 'الحجم' : 'Size') + ': ' + (run.size || 40)));
+    min: String(SIZE_MIN), max: String(SIZE_MAX), value: String(run.size || 40) },
+    { width: '100%', accentColor: 'var(--accent, #2f7ea3)' });
+  size.addEventListener('input', () => {
+    sizeWrap.firstChild.textContent = (ar ? 'الحجم' : 'Size') + ': ' + size.value;
+    opts.onTypography({ size: Number(size.value) });
+  });
+  const sizeWrap = fieldWrap((ar ? 'الحجم' : 'Size') + ': ' + (run.size || 40));
   sizeWrap.appendChild(size);
   root.appendChild(sizeWrap);
 
@@ -81,10 +100,11 @@ export function buildTextInspector(run, opts) {
     weight.appendChild(opt);
   }
   weight.addEventListener('change', () => opts.onTypography({ weight: Number(weight.value) }));
-  const weightWrap = elt('div'); weightWrap.appendChild(fieldLabel(ar ? 'السماكة' : 'Weight')); weightWrap.appendChild(weight);
+  const weightWrap = fieldWrap(ar ? 'السماكة' : 'Weight');
+  weightWrap.appendChild(weight);
   root.appendChild(weightWrap);
 
-  const colorWrap = elt('div'); colorWrap.appendChild(fieldLabel(ar ? 'اللون' : 'Color'));
+  const colorWrap = fieldWrap(ar ? 'اللون' : 'Color');
   colorWrap.appendChild(colorRow(opts.palette, run.color, (hex) => opts.onTypography({ color: hex })));
   root.appendChild(colorWrap);
 
@@ -110,8 +130,7 @@ export function buildBlockInspector(block, opts) {
 
   const label = elt('input', { type: 'text', 'data-ps-field': 'label', value: block.label || '' }, { width: '100%' });
   label.addEventListener('input', () => opts.onLabel(label.value));
-  const labelWrap = elt('div');
-  labelWrap.appendChild(fieldLabel(ar ? 'التسمية' : 'Label'));
+  const labelWrap = fieldWrap(ar ? 'التسمية' : 'Label');
   labelWrap.appendChild(label);
   root.appendChild(labelWrap);
 

@@ -40,11 +40,16 @@ function typoStyle(t, text) {
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-// Simple outlined tooth (refine glyph in QA if needed — exports as inline SVG).
+// Outlined tooth — double-cusp crown (with a center notch), a shoulder that
+// pinches inward toward the neck, and a forked root. Matches the reference
+// go.png divider glyph; verified against it via a side-by-side render (see
+// docs/superpowers/ for the Post Studio design notes).
 const TOOTH_PATH =
-  'M12 2.2c-1.7 0-2.6.9-4.4.9S4.6 2.2 3.4 4c-1.1 2.8-.2 6.7.8 10.6.5 2 .9 5.6 2.3 5.6 ' +
-  '1.1 0 1.2-2.8 1.9-4.8.3-.9.8-1.4 1.6-1.4s1.3.5 1.6 1.4c.7 2 .8 4.8 1.9 4.8 1.4 0 ' +
-  '1.8-3.6 2.3-5.6 1-3.9 1.9-7.8.8-10.6-1.2-1.8-2.4-.9-4.2-.9s-2.7-.9-4.4-.9z';
+  'M8.8,4.2 C7.6,4.2 5.6,5.3 4.9,7.6 C4.4,10.3 5.6,11.9 6.3,12.6 C7.0,13.3 7.4,14.8 7.6,16.0 ' +
+  'C8.1,17.4 8.3,20.6 9.3,20.6 C10.1,20.6 10.2,17.6 10.8,15.9 C11.1,15.0 11.5,14.5 12,14.5 ' +
+  'C12.5,14.5 12.9,15.0 13.2,15.9 C13.8,17.6 13.9,20.6 14.7,20.6 C15.7,20.6 15.9,17.4 16.4,16.0 ' +
+  'C16.6,14.8 17.0,13.3 17.7,12.6 C18.4,11.9 19.6,10.3 19.1,7.6 C18.4,5.3 16.4,4.2 15.2,4.2 ' +
+  'C14.2,4.2 13.6,5.6 12,5.6 C10.4,5.6 9.8,4.2 8.8,4.2 Z';
 
 function toothIcon(color) {
   const svg = document.createElementNS(SVG_NS, 'svg');

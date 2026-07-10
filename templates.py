@@ -3164,7 +3164,6 @@ HTML_TEMPLATE = '''
                          data-en="No active license on this server." data-ar="لا يوجد ترخيص نشط على هذا الخادم.">No active license on this server.</div>
                 </div>
             </div>
-        </div>
 
             <!-- Post Studio Tab -->
             <div id="poststudio" class="tab-content">
@@ -3179,6 +3178,7 @@ HTML_TEMPLATE = '''
                     <div id="ps-editor-root" class="section-card" style="padding:20px;"></div>
                 </div>
             </div>
+        </div>
 
         </div><!-- end app-body -->
     </div>

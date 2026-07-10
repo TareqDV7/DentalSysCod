@@ -133,7 +133,12 @@ export const DEFAULT_LAYOUT = {
   margin: 0.06, gap: 0.03,
   panelW: null, panelH: null,
   panelRowY: null, pillRowY: null,
-  titleY: 0.10, doctorY: 0.93,
+  // 0.10 clipped the headline off the top of the canvas for any theme with a
+  // 2-line title taller than dark_premium's (light_luxury/bold_editorial's
+  // larger default headline sizes especially) — panelRowY for these themes
+  // derives independently (0.5 - panelH/2, not relative to titleY), so
+  // raising this has no knock-on effect on the panel row.
+  titleY: 0.16, doctorY: 0.93,
 };
 
 export function themeLayout(name) {
