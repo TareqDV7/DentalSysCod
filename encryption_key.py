@@ -15,8 +15,21 @@ KEY_FILENAME = 'encryption.key'
 _KEY_BYTES = 32
 _CRYPTPROTECT_LOCAL_MACHINE = 0x4
 
+# Test-only escape hatch: win32crypt has no Linux/macOS build at all, so
+# ubuntu-latest CI can't import it. Off by default everywhere, including in
+# the frozen Windows build — nothing in production ever sets this env var.
+# tests/conftest.py sets it (only on non-Windows) before dental_clinic is
+# imported, which also propagates to any subprocess a test spawns via
+# env={**os.environ, ...} (see tests/test_service_mode.py). This is not a
+# substitute for real DPAPI validation — that's Task 1's frozen-build spike
+# — it just lets the rest of the suite exercise real SQLCipher (genuine
+# manylinux wheels, no stub needed) through get_db_connection() on Linux.
+_FAKE_DPAPI = os.environ.get('CLINIC_TEST_FAKE_DPAPI') == '1'
+
 
 def _protect(raw_bytes):
+    if _FAKE_DPAPI:
+        return bytes(b ^ 0xFF for b in raw_bytes)
     import win32crypt
     blob = win32crypt.CryptProtectData(
         raw_bytes, 'DentaCare DB encryption key', None, None, None,
@@ -25,6 +38,8 @@ def _protect(raw_bytes):
 
 
 def _unprotect(blob):
+    if _FAKE_DPAPI:
+        return bytes(b ^ 0xFF for b in blob)
     import win32crypt
     _, raw = win32crypt.CryptUnprotectData(
         blob, None, None, None, _CRYPTPROTECT_LOCAL_MACHINE)
