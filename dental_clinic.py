@@ -8007,11 +8007,119 @@ def _backup_loop():
         time.sleep(max(0.1, BACKUP_INTERVAL_HOURS) * 3600)
 
 
+def _reminder_dispatch_one_clinic(clinic_db_path, now_utc):
+    """One clinic's worth of reminder dispatch. Uses a plain sqlite3
+    connection (never the request-bound get_db_connection() proxy — this
+    runs from a background thread, not inside a Flask request). Cloud-side
+    per-clinic DBs are plaintext (documented, PR #23), so a plain
+    connection is correct here, not a workaround."""
+    import reminder_channels
+    import reminder_crypto
+    import reminder_dispatch
+
+    conn = sqlite3.connect(clinic_db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        if read_app_setting(cur, 'reminders_enabled', '0') != '1':
+            return
+
+        lead_hours = float(read_app_setting(cur, 'reminder_lead_hours', '24'))
+        clinic_tz = read_app_setting(cur, 'clinic_timezone', DEFAULT_CLINIC_TIMEZONE)
+        template = read_app_setting(
+            cur, 'reminder_message_template',
+            'Hi {patient_name}, this is a reminder of your appointment on {date} at {time}.'
+        )
+
+        smtp_password_enc = read_app_setting(cur, 'reminder_smtp_password_enc', '')
+        smtp_cfg = None
+        if smtp_password_enc and read_app_setting(cur, 'reminder_smtp_host', ''):
+            smtp_cfg = {
+                'host': read_app_setting(cur, 'reminder_smtp_host', ''),
+                'port': int(read_app_setting(cur, 'reminder_smtp_port', '587')),
+                'user': read_app_setting(cur, 'reminder_smtp_user', ''),
+                'password': reminder_crypto.decrypt(smtp_password_enc),
+            }
+
+        sms_api_key_enc = read_app_setting(cur, 'reminder_sms_api_key_enc', '')
+        sms_api_secret_enc = read_app_setting(cur, 'reminder_sms_api_secret_enc', '')
+        sms_cfg = None
+        # Require key + secret + from_number all present. A missing secret
+        # must never fall back to re-using the API key as the secret (that
+        # would silently send Twilio a wrong credential pair instead of
+        # just not sending SMS) -- treat "secret not set yet" as "SMS not
+        # configured", same as a missing key or from_number.
+        if sms_api_key_enc and sms_api_secret_enc and read_app_setting(cur, 'reminder_sms_from_number', ''):
+            sms_cfg = {
+                'provider': read_app_setting(cur, 'reminder_sms_provider', 'twilio'),
+                'api_key': reminder_crypto.decrypt(sms_api_key_enc),
+                'api_secret': reminder_crypto.decrypt(sms_api_secret_enc),
+                'from_number': read_app_setting(cur, 'reminder_sms_from_number', ''),
+            }
+
+        if smtp_cfg is None and sms_cfg is None:
+            return
+
+        due = reminder_dispatch.find_due_appointments(cur, now_utc, lead_hours, clinic_tz)
+        for appt in due:
+            message = reminder_dispatch.render_template(template, appt['patient_name'], appt['appointment_date'])
+
+            if smtp_cfg and appt['patient_email'] and not reminder_dispatch.already_sent(cur, appt['id'], 'email'):
+                try:
+                    reminder_channels.send_email(appt['patient_email'], 'Appointment reminder', message, smtp_cfg)
+                    reminder_dispatch.log_reminder(cur, appt['id'], 'email', 'sent')
+                except reminder_channels.ReminderSendError as exc:
+                    reminder_dispatch.log_reminder(cur, appt['id'], 'email', 'failed', str(exc))
+
+            if sms_cfg and appt['patient_phone'] and not reminder_dispatch.already_sent(cur, appt['id'], 'sms'):
+                try:
+                    reminder_channels.send_sms(appt['patient_phone'], message, sms_cfg)
+                    reminder_dispatch.log_reminder(cur, appt['id'], 'sms', 'sent')
+                except reminder_channels.ReminderSendError as exc:
+                    reminder_dispatch.log_reminder(cur, appt['id'], 'sms', 'failed', str(exc))
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reminder_dispatch_loop():
+    """Background worker (cloud node only): every REMINDER_INTERVAL_MINUTES,
+    dispatch due reminders for every active clinic. Mirrors _backup_loop's
+    shape. A single clinic's failure (locked DB, bad creds) is caught and
+    logged so it never stops the others in the same cycle."""
+    import time
+
+    time.sleep(8)
+    while True:
+        try:
+            master = sqlite3.connect(MASTER_DB_PATH)
+            clinic_ids = [row[0] for row in master.execute('SELECT id FROM clinics WHERE active = 1')]
+            master.close()
+        except sqlite3.Error as exc:
+            print(f'⚠️ reminder loop: could not read clinics list: {exc}')
+            clinic_ids = []
+
+        now_utc = datetime.now(timezone.utc)
+        for clinic_id in clinic_ids:
+            try:
+                _reminder_dispatch_one_clinic(_clinic_db_path(clinic_id), now_utc)
+            except Exception as exc:  # noqa: BLE001 - one clinic's failure must not stop the others
+                print(f'⚠️ reminder loop: clinic {clinic_id} failed: {exc}')
+
+        time.sleep(max(1.0, REMINDER_INTERVAL_MINUTES) * 60)
+
+
 # ── Cloud sync (the clinic's local server ⇄ the cloud node) ─────────────────
 try:
     CLOUD_SYNC_INTERVAL_MINUTES = max(1.0, float(os.environ.get('CLINIC_CLOUD_SYNC_INTERVAL_MINUTES', '15')))
 except ValueError:
     CLOUD_SYNC_INTERVAL_MINUTES = 15.0
+
+try:
+    REMINDER_INTERVAL_MINUTES = max(1.0, float(os.environ.get('CLINIC_REMINDER_INTERVAL_MINUTES', '10')))
+except ValueError:
+    REMINDER_INTERVAL_MINUTES = 10.0
 
 try:
     LICENSE_RECHECK_HOURS = float(os.environ.get('CLINIC_LICENSE_RECHECK_HOURS', '24') or 24)
@@ -9079,6 +9187,12 @@ if __name__ == '__main__':
     )
     if bt_sync_on:
         threading.Thread(target=bt_sync_server, daemon=True).start()
+
+    # Reminder dispatch — cloud node only (see design spec Decision 2): the
+    # desktop process never runs this, only the multi-tenant cloud process
+    # (CLINIC_CLOUD_MODE=1) does, since it's the only always-on component.
+    if CLOUD_MODE:
+        threading.Thread(target=reminder_dispatch_loop, daemon=True).start()
 
     print("\n✅ System ready!")
     print(f'🌐 Opening browser at http://127.0.0.1:{port}')
