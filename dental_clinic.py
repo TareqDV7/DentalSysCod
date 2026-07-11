@@ -4384,16 +4384,40 @@ def reports_weekly():
     cursor.execute('SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
     lab_expenses = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
-    clinic_gross_profit = cursor.fetchone()[0]
-
     cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
     expenses_paid = cursor.fetchone()[0]
-    
+
     cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
     expenses_postponed = cursor.fetchone()[0]
-    
+
     expenses_total = float(expenses_paid or 0) + float(expenses_postponed or 0)
+
+    # Unified gross profit -- see Task 1's identical comment/rationale.
+    cursor.execute('''
+        SELECT COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0)
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?
+    ''', (start_str, end_str))
+    followup_net_charge = float(cursor.fetchone()[0] or 0)
+
+    cursor.execute('''
+        SELECT COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
+        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?
+    ''', (start_str, end_str))
+    billing_net_charge = float(cursor.fetchone()[0] or 0)
+
+    # See Task 1's identical comment: excludes the auto-mirrored lab_expense
+    # rows (source_type='followup') already counted via `lab_expenses` above,
+    # so the same cost isn't subtracted twice. expenses_total (the display
+    # fields) is untouched.
+    cursor.execute('''
+        SELECT COALESCE(SUM(amount), 0) FROM expenses
+        WHERE payment_status IN ('paid', 'postponed')
+        AND COALESCE(source_type, '') != 'followup'
+        AND date(expense_date) BETWEEN ? AND ?
+    ''', (start_str, end_str))
+    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+
+    clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
     cursor.execute('SELECT COUNT(*) FROM treatment_plans WHERE date(start_date) BETWEEN ? AND ?', (start_str, end_str))
     plans_count = cursor.fetchone()[0]
@@ -4428,7 +4452,7 @@ def reports_weekly():
         'expenses': expenses_total,
         'expenses_paid': float(expenses_paid or 0),
         'expenses_postponed': float(expenses_postponed or 0),
-        'profit': float(revenue or 0) - expenses_total,
+        'profit': float(clinic_gross_profit or 0),
         'treatment_plans': plans_count,
         'invoice_count': invoice_count,
         'session_count': session_count,

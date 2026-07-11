@@ -103,3 +103,37 @@ def test_summary_profit_and_clinic_gross_profit_always_match(client):
     r = client.get(f'/api/reports/summary?start_date={DATE_RANGE[0]}&end_date={DATE_RANGE[1]}')
     payload = r.get_json()
     assert payload['clinic_gross_profit'] == payload['profit'], payload
+
+
+import datetime
+
+
+def _monday_of_this_week():
+    today = datetime.date.today()
+    return today - datetime.timedelta(days=today.weekday())
+
+
+def test_weekly_gross_profit_includes_billing_revenue(client):
+    monday = _monday_of_this_week()
+    pid = _patient()
+    _billing(client, pid, subtotal=500, discount=50, paid_amount=450)  # created_at = now, falls in this week
+
+    r = client.get(f'/api/reports/weekly?week_start={monday.isoformat()}')
+    payload = r.get_json()
+    assert payload['clinic_gross_profit'] == 450, payload
+    assert payload['profit'] == 450, payload
+
+
+def test_weekly_gross_profit_combines_followup_and_billing(client):
+    monday = _monday_of_this_week()
+    followup_date = monday + datetime.timedelta(days=2)  # Wednesday of this week
+    pid = _patient()
+    _followup(client, pid, price=300, discount=20, lab_expense=30, payment=250,
+              date=followup_date.strftime('%d/%m/%Y'))
+    _billing(client, pid, subtotal=500, discount=50, paid_amount=450)
+
+    r = client.get(f'/api/reports/weekly?week_start={monday.isoformat()}')
+    payload = r.get_json()
+    # followup: 300 - 20 - 30 = 250. billing: 500 - 50 = 450. total = 700.
+    assert payload['clinic_gross_profit'] == 700, payload
+    assert payload['profit'] == 700, payload
