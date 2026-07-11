@@ -2211,7 +2211,7 @@ _AUTH_REQUIRED_EXACT = {'/', '/api/backup', '/api/backup-file', '/api/bt/status'
                         '/api/data/duplicate-patients', '/api/data/merge-patients',
                         '/api/data/import-patients/preview',
                         '/api/data/import-patients/commit',
-                        '/api/branding', '/api/posts'}
+                        '/api/branding', '/api/posts', '/api/reminders/settings'}
 _AUTH_REQUIRED_PREFIXES = ('/invoice/', '/api/branding/', '/api/posts/', '/api/inventory/')
 
 # Set to True briefly during /api/data/replace to block concurrent API calls.
@@ -2327,6 +2327,7 @@ _PERMISSION_RULES = (
     # Catalog editing (procedures/tooth-conditions) and clinic-wide settings.
     (frozenset({'POST', 'PUT', 'DELETE'}), r'^/api/(treatment-procedures|tooth-conditions)(/.*)?$', 'settings.manage'),
     (frozenset({'PUT'}), r'^/api/branding$', 'settings.manage'),
+    (frozenset({'PUT'}), r'^/api/reminders/settings$', 'settings.manage'),
     (frozenset({'POST'}), r'^/api/clinic-settings$', 'settings.manage'),
     (frozenset({'POST'}), r'^/api/bt/configure$', 'settings.manage'),
     (frozenset({'GET'}), r'^/api/audit-logs$', 'settings.manage'),
@@ -5430,6 +5431,63 @@ def branding():
                      ('default_theme', 'post_default_theme')):
         if key in data and data[key] is not None:
             write_app_setting(cursor, col, str(data[key]))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/reminders/settings', methods=['GET', 'PUT'])
+def reminder_settings():
+    import reminder_crypto
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if request.method == 'GET':
+        smtp_password_enc = read_app_setting(cursor, 'reminder_smtp_password_enc', '')
+        sms_api_key_enc = read_app_setting(cursor, 'reminder_sms_api_key_enc', '')
+        sms_api_secret_enc = read_app_setting(cursor, 'reminder_sms_api_secret_enc', '')
+        out = {
+            'enabled': read_app_setting(cursor, 'reminders_enabled', '0') == '1',
+            'lead_hours': int(read_app_setting(cursor, 'reminder_lead_hours', '24')),
+            'message_template': read_app_setting(
+                cursor, 'reminder_message_template',
+                'Hi {patient_name}, this is a reminder of your appointment on {date} at {time}.'
+            ),
+            'clinic_timezone': read_app_setting(cursor, 'clinic_timezone', DEFAULT_CLINIC_TIMEZONE),
+            'smtp_host': read_app_setting(cursor, 'reminder_smtp_host', ''),
+            'smtp_port': int(read_app_setting(cursor, 'reminder_smtp_port', '587')),
+            'smtp_user': read_app_setting(cursor, 'reminder_smtp_user', ''),
+            'smtp_password_set': bool(smtp_password_enc),
+            'sms_provider': read_app_setting(cursor, 'reminder_sms_provider', 'twilio'),
+            'sms_from_number': read_app_setting(cursor, 'reminder_sms_from_number', ''),
+            'sms_api_key_set': bool(sms_api_key_enc),
+            'sms_api_secret_set': bool(sms_api_secret_enc),
+        }
+        conn.close()
+        return jsonify(out)
+
+    data = request.get_json(silent=True) or {}
+    plain_fields = (
+        ('enabled', 'reminders_enabled', lambda v: '1' if v else '0'),
+        ('lead_hours', 'reminder_lead_hours', str),
+        ('message_template', 'reminder_message_template', str),
+        ('clinic_timezone', 'clinic_timezone', str),
+        ('smtp_host', 'reminder_smtp_host', str),
+        ('smtp_port', 'reminder_smtp_port', str),
+        ('smtp_user', 'reminder_smtp_user', str),
+        ('sms_provider', 'reminder_sms_provider', str),
+        ('sms_from_number', 'reminder_sms_from_number', str),
+    )
+    for key, setting_key, coerce in plain_fields:
+        if key in data and data[key] is not None:
+            write_app_setting(cursor, setting_key, coerce(data[key]))
+
+    if data.get('smtp_password'):
+        write_app_setting(cursor, 'reminder_smtp_password_enc', reminder_crypto.encrypt(str(data['smtp_password'])))
+    if data.get('sms_api_key'):
+        write_app_setting(cursor, 'reminder_sms_api_key_enc', reminder_crypto.encrypt(str(data['sms_api_key'])))
+    if data.get('sms_api_secret'):
+        write_app_setting(cursor, 'reminder_sms_api_secret_enc', reminder_crypto.encrypt(str(data['sms_api_secret'])))
+
     conn.commit()
     conn.close()
     return jsonify({'success': True})
