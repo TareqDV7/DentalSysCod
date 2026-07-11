@@ -67,6 +67,21 @@ class ReportService {
 
   ReportService(this._db, this._api);
 
+  /// Unified gross-profit formula -- see
+  /// docs/superpowers/specs/2026-07-11-unified-gross-profit-design.md.
+  /// Charge-based (net-of-discount price/subtotal, not cash-collected),
+  /// across both the follow-up sheet and billing, minus lab expense and
+  /// general clinic expenses. Pure and static so it can be tested without a
+  /// database, and so the desktop and offline-fallback formulas can never
+  /// silently drift apart again.
+  static double computeProfit({
+    required double followupNetCharge,
+    required double billingNetCharge,
+    required double labExpense,
+    required double expenses,
+  }) =>
+      followupNetCharge + billingNetCharge - labExpense - expenses;
+
   Future<WeeklyReport?> getWeeklyReport(DateTime weekStart) async {
     try {
       final start = weekStart.toIso8601String().substring(0, 10);
@@ -108,24 +123,44 @@ class ReportService {
         .toIso8601String()
         .substring(0, 10);
 
-    final visitRows = await db.rawQuery(
-        'SELECT COUNT(*) as cnt, COALESCE(SUM(price),0) as rev, COALESCE(SUM(lab_expense),0) as lab FROM visits WHERE visit_date >= ? AND visit_date <= ?',
+    final followupRows = await db.rawQuery(
+        'SELECT COUNT(*) as cnt, '
+        'COALESCE(SUM(COALESCE(price,0) - COALESCE(discount,0)),0) as net_charge, '
+        'COALESCE(SUM(lab_expense),0) as lab '
+        'FROM followups WHERE followup_date >= ? AND followup_date <= ?',
         [start, end]);
+    final billingRows = await db.rawQuery(
+        'SELECT COALESCE(SUM(COALESCE(subtotal,0) - COALESCE(discount,0)),0) as net_charge '
+        'FROM billing_records WHERE payment_date >= ? AND payment_date <= ?',
+        [start, end]);
+    // Lab-requiring follow-ups auto-mirror their lab_expense into `expenses`
+    // (source_type='followup', synced down from the desktop's identical
+    // mechanism) so it shows up as a real payable. That's already counted
+    // via followupRows' `lab` sum above -- excluding source_type='followup'
+    // here avoids subtracting the same cost twice.
     final expRows = await db.rawQuery(
-        'SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE expense_date >= ? AND expense_date <= ?',
+        'SELECT COALESCE(SUM(amount),0) as total FROM expenses '
+        "WHERE expense_date >= ? AND expense_date <= ? AND status IN ('paid','postponed') "
+        "AND (source_type IS NULL OR source_type != 'followup')",
         [start, end]);
 
-    final visits = (visitRows.first['cnt'] as int?) ?? 0;
-    final revenue = _d(visitRows.first['rev']);
-    final labExp = _d(visitRows.first['lab']);
+    final visits = (followupRows.first['cnt'] as int?) ?? 0;
+    final followupNetCharge = _d(followupRows.first['net_charge']);
+    final billingNetCharge = _d(billingRows.first['net_charge']);
+    final labExp = _d(followupRows.first['lab']);
     final expenses = _d(expRows.first['total']);
-    final profit = revenue - expenses - labExp;
+    final profit = computeProfit(
+      followupNetCharge: followupNetCharge,
+      billingNetCharge: billingNetCharge,
+      labExpense: labExp,
+      expenses: expenses,
+    );
 
     return WeeklyReport(
       weekStart: start,
       weekEnd: end,
       visits: visits,
-      revenue: revenue,
+      revenue: followupNetCharge + billingNetCharge,
       expenses: expenses,
       labExpenses: labExp,
       profit: profit,
@@ -137,23 +172,42 @@ class ReportService {
     final prefix =
         '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}';
 
-    final visitRows = await db.rawQuery(
-        'SELECT COUNT(*) as cnt, COALESCE(SUM(price),0) as rev FROM visits WHERE visit_date LIKE ?',
+    final followupRows = await db.rawQuery(
+        'SELECT COUNT(*) as cnt, '
+        'COALESCE(SUM(COALESCE(price,0) - COALESCE(discount,0)),0) as net_charge, '
+        'COALESCE(SUM(lab_expense),0) as lab '
+        'FROM followups WHERE followup_date LIKE ?',
         ['$prefix%']);
+    final billingRows = await db.rawQuery(
+        'SELECT COALESCE(SUM(COALESCE(subtotal,0) - COALESCE(discount,0)),0) as net_charge '
+        'FROM billing_records WHERE payment_date LIKE ?',
+        ['$prefix%']);
+    // See _localWeeklyReport's identical comment: excludes the auto-mirrored
+    // lab_expense rows already counted via followupRows' `lab` sum above.
     final expRows = await db.rawQuery(
-        'SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE expense_date LIKE ?',
+        'SELECT COALESCE(SUM(amount),0) as total FROM expenses '
+        "WHERE expense_date LIKE ? AND status IN ('paid','postponed') "
+        "AND (source_type IS NULL OR source_type != 'followup')",
         ['$prefix%']);
 
-    final visits = (visitRows.first['cnt'] as int?) ?? 0;
-    final revenue = _d(visitRows.first['rev']);
+    final visits = (followupRows.first['cnt'] as int?) ?? 0;
+    final followupNetCharge = _d(followupRows.first['net_charge']);
+    final billingNetCharge = _d(billingRows.first['net_charge']);
+    final labExp = _d(followupRows.first['lab']);
     final expenses = _d(expRows.first['total']);
+    final profit = computeProfit(
+      followupNetCharge: followupNetCharge,
+      billingNetCharge: billingNetCharge,
+      labExpense: labExp,
+      expenses: expenses,
+    );
 
     return MonthlyReport(
       month: prefix,
       visits: visits,
-      revenue: revenue,
+      revenue: followupNetCharge + billingNetCharge,
       expenses: expenses,
-      profit: revenue - expenses,
+      profit: profit,
     );
   }
 }
