@@ -3157,6 +3157,63 @@ HTML_TEMPLATE = '''
                     <button class="btn btn-primary" type="button" onclick="brandingSave()" data-i18n="ps_branding_save">Save branding</button>
                 </div>
 
+                <h3 class="settings-group" data-en="Appointment Reminders" data-ar="تذكيرات المواعيد">Appointment Reminders</h3>
+                <div class="section-card" id="reminders-card" style="max-width:560px;margin-bottom:18px;">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="reminders-enabled">
+                            <span data-i18n="reminders_enabled_label">Send appointment reminders</span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_lead_hours">Hours before appointment</label>
+                        <input type="number" id="reminder-lead-hours" min="1" max="168" value="24">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_timezone">Clinic timezone (IANA name)</label>
+                        <input type="text" id="reminder-clinic-timezone" placeholder="Asia/Dubai">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_template">Message template</label>
+                        <textarea id="reminder-message-template" rows="2" placeholder="Hi {patient_name}, this is a reminder of your appointment on {date} at {time}."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_smtp_host">SMTP host</label>
+                        <input type="text" id="reminder-smtp-host" autocomplete="off" placeholder="smtp.example.com">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_smtp_port">SMTP port</label>
+                        <input type="number" id="reminder-smtp-port" value="587">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_smtp_user">SMTP username</label>
+                        <input type="text" id="reminder-smtp-user" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_smtp_password">SMTP password <span id="reminder-smtp-password-status" class="muted"></span></label>
+                        <input type="password" id="reminder-smtp-password" autocomplete="off" placeholder="•••••••• (leave blank to keep)">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_sms_provider">SMS provider</label>
+                        <select id="reminder-sms-provider">
+                            <option value="twilio">Twilio</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_sms_from">SMS sender number</label>
+                        <input type="text" id="reminder-sms-from-number" autocomplete="off" placeholder="+15551234567">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_sms_key">SMS API key <span id="reminder-sms-key-status" class="muted"></span></label>
+                        <input type="password" id="reminder-sms-api-key" autocomplete="off" placeholder="•••••••• (leave blank to keep)">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="reminders_sms_secret">SMS API secret</label>
+                        <input type="password" id="reminder-sms-api-secret" autocomplete="off" placeholder="•••••••• (leave blank to keep)">
+                    </div>
+                    <button class="btn btn-primary" type="button" onclick="reminderSettingsSave()" data-i18n="reminders_save">Save reminder settings</button>
+                </div>
+
                 <h3 class="settings-group" data-en="License" data-ar="الترخيص">License</h3>
                 <div class="section-card" id="license-card" style="max-width:460px;margin-bottom:18px;">
                     <div class="license-preview__grid" id="license-card-grid"></div>
@@ -4102,6 +4159,22 @@ HTML_TEMPLATE = '''
                 ps_branding_default_theme: 'Default post theme',
                 ps_branding_save: 'Save branding',
                 ps_branding_saved: 'Branding saved',
+                reminders_enabled_label: 'Send appointment reminders',
+                reminders_lead_hours: 'Hours before appointment',
+                reminders_timezone: 'Clinic timezone (IANA name)',
+                reminders_template: 'Message template',
+                reminders_smtp_host: 'SMTP host',
+                reminders_smtp_port: 'SMTP port',
+                reminders_smtp_user: 'SMTP username',
+                reminders_smtp_password: 'SMTP password',
+                reminders_sms_provider: 'SMS provider',
+                reminders_sms_from: 'SMS sender number',
+                reminders_sms_key: 'SMS API key',
+                reminders_sms_secret: 'SMS API secret',
+                reminders_save: 'Save reminder settings',
+                reminders_set: '(set)',
+                reminders_saved: 'Reminder settings saved',
+                reminders_save_failed: 'Could not save reminder settings: ',
                 ps_branding_save_failed: 'Could not save branding: ',
                 depo_title: 'Depo',
                 depo_summary: 'Stock items, on-hand levels, and low-stock alerts.',
@@ -4635,6 +4708,22 @@ HTML_TEMPLATE = '''
                 ps_branding_default_theme: 'ثيم المنشور الافتراضي',
                 ps_branding_save: 'حفظ العلامة التجارية',
                 ps_branding_saved: 'تم حفظ العلامة التجارية',
+                reminders_enabled_label: 'إرسال تذكيرات المواعيد',
+                reminders_lead_hours: 'عدد الساعات قبل الموعد',
+                reminders_timezone: 'المنطقة الزمنية للعيادة (اسم IANA)',
+                reminders_template: 'نص الرسالة',
+                reminders_smtp_host: 'خادم SMTP',
+                reminders_smtp_port: 'منفذ SMTP',
+                reminders_smtp_user: 'اسم مستخدم SMTP',
+                reminders_smtp_password: 'كلمة مرور SMTP',
+                reminders_sms_provider: 'مزود الرسائل النصية',
+                reminders_sms_from: 'رقم مرسل الرسائل النصية',
+                reminders_sms_key: 'مفتاح API للرسائل النصية',
+                reminders_sms_secret: 'سر API للرسائل النصية',
+                reminders_save: 'حفظ إعدادات التذكير',
+                reminders_set: '(محفوظ)',
+                reminders_saved: 'تم حفظ إعدادات التذكير',
+                reminders_save_failed: 'تعذر حفظ إعدادات التذكير: ',
                 ps_branding_save_failed: 'تعذّر حفظ العلامة التجارية: ',
                 depo_title: 'مخزن',
                 depo_summary: 'مواد المخزون ومستويات التوفر وتنبيهات النقص.',
@@ -6823,6 +6912,7 @@ HTML_TEMPLATE = '''
             bindBluetoothSyncControls();
             loadLicenseCard();
             loadBranding();
+            loadReminderSettings();
             loadStaffAccounts();
         }
 
@@ -6857,6 +6947,63 @@ HTML_TEMPLATE = '''
                 showToast(t('ps_branding_saved', 'Branding saved'), 'success');
             } catch (err) {
                 showToast(t('ps_branding_save_failed', 'Could not save branding: ') + err, 'error');
+            }
+        }
+
+        async function loadReminderSettings() {
+            try {
+                const data = await fetch('/api/reminders/settings').then(function(r) { return r.json(); });
+                const set = function(id, val) { const el = document.getElementById(id); if (el) el.value = val; };
+                const enabledEl = document.getElementById('reminders-enabled');
+                if (enabledEl) enabledEl.checked = !!data.enabled;
+                set('reminder-lead-hours', data.lead_hours);
+                set('reminder-clinic-timezone', data.clinic_timezone || '');
+                set('reminder-message-template', data.message_template || '');
+                set('reminder-smtp-host', data.smtp_host || '');
+                set('reminder-smtp-port', data.smtp_port);
+                set('reminder-smtp-user', data.smtp_user || '');
+                set('reminder-sms-provider', data.sms_provider || 'twilio');
+                set('reminder-sms-from-number', data.sms_from_number || '');
+                const smtpStatus = document.getElementById('reminder-smtp-password-status');
+                if (smtpStatus) smtpStatus.textContent = data.smtp_password_set ? t('reminders_set', '(set)') : '';
+                const smsStatus = document.getElementById('reminder-sms-key-status');
+                if (smsStatus) smsStatus.textContent = data.sms_api_key_set ? t('reminders_set', '(set)') : '';
+            } catch (_) {}
+        }
+
+        async function reminderSettingsSave() {
+            const val = function(id) { const el = document.getElementById(id); return el ? el.value : ''; };
+            const payload = {
+                enabled: !!(document.getElementById('reminders-enabled') || {}).checked,
+                lead_hours: parseInt(val('reminder-lead-hours'), 10) || 24,
+                clinic_timezone: val('reminder-clinic-timezone').trim(),
+                message_template: val('reminder-message-template'),
+                smtp_host: val('reminder-smtp-host').trim(),
+                smtp_port: parseInt(val('reminder-smtp-port'), 10) || 587,
+                smtp_user: val('reminder-smtp-user').trim(),
+                sms_provider: val('reminder-sms-provider'),
+                sms_from_number: val('reminder-sms-from-number').trim(),
+            };
+            const smtpPassword = val('reminder-smtp-password');
+            if (smtpPassword) payload.smtp_password = smtpPassword;
+            const smsKey = val('reminder-sms-api-key');
+            if (smsKey) payload.sms_api_key = smsKey;
+            const smsSecret = val('reminder-sms-api-secret');
+            if (smsSecret) payload.sms_api_secret = smsSecret;
+            try {
+                const res = await fetch('/api/reminders/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error(res.status);
+                document.getElementById('reminder-smtp-password').value = '';
+                document.getElementById('reminder-sms-api-key').value = '';
+                document.getElementById('reminder-sms-api-secret').value = '';
+                showToast(t('reminders_saved', 'Reminder settings saved'), 'success');
+                loadReminderSettings();
+            } catch (err) {
+                showToast(t('reminders_save_failed', 'Could not save reminder settings: ') + err, 'error');
             }
         }
 
