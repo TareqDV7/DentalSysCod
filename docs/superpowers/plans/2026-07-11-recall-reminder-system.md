@@ -37,8 +37,6 @@ Create `tests/test_reminders_schema.py`:
 ```python
 """reminders_log table is created by init_database() and enforces the
 appointment_id FK the dispatch loop's idempotency check relies on."""
-import sqlite3
-
 import pytest
 
 import dental_clinic
@@ -53,14 +51,18 @@ def db(tmp_path, monkeypatch):
 
 
 def test_reminders_log_table_exists_with_expected_columns(db):
-    conn = sqlite3.connect(db)
+    # init_database() writes via get_db_connection(), which is SQLCipher-
+    # encrypted in desktop mode -- a plain sqlite3.connect() can't read it
+    # back, so this must go through the same connection helper (matches
+    # tests/test_permissions.py's established convention).
+    conn = dental_clinic.get_db_connection()
     cols = {row[1] for row in conn.execute('PRAGMA table_info(reminders_log)')}
     conn.close()
     assert cols == {'id', 'appointment_id', 'channel', 'status', 'error_detail', 'sent_at'}
 
 
 def test_reminders_log_insert_roundtrip(db):
-    conn = sqlite3.connect(db)
+    conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO patients (first_name, last_name, phone) VALUES ('A', 'B', '0599')"
@@ -273,7 +275,6 @@ Create `tests/test_reminder_dispatch.py`:
 whether a reminder was already sent (idempotency), and message rendering.
 No Flask, no threading, no network — cursor-level functions only, mirrors
 the style of inventory.py/patient_dedupe.py/permissions.py."""
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -287,8 +288,11 @@ def db(tmp_path, monkeypatch):
     test_db = tmp_path / 'dispatch_test.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(test_db))
     dental_clinic.init_database()
-    conn = sqlite3.connect(str(test_db))
-    conn.row_factory = sqlite3.Row
+    # init_database() writes via get_db_connection(), which is SQLCipher-
+    # encrypted in desktop mode -- a plain sqlite3.connect() can't read it
+    # back, so reads must go through the same connection helper (matches
+    # tests/test_permissions.py's established convention).
+    conn = dental_clinic.get_db_connection(with_row_factory=True)
     yield conn
     conn.close()
 
@@ -344,29 +348,16 @@ def test_excludes_cancelled_appointment(db):
     assert due == []
 
 
-def test_clinic_timezone_shifts_the_window():
+def test_clinic_timezone_shifts_the_window(db):
     # Clinic in Asia/Dubai (UTC+4): an appointment at 12:00 Dubai-local time is
     # 08:00 UTC -- 2 hours before NOW_UTC (10:00 UTC), so it's already past,
     # not due, even though the raw string '12:00' looks 2h in the future.
-    import tempfile, os
-    with tempfile.TemporaryDirectory() as d:
-        test_db = os.path.join(d, 'tz_test.db')
-        import dental_clinic as dc
-        orig = dc.DB_NAME
-        dc.DB_NAME = test_db
-        try:
-            dc.init_database()
-        finally:
-            dc.DB_NAME = orig
-        conn = sqlite3.connect(test_db)
-        conn.row_factory = sqlite3.Row
-        pid = _patient(conn)
-        _appt(conn, pid, '2026-08-01 12:00:00')
-        due = reminder_dispatch.find_due_appointments(
-            conn, NOW_UTC, lead_hours=24, clinic_tz_name='Asia/Dubai'
-        )
-        conn.close()
-        assert due == []
+    pid = _patient(db)
+    _appt(db, pid, '2026-08-01 12:00:00')
+    due = reminder_dispatch.find_due_appointments(
+        db, NOW_UTC, lead_hours=24, clinic_tz_name='Asia/Dubai'
+    )
+    assert due == []
 
 
 def test_already_sent_true_after_log_reminder(db):
@@ -887,6 +878,15 @@ import reminder_crypto
 @pytest.fixture()
 def clinic_db(tmp_path, monkeypatch):
     monkeypatch.setenv('CLINIC_CLOUD_REMINDER_KEY', Fernet.generate_key().decode())
+    # _reminder_dispatch_one_clinic always opens its clinic DB with a plain
+    # sqlite3.connect() (see Global Constraints -- cloud-side per-clinic DBs
+    # are plaintext by design). init_database() itself writes through
+    # get_db_connection(), which SQLCipher-encrypts unless CLOUD_MODE is on
+    # -- patch CLOUD_MODE here so the fixture's DB is actually plaintext,
+    # matching what the code under test expects to read (test_cloud_mode.py
+    # uses this same monkeypatch.setattr pattern, not an env var, since
+    # dental_clinic.CLOUD_MODE is evaluated once at import time).
+    monkeypatch.setattr(dental_clinic, 'CLOUD_MODE', True)
     test_db = tmp_path / 'clinic_1.db'
     monkeypatch.setattr(dental_clinic, 'DB_NAME', str(test_db))
     dental_clinic.init_database()
