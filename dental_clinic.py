@@ -671,6 +671,9 @@ def _naive_utc_now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+DEFAULT_CLINIC_TIMEZONE = 'UTC'  # used only if the clinic hasn't set clinic_timezone yet
+
+
 def utc_now_iso():
     return _naive_utc_now().replace(microsecond=0).isoformat() + 'Z'
 
@@ -868,6 +871,18 @@ def init_database():
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (patient_id) REFERENCES patients (id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS reminders_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            appointment_id INTEGER NOT NULL,
+            channel TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_detail TEXT,
+            sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (appointment_id) REFERENCES appointments (id)
         )
     ''')
 
