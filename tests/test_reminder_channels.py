@@ -52,3 +52,17 @@ def test_send_sms_raises_reminder_send_error_on_http_error():
 def test_send_sms_raises_on_unknown_provider():
     with pytest.raises(reminder_channels.ReminderSendError):
         reminder_channels.send_sms('+15559876543', 'body', {**SMS_CFG, 'provider': 'unknown_co'})
+
+
+def test_send_email_raises_reminder_send_error_on_missing_config_key():
+    # A partially-filled Settings row (e.g. host saved but user not yet) must
+    # produce a logged 'failed' reminder, not an uncaught KeyError crash.
+    incomplete_cfg = {'host': 'smtp.example.com', 'port': 587}  # missing user/password
+    with pytest.raises(reminder_channels.ReminderSendError):
+        reminder_channels.send_email('patient@example.com', 'Reminder', 'body', incomplete_cfg)
+
+
+def test_send_sms_raises_reminder_send_error_on_missing_config_key():
+    incomplete_cfg = {'provider': 'twilio', 'api_key': 'ACxxxx'}  # missing api_secret/from_number
+    with pytest.raises(reminder_channels.ReminderSendError):
+        reminder_channels.send_sms('+15559876543', 'body', incomplete_cfg)
