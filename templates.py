@@ -2759,7 +2759,6 @@ HTML_TEMPLATE = '''
                     <div class="stat-card"><h3 id="report-expenses-paid">₪ 0</h3><p data-i18n="expenses_paid">Expenses Paid</p></div>
                     <div class="stat-card"><h3 id="report-expenses-postponed">₪ 0</h3><p data-i18n="expenses_postponed">Expenses Postponed</p></div>
                     <div class="stat-card"><h3 id="report-expenses">₪ 0</h3><p data-i18n="expenses">Expenses</p></div>
-                    <div class="stat-card"><h3 id="report-profit">₪ 0</h3><p data-i18n="profit">Profit</p></div>
                 </div>
             </div>
 
@@ -6828,7 +6827,6 @@ HTML_TEMPLATE = '''
             setText('report-expenses-paid', money(data.expenses_paid));
             setText('report-expenses-postponed', money(data.expenses_postponed));
             setText('report-expenses', money(data.expenses));
-            setText('report-profit', money(data.profit));
         }
 
         async function loadWeeklyReportFromPicker() {
