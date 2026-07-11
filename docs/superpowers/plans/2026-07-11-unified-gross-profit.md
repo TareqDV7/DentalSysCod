@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Spec: `docs/superpowers/specs/2026-07-11-unified-gross-profit-design.md`, all Decisions.
-- **Formula (Decision 2):** `gross_profit = (Σ followup.price + Σ billing.subtotal) − (Σ followup.discount + Σ billing.discount) − Σ followup.lab_expense − expenses_total`. Charge-based, not cash-collected-based.
+- **Formula (Decision 2):** `gross_profit = (Σ followup.price + Σ billing.subtotal) − (Σ followup.discount + Σ billing.discount) − Σ followup.lab_expense − general_expenses`. Charge-based, not cash-collected-based.
+- **Second finding, not in the spec — discovered while implementing Task 1 (a test failure surfaced it, not a code review):** a lab-requiring follow-up auto-mirrors its `lab_expense` into the `expenses` table as a real payable (`source_type='followup'`, `dental_clinic.py:3376-3392` — pre-existing, unrelated feature). `general_expenses` in the formula above is **not** the same as the existing `expenses_total` field — it must exclude `source_type='followup'` rows, or the same lab cost gets subtracted twice (once via the direct `lab_expense` column, once via its mirrored `expenses` row). The existing `expenses`/`expenses_paid`/`expenses_postponed` response fields (used for their own display cards) are untouched — this exclusion applies ONLY inside the profit calculation. Applies identically to Task 4's mobile fix (local `expenses` table has the same `source_type` column, synced down from desktop).
 - **Cost scope (Decision 1):** discounts + lab_expense + general expenses only. No inventory consumable cost, no new billing cost field.
 - **API contract (Decision 4):** both `clinic_gross_profit` and `profit` JSON keys stay, both return the identical unified value. Never remove either key — `profit` is required by mobile's `WeeklyReport`/`MonthlyReport` Dart models (`report_service.dart:13,24,36,45,52,60`).
 - **Desktop UI (Decision 5):** delete the "Profit" stat-card (`templates.py:2762`, `id="report-profit"`) and its `setText('report-profit', ...)` call (`templates.py:6831`); keep "Clinic Gross Profit" (`templates.py:2757`) as the one visible figure.
@@ -61,11 +62,34 @@ def _patient(name='Gross', last='Profit', phone='0599'):
     return pid
 
 
+def _lab_procedure_id():
+    # lab_expense is only persisted for procedures catalogued as
+    # lab-requiring (dental_clinic.py's followups POST route zeroes it
+    # otherwise via `if not requires_lab: lab_expense = 0`) -- an existing
+    # business rule unrelated to this fix. Any test that wants a non-zero
+    # lab_expense must go through a procedure_id pointing at such a row.
+    conn = dental_clinic.get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM treatment_procedures WHERE name = 'Lab Work Test'")
+    row = cur.fetchone()
+    if row:
+        pid = row[0]
+    else:
+        cur.execute("INSERT INTO treatment_procedures (name, requires_lab) VALUES ('Lab Work Test', 1)")
+        pid = cur.lastrowid
+        conn.commit()
+    conn.close()
+    return pid
+
+
 def _followup(client, pid, *, price, discount=0, lab_expense=0, payment=0, date='15/06/2026'):
-    r = client.post(f'/api/patients/{pid}/followups', json={
+    payload = {
         'followup_date': date, 'treatment_procedure': 'Filling',
         'price': price, 'discount': discount, 'lab_expense': lab_expense, 'payment': payment,
-    })
+    }
+    if lab_expense:
+        payload['procedure_id'] = _lab_procedure_id()
+    r = client.post(f'/api/patients/{pid}/followups', json=payload)
     assert r.status_code == 200, r.get_data(as_text=True)
 
 
@@ -179,7 +203,23 @@ In `dental_clinic.py`, replace the `reports_summary()` route's revenue/profit bl
     ''', bparams)
     billing_net_charge = float(cursor.fetchone()[0] or 0)
 
-    clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - expenses_total
+    # Every lab-requiring follow-up auto-mirrors its lab_expense into the
+    # `expenses` table (source_type='followup', see the followups POST route)
+    # so it shows up as a real payable. expenses_total above (used for the
+    # 'expenses'/'expenses_paid'/'expenses_postponed' display fields) MUST
+    # keep including those rows unchanged. But gross profit already subtracts
+    # lab_expenses directly from patient_followups -- counting the mirrored
+    # expense row too would double-subtract the same cost. Exclude
+    # source_type='followup' from ONLY the general-expenses term used here.
+    clause, params = build_date_clause('expense_date', start_date, end_date)
+    cursor.execute(f'''
+        SELECT COALESCE(SUM(amount), 0) FROM expenses
+        WHERE payment_status IN ('paid', 'postponed')
+        AND COALESCE(source_type, '') != 'followup'{clause}
+    ''', params)
+    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+
+    clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
     clause, params = build_date_clause('start_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM treatment_plans WHERE 1=1{clause}', params)
@@ -310,7 +350,19 @@ In `dental_clinic.py`, re-read the file to find the current `reports_weekly()` f
     ''', (start_str, end_str))
     billing_net_charge = float(cursor.fetchone()[0] or 0)
 
-    clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - expenses_total
+    # See Task 1's identical comment: excludes the auto-mirrored lab_expense
+    # rows (source_type='followup') already counted via `lab_expenses` above,
+    # so the same cost isn't subtracted twice. expenses_total (the display
+    # fields) is untouched.
+    cursor.execute('''
+        SELECT COALESCE(SUM(amount), 0) FROM expenses
+        WHERE payment_status IN ('paid', 'postponed')
+        AND COALESCE(source_type, '') != 'followup'
+        AND date(expense_date) BETWEEN ? AND ?
+    ''', (start_str, end_str))
+    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+
+    clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 ```
 
 And in that same function's final `jsonify({...})` block, change:
@@ -532,9 +584,15 @@ Then replace `_localWeeklyReport` (lines 103-133) with:
         'SELECT COALESCE(SUM(COALESCE(subtotal,0) - COALESCE(discount,0)),0) as net_charge '
         'FROM billing_records WHERE payment_date >= ? AND payment_date <= ?',
         [start, end]);
+    // Lab-requiring follow-ups auto-mirror their lab_expense into `expenses`
+    // (source_type='followup', synced down from the desktop's identical
+    // mechanism) so it shows up as a real payable. That's already counted
+    // via followupRows' `lab` sum above -- excluding source_type='followup'
+    // here avoids subtracting the same cost twice.
     final expRows = await db.rawQuery(
         'SELECT COALESCE(SUM(amount),0) as total FROM expenses '
-        "WHERE expense_date >= ? AND expense_date <= ? AND status IN ('paid','postponed')",
+        "WHERE expense_date >= ? AND expense_date <= ? AND status IN ('paid','postponed') "
+        "AND (source_type IS NULL OR source_type != 'followup')",
         [start, end]);
 
     final visits = (followupRows.first['cnt'] as int?) ?? 0;
@@ -579,9 +637,12 @@ And replace `_localMonthlyReport` (lines 135-158) with:
         'SELECT COALESCE(SUM(COALESCE(subtotal,0) - COALESCE(discount,0)),0) as net_charge '
         'FROM billing_records WHERE payment_date LIKE ?',
         ['$prefix%']);
+    // See _localWeeklyReport's identical comment: excludes the auto-mirrored
+    // lab_expense rows already counted via followupRows' `lab` sum above.
     final expRows = await db.rawQuery(
         'SELECT COALESCE(SUM(amount),0) as total FROM expenses '
-        "WHERE expense_date LIKE ? AND status IN ('paid','postponed')",
+        "WHERE expense_date LIKE ? AND status IN ('paid','postponed') "
+        "AND (source_type IS NULL OR source_type != 'followup')",
         ['$prefix%']);
 
     final visits = (followupRows.first['cnt'] as int?) ?? 0;

@@ -66,7 +66,15 @@ fallback.
    `clinic_profit` formula (`price − discount − lab_expense`) rather than
    introducing a different accounting basis. `expenses_total` (paid + postponed
    from the `expenses` table) is unchanged from today's existing calculation —
-   still date-range-filtered the same way.
+   still date-range-filtered the same way — **except that the term feeding this
+   formula specifically must exclude `source_type='followup'` rows** (found
+   during implementation, not anticipated here): a lab-requiring follow-up
+   already auto-mirrors its `lab_expense` into the `expenses` table as a real
+   payable, so subtracting both the direct `lab_expense` column AND that mirrored
+   `expenses` row would double-count the same cost. The existing
+   `expenses`/`expenses_paid`/`expenses_postponed` API fields (used for their own
+   display cards) are untouched by this exclusion — only the profit formula's
+   internal general-expenses term is filtered.
 
 3. **Surfaces: dashboard tile + Reports tab (both existing surfaces get the fix),
    single number, no cost breakdown.** No new UI element — this replaces what's
