@@ -4277,19 +4277,52 @@ def reports_summary():
     cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
     lab_expenses = cursor.fetchone()[0]
 
-    clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(clinic_profit, COALESCE(price, 0) - COALESCE(discount, 0) - COALESCE(lab_expense, 0))), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
-    clinic_gross_profit = cursor.fetchone()[0]
-
     clause, params = build_date_clause('expense_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND 1=1{clause}', params)
     expenses_paid = cursor.fetchone()[0]
-    
+
     clause, params = build_date_clause('expense_date', start_date, end_date)
     cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND 1=1{clause}', params)
     expenses_postponed = cursor.fetchone()[0]
-    
+
     expenses_total = float(expenses_paid or 0) + float(expenses_postponed or 0)
+
+    # Unified gross profit (see docs/superpowers/specs/2026-07-11-unified-gross-profit-design.md):
+    # charge-based (price/subtotal, not payment), across BOTH ledgers, minus
+    # discounts, lab expense, and general clinic expenses. Charge-based rather
+    # than cash-collected because an unpaid balance shouldn't make completed,
+    # billed work look unprofitable.
+    clause, params = build_date_clause('followup_date', start_date, end_date)
+    cursor.execute(f'''
+        SELECT COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0)
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}
+    ''', params)
+    followup_net_charge = float(cursor.fetchone()[0] or 0)
+
+    bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
+    cursor.execute(f'''
+        SELECT COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
+        FROM billing WHERE 1 = 1{bclause}
+    ''', bparams)
+    billing_net_charge = float(cursor.fetchone()[0] or 0)
+
+    # Every lab-requiring follow-up auto-mirrors its lab_expense into the
+    # `expenses` table (source_type='followup', see the followups POST route)
+    # so it shows up as a real payable. expenses_total below (used for the
+    # 'expenses'/'expenses_paid'/'expenses_postponed' display fields) MUST
+    # keep including those rows unchanged. But gross profit already subtracts
+    # lab_expenses directly from patient_followups -- counting the mirrored
+    # expense row too would double-subtract the same cost. Exclude
+    # source_type='followup' from ONLY the general-expenses term used here.
+    clause, params = build_date_clause('expense_date', start_date, end_date)
+    cursor.execute(f'''
+        SELECT COALESCE(SUM(amount), 0) FROM expenses
+        WHERE payment_status IN ('paid', 'postponed')
+        AND COALESCE(source_type, '') != 'followup'{clause}
+    ''', params)
+    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+
+    clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
     clause, params = build_date_clause('start_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM treatment_plans WHERE 1=1{clause}', params)
@@ -4305,7 +4338,7 @@ def reports_summary():
         'expenses': expenses_total,
         'expenses_paid': float(expenses_paid or 0),
         'expenses_postponed': float(expenses_postponed or 0),
-        'profit': float(revenue or 0) - expenses_total,
+        'profit': float(clinic_gross_profit or 0),
         'treatment_plans': plans_count
     })
 
