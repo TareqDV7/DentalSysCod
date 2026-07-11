@@ -129,6 +129,21 @@ function buildWaveFooter(theme) {
   return svg;
 }
 
+// Unbounded headline/subline text has no natural height limit — long input
+// wraps to as many lines as it needs, which pushes the vertically-centered
+// title box up into the canvas top edge (hard clip) or down into the photo
+// row (panels paint after the title, so overflow is silently hidden behind
+// them, not just clipped). Clamping to a fixed line count keeps the title
+// box height predictable so the fixed titleY/panelRowY layout tokens stay
+// valid regardless of how much text the user types; excess text truncates
+// with an ellipsis instead of disappearing under a panel.
+function clampLines(n) {
+  return {
+    display: '-webkit-box', WebkitLineClamp: String(n), WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  };
+}
+
 function buildTitle(el, theme, W, H) {
   const pos = el.pos || { x: 0.5, y: 0.1 };
   const box = document.createElement('div');
@@ -141,11 +156,11 @@ function buildTitle(el, theme, W, H) {
   head.setAttribute('data-ps-headline', '');
   head.setAttribute('data-ps-el', 'title.headline');
   head.textContent = el.headline ? (el.headline.text || '') : '';
-  setStyle(head, typoStyle({ ...theme.headline, ...el.headline }, head.textContent));
+  setStyle(head, { ...typoStyle({ ...theme.headline, ...el.headline }, head.textContent), ...clampLines(2) });
   const sub = document.createElement('div');
   sub.setAttribute('data-ps-el', 'title.subline');
   sub.textContent = el.subline ? (el.subline.text || '') : '';
-  setStyle(sub, typoStyle({ ...theme.subline, ...el.subline }, sub.textContent));
+  setStyle(sub, { ...typoStyle({ ...theme.subline, ...el.subline }, sub.textContent), ...clampLines(2) });
   box.appendChild(head);
   box.appendChild(sub);
   if (theme.divider && theme.divider.enabled) box.appendChild(buildDivider(theme));

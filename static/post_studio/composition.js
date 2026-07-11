@@ -61,7 +61,12 @@ function computeDefaultPanelSize(next, L, W, H) {
   const strip = next.elements.find((e) => e.id === 'strip');
   const n = (strip && strip.blocks.length) || 1;
   const asp = parseAspect(themeTokens(next.theme).card);
-  const panelW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (n - 1) * L.gap) / n;
+  // Row-fill formula divides available width by block count — fine for n>=2,
+  // but a lone single_feature block would otherwise fill ~88% of the canvas
+  // width (and, via the aspect ratio, height too), physically covering the
+  // title and doctor name. Size a single block as if it were one of two.
+  const rowSlots = Math.max(n, 2);
+  const panelW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (rowSlots - 1) * L.gap) / rowSlots;
   const panelH = L.panelH != null ? L.panelH : panelW * (W / H) * (asp.h / asp.w);
   const labelStyle = themeTokens(next.theme).label;
   return { panelW, panelH, labelStyle };
@@ -134,9 +139,57 @@ export function hasLayout(comp) {
   return !!(title && title.pos);
 }
 
+// True if every block already carries its own panelPos/pillPos (or the strip
+// has no blocks — nothing to migrate).
+export function hasBlockPositions(comp) {
+  const strip = (comp.elements || []).find((e) => e.id === 'strip');
+  if (!strip || !strip.blocks.length) return true;
+  return strip.blocks.every((b) => b.panelPos && b.pillPos);
+}
+
+// Additive-only migration: fills in ONLY missing per-block panelPos/pillPos,
+// WITHOUT touching any block that already has one. addBlock/insertBlock
+// create a block with no position at all — hasLayout only checks the TITLE,
+// so ensureLayout's full-reseed branch never runs once a comp is already
+// laid out, and render.js's `b.panelPos || {x:0,y:0}` fallback would stack
+// the new block at the canvas origin instead of appending it to the row.
+// Appends each missing block right after the current rightmost positioned
+// edge (using that block's OWN panelW, already seeded by seedBlockStyle,
+// which always runs first) rather than recomputing a "centered row of n"
+// from scratch — blocks are added one at a time via the UI, and recomputing
+// a fresh centered-row layout on every single add would leave each
+// previously-added block's un-migrated position stale relative to the new
+// total count, reintroducing the same overlap this migration exists to fix.
+export function seedBlockPositions(comp) {
+  const next = structuredClone(comp);
+  const strip = next.elements.find((e) => e.id === 'strip');
+  if (!strip || !strip.blocks.length) return next;
+  const L = themeLayout(next.theme);
+  const [W, H] = CANVAS_DIMS[next.size] || CANVAS_DIMS.square;
+  const { panelH } = computeDefaultPanelSize(next, L, W, H);
+  const panelY = L.panelRowY != null ? L.panelRowY : 0.5 - panelH / 2;
+  const pillY = L.pillRowY != null ? L.pillRowY : panelY + panelH + L.gap;
+  let rightEdge = null;
+  for (const b of strip.blocks) {
+    if (b.panelPos) {
+      const w = b.panelW != null ? b.panelW : 0.2;
+      rightEdge = Math.max(rightEdge ?? -Infinity, b.panelPos.x + w);
+    }
+  }
+  strip.blocks = strip.blocks.map((b) => {
+    if (b.panelPos && b.pillPos) return b;
+    const w = b.panelW != null ? b.panelW : 0.2;
+    const x = rightEdge == null ? (1 - w) / 2 : rightEdge + L.gap;
+    rightEdge = x + w;
+    return { ...b, panelPos: b.panelPos || { x, y: panelY }, pillPos: b.pillPos || { x, y: pillY } };
+  });
+  return next;
+}
+
 export function ensureLayout(comp) {
   let next = hasLayout(comp) ? comp : seedLayout(comp);
   next = hasBlockStyle(next) ? next : seedBlockStyle(next);
+  next = hasBlockPositions(next) ? next : seedBlockPositions(next);
   return next;
 }
 
