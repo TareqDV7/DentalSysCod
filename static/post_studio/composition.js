@@ -10,6 +10,28 @@ export const TEMPLATES = ['before_after', 'multi_phase', 'quad_grid', 'single_fe
 
 const DEFAULT_THEME = 'dark_premium';
 
+// Arabic-script range (mirrors render.js's per-text-run detection). Used to
+// content-detect RTL for mirroring the photo row — more robust than a lang
+// attribute, and keeps this module DOM-free (no dependency on render.js).
+const ARABIC_RE = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
+
+// True if any user-visible text in the composition is Arabic. Only flips
+// which physical side of the canvas is "first" (badge numbers stay
+// array-order-driven, untouched) so a right-to-left reader's eye meets
+// badge ① first, matching the chronological before->after narrative.
+function isRTL(comp) {
+  const title = comp.elements.find((e) => e.id === 'title');
+  const doctor = comp.elements.find((e) => e.id === 'doctor');
+  const strip = comp.elements.find((e) => e.id === 'strip');
+  const texts = [
+    title && title.headline && title.headline.text,
+    title && title.subline && title.subline.text,
+    doctor && doctor.text,
+    ...((strip && strip.blocks) || []).map((b) => b.label),
+  ];
+  return texts.some((t) => t && ARABIC_RE.test(t));
+}
+
 // Element factory helpers — geometry/typography here are structural defaults
 // only; P3 themes restyle them. Positions are fractional (0–1), size-independent.
 function titleElement() {
@@ -66,8 +88,17 @@ function computeDefaultPanelSize(next, L, W, H) {
   // width (and, via the aspect ratio, height too), physically covering the
   // title and doctor name. Size a single block as if it were one of two.
   const rowSlots = Math.max(n, 2);
-  const panelW = L.panelW != null ? L.panelW : (1 - 2 * L.margin - (rowSlots - 1) * L.gap) / rowSlots;
-  const panelH = L.panelH != null ? L.panelH : panelW * (W / H) * (asp.h / asp.w);
+  const availableW = 1 - 2 * L.margin;
+  // A theme's fixed panelW/panelH tokens (e.g. dark_premium's exact
+  // go.png px values, tuned for its natural 1-4 block layouts) can overflow
+  // the canvas once more blocks are added — fall back to the same
+  // derive-to-fit formula the other themes already use by default, rather
+  // than spill panels past the canvas edge. +1e-9 absorbs float rounding at
+  // the exact boundary (dark_premium's tokens fit exactly at n=4).
+  const fixedRowW = L.panelW != null ? rowSlots * L.panelW + (rowSlots - 1) * L.gap : null;
+  const useFixed = L.panelW != null && fixedRowW <= availableW + 1e-9;
+  const panelW = useFixed ? L.panelW : (availableW - (rowSlots - 1) * L.gap) / rowSlots;
+  const panelH = useFixed && L.panelH != null ? L.panelH : panelW * (W / H) * (asp.h / asp.w);
   const labelStyle = themeTokens(next.theme).label;
   return { panelW, panelH, labelStyle };
 }
@@ -90,18 +121,26 @@ export function seedLayout(comp) {
     const startX = (1 - rowW) / 2;   // centre the row for any panel count
     const panelY = L.panelRowY != null ? L.panelRowY : 0.5 - panelH / 2;
     const pillY = L.pillRowY != null ? L.pillRowY : panelY + panelH + L.gap;
+    const rtl = isRTL(next);
     strip.panelW = panelW;
     strip.panelH = panelH;
     strip.gap = L.gap;
-    strip.blocks = strip.blocks.map((b, i) => ({
-      ...b,
-      panelPos: { x: startX + i * (panelW + L.gap), y: panelY },
-      pillPos: { x: startX + i * (panelW + L.gap), y: pillY },
-      pill: { width: (b.pill && b.pill.width) || 'single' },
-      panelW,
-      panelH,
-      labelStyle: { ...labelStyle },
-    }));
+    strip.blocks = strip.blocks.map((b, i) => {
+      // Badge numbers stay array-order-driven (untouched) — only the slot a
+      // block occupies flips for RTL, so a right-to-left reader's eye meets
+      // badge ① first instead of last.
+      const slot = rtl ? n - 1 - i : i;
+      const x = startX + slot * (panelW + L.gap);
+      return {
+        ...b,
+        panelPos: { x, y: panelY },
+        pillPos: { x, y: pillY },
+        pill: { width: (b.pill && b.pill.width) || 'single' },
+        panelW,
+        panelH,
+        labelStyle: { ...labelStyle },
+      };
+    });
   }
   return next;
 }
@@ -169,18 +208,23 @@ export function seedBlockPositions(comp) {
   const { panelH } = computeDefaultPanelSize(next, L, W, H);
   const panelY = L.panelRowY != null ? L.panelRowY : 0.5 - panelH / 2;
   const pillY = L.pillRowY != null ? L.pillRowY : panelY + panelH + L.gap;
-  let rightEdge = null;
+  const rtl = isRTL(next);
+  // RTL appends toward the LEFT (new blocks join the row on the side a
+  // right-to-left reader hasn't reached yet), tracking the leftmost edge
+  // instead of the rightmost.
+  let edge = null;
   for (const b of strip.blocks) {
     if (b.panelPos) {
       const w = b.panelW != null ? b.panelW : 0.2;
-      rightEdge = Math.max(rightEdge ?? -Infinity, b.panelPos.x + w);
+      const e = rtl ? b.panelPos.x : b.panelPos.x + w;
+      edge = edge == null ? e : (rtl ? Math.min(edge, e) : Math.max(edge, e));
     }
   }
   strip.blocks = strip.blocks.map((b) => {
     if (b.panelPos && b.pillPos) return b;
     const w = b.panelW != null ? b.panelW : 0.2;
-    const x = rightEdge == null ? (1 - w) / 2 : rightEdge + L.gap;
-    rightEdge = x + w;
+    const x = edge == null ? (1 - w) / 2 : (rtl ? edge - L.gap - w : edge + L.gap);
+    edge = rtl ? x : x + w;
     return { ...b, panelPos: b.panelPos || { x, y: panelY }, pillPos: b.pillPos || { x, y: pillY } };
   });
   return next;
