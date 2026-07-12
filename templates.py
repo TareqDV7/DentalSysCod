@@ -2893,6 +2893,10 @@ HTML_TEMPLATE = '''
                             </select>
                         </div>
                         <div class="form-group">
+                            <label data-i18n="dentist">Dentist</label>
+                            <select name="dentist_id" id="billing-dentist"></select>
+                        </div>
+                        <div class="form-group">
                             <label data-i18n="date">Date</label>
                             <div class="date-input-wrap"><input type="text" name="payment_date" id="billing-date" placeholder="DD/MM/YYYY" data-date-field="1" title="Enter date in DD/MM/YYYY format"><button type="button" class="date-picker-btn" title="Pick date" aria-label="Pick date">📅</button></div>
                         </div>
@@ -3328,6 +3332,10 @@ HTML_TEMPLATE = '''
                             <div class="field-error" data-for="patient_id"></div>
                         </div>
                         <div class="form-group">
+                            <label data-i18n="dentist">Dentist</label>
+                            <select name="dentist_id" id="appointment-dentist"></select>
+                        </div>
+                        <div class="form-group">
                             <label data-i18n="status">Status</label>
                             <select name="status" id="appointment-status-select">
                                 <option value="scheduled" data-i18n="scheduled">Scheduled</option>
@@ -3690,6 +3698,7 @@ HTML_TEMPLATE = '''
         let appointmentsCache = [];
         let holidaysCache = [];
         let treatmentProceduresCache = [];
+        let dentistsCache = [];
         let billingCache = [];
         let currentPatientInvoicePayload = null;
         let currentProfilePatient = null;
@@ -4237,6 +4246,8 @@ HTML_TEMPLATE = '''
                 unable_save_staff: 'Unable to save staff account.',
                 staff_saved: 'Staff account saved.',
                 staff_is_dentist: 'Is dentist',
+                unassigned: 'Unassigned',
+                dentist: 'Dentist',
                 mark_dentist: 'Mark as dentist',
                 unmark_dentist: 'Unmark dentist',
                 unable_save_permission: 'Unable to save a permission.',
@@ -4789,6 +4800,8 @@ HTML_TEMPLATE = '''
                 unable_save_staff: 'تعذّر حفظ حساب الموظف.',
                 staff_saved: 'تم حفظ حساب الموظف.',
                 staff_is_dentist: 'طبيب',
+                unassigned: 'غير معيّن',
+                dentist: 'طبيب',
                 mark_dentist: 'تعيين كطبيب',
                 unmark_dentist: 'إلغاء تعيين كطبيب',
                 unable_save_permission: 'تعذّر حفظ إحدى الصلاحيات.',
@@ -5395,6 +5408,23 @@ HTML_TEMPLATE = '''
             }
         }
 
+        async function loadDentists() {
+            const r = await fetch('/api/dentists').catch(() => null);
+            dentistsCache = (r && r.ok) ? await r.json().catch(() => []) : [];
+            if (!Array.isArray(dentistsCache)) dentistsCache = [];
+        }
+
+        function populateDentistSelect(selectId) {
+            const sel = document.getElementById(selectId);
+            if (!sel) return;
+            const opts = [`<option value="">${t('unassigned', 'Unassigned')}</option>`];
+            dentistsCache.forEach(d => {
+                const name = String(d.display_name || '').trim();
+                if (name) opts.push(`<option value="${d.id}">${escapeHtml(name)}</option>`);
+            });
+            sel.innerHTML = opts.join('');
+        }
+
         function getProcedureById(idValue) {
             const id = parseInt(idValue, 10);
             if (!Number.isFinite(id)) return null;
@@ -5972,6 +6002,7 @@ HTML_TEMPLATE = '''
             if (toast) { toast.style.display = 'none'; toast.className = 'toast'; }
 
             await loadPatientsSelect('appointment-patient-select');
+            populateDentistSelect('appointment-dentist');
             if (patientId) {
                 const patientSelect = document.getElementById('appointment-patient-select');
                 if (patientSelect) {
@@ -8425,6 +8456,7 @@ HTML_TEMPLATE = '''
             if (_profileModal) _profileModal.classList.add('active');
             if (!treatmentProceduresCache.length) {
                 await loadTreatmentProcedures();
+                await loadDentists();
             }
             const profile = await fetch(`/api/patients/${patientId}/full-profile`).then(r => r.json());
             const patient = profile.patient;
@@ -8541,6 +8573,13 @@ HTML_TEMPLATE = '''
                                 <div class="form-group">
                                     <label>${t('tooth_no','Tooth No.')}</label>
                                     <input type="text" name="tooth_no" id="followup-tooth-no" placeholder="e.g. 16" maxlength="10" autocomplete="off">
+                                </div>
+                                <div class="form-group">
+                                    <label>${t('dentist', 'Dentist')}</label>
+                                    <select name="dentist_id" id="followup-dentist">
+                                        <option value="">${t('unassigned', 'Unassigned')}</option>
+                                        ${dentistsCache.map(d => `<option value="${d.id}">${String(d.display_name || '').trim()}</option>`).join('')}
+                                    </select>
                                 </div>
                             </div>
                             <div class="form-group" id="followup-materials-wrap" style="display:none;">
@@ -9698,6 +9737,7 @@ HTML_TEMPLATE = '''
             if (billingPatientSel) {
                 billingPatientSel.addEventListener('change', e => loadBillingPatientBalance(e.target.value));
             }
+            populateDentistSelect('billing-dentist');
         });
 
         // ── Universal date-picker button wiring ─────────────────────────────────
@@ -9787,6 +9827,7 @@ HTML_TEMPLATE = '''
         // Initial content
         loadSupportSection();
         loadTreatmentProcedures();
+        loadDentists();
         const expenseDateInput = document.getElementById('expense-date');
         const billingDateInput = document.getElementById('billing-date');
         const today = new Date();
