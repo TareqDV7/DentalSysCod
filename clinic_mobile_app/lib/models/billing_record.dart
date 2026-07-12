@@ -14,6 +14,7 @@ class BillingRecord {
   final String? paidAmountExpr;
   final String? updatedAt;
   final bool isSynced;
+  final int? dentistId;
 
   BillingRecord({
     this.id,
@@ -30,6 +31,7 @@ class BillingRecord {
     this.paidAmountExpr,
     this.updatedAt,
     this.isSynced = false,
+    this.dentistId,
   });
 
   // Mirror the desktop server math: total = max(subtotal − discount, 0);
@@ -61,6 +63,7 @@ class BillingRecord {
         paidAmountExpr: j['paid_amount_expr']?.toString(),
         updatedAt: j['updated_at'],
         isSynced: true,
+        dentistId: j['dentist_id'],
       );
 
   factory BillingRecord.fromDb(Map<String, dynamic> row) => BillingRecord(
@@ -78,6 +81,7 @@ class BillingRecord {
         paidAmountExpr: row['paid_amount_expr'] as String?,
         updatedAt: row['updated_at'],
         isSynced: (row['is_synced'] ?? 0) == 1,
+        dentistId: row['dentist_id'],
       );
 
   Map<String, dynamic> toDb() => {
@@ -95,6 +99,7 @@ class BillingRecord {
         'paid_amount_expr': paidAmountExpr,
         'updated_at': updatedAt ?? DateTime.now().toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
+        'dentist_id': dentistId,
       };
 
   Map<String, dynamic> toJson() => {
@@ -106,6 +111,7 @@ class BillingRecord {
         'credit_used': creditUsed,
         if (paymentMethod != null) 'payment_method': paymentMethod,
         if (paymentDate != null) 'payment_date': paymentDate,
+        'dentist_id': dentistId,
       };
 }
 

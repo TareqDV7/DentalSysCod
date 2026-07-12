@@ -23,6 +23,7 @@ class Followup {
   final String? paymentExpr;
   final String? updatedAt;
   final bool isSynced;
+  final int? dentistId;
 
   Followup({
     this.id,
@@ -44,6 +45,7 @@ class Followup {
     this.paymentExpr,
     this.updatedAt,
     this.isSynced = false,
+    this.dentistId,
   });
 
   double get clinicProfit => price - discount - labExpense;
@@ -70,6 +72,7 @@ class Followup {
         paymentExpr: j['payment_expr']?.toString(),
         updatedAt: j['updated_at']?.toString(),
         isSynced: true,
+        dentistId: j['dentist_id'] is int ? j['dentist_id'] : int.tryParse('${j['dentist_id'] ?? ''}'),
       );
 
   factory Followup.fromDb(Map<String, dynamic> row) => Followup(
@@ -92,6 +95,7 @@ class Followup {
         paymentExpr: row['payment_expr'] as String?,
         updatedAt: row['updated_at'] as String?,
         isSynced: (row['is_synced'] ?? 0) == 1,
+        dentistId: row['dentist_id'] as int?,
       );
 
   Map<String, dynamic> toDb() => {
@@ -115,6 +119,7 @@ class Followup {
         'payment_expr': paymentExpr,
         'updated_at': updatedAt ?? DateTime.now().toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
+        'dentist_id': dentistId,
       };
 
   Followup copyWith({
@@ -136,6 +141,7 @@ class Followup {
     String? paymentExpr,
     String? updatedAt,
     bool? isSynced,
+    int? dentistId,
   }) =>
       Followup(
         id: id ?? this.id,
@@ -157,6 +163,7 @@ class Followup {
         paymentExpr: paymentExpr ?? this.paymentExpr,
         updatedAt: updatedAt ?? this.updatedAt,
         isSynced: isSynced ?? this.isSynced,
+        dentistId: dentistId ?? this.dentistId,
       );
 
   static double _num(dynamic v) {

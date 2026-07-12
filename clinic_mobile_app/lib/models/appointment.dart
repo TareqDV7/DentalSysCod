@@ -9,6 +9,7 @@ class Appointment {
   final String? notes;
   final String? updatedAt;
   final bool isSynced;
+  final int? dentistId;
 
   Appointment({
     this.id,
@@ -21,6 +22,7 @@ class Appointment {
     this.notes,
     this.updatedAt,
     this.isSynced = false,
+    this.dentistId,
   });
 
   DateTime get dateTime =>
@@ -42,6 +44,7 @@ class Appointment {
         notes: j['notes'],
         updatedAt: j['updated_at'],
         isSynced: true,
+        dentistId: j['dentist_id'],
       );
 
   Map<String, dynamic> toJson() => {
@@ -54,6 +57,7 @@ class Appointment {
         if (treatmentType != null) 'treatment_type': treatmentType,
         'status': status,
         if (notes != null) 'notes': notes,
+        if (dentistId != null) 'dentist_id': dentistId,
       };
 
   factory Appointment.fromDb(Map<String, dynamic> row) => Appointment(
@@ -68,6 +72,7 @@ class Appointment {
         notes: row['notes'],
         updatedAt: row['updated_at'],
         isSynced: (row['is_synced'] ?? 0) == 1,
+        dentistId: row['dentist_id'],
       );
 
   Map<String, dynamic> toDb() => {
@@ -81,9 +86,10 @@ class Appointment {
         'notes': notes,
         'updated_at': updatedAt ?? DateTime.now().toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
+        'dentist_id': dentistId,
       };
 
-  Appointment copyWith({String? status, bool? isSynced}) => Appointment(
+  Appointment copyWith({String? status, bool? isSynced, int? dentistId}) => Appointment(
         id: id,
         patientId: patientId,
         patientName: patientName,
@@ -94,5 +100,6 @@ class Appointment {
         notes: notes,
         updatedAt: DateTime.now().toIso8601String(),
         isSynced: isSynced ?? this.isSynced,
+        dentistId: dentistId ?? this.dentistId,
       );
 }
