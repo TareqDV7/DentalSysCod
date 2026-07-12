@@ -4402,6 +4402,50 @@ def reports_summary():
 
     clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
+    # Per-dentist breakdown (see docs/superpowers/specs/2026-07-12-per-dentist-reporting-design.md):
+    # revenue = net-of-discount charge, gross_margin = revenue - their own
+    # lab_expense. No general-expense allocation -- overhead isn't any one
+    # dentist's cost.
+    clause, params = build_date_clause('followup_date', start_date, end_date)
+    cursor.execute(f'''
+        SELECT dentist_id,
+               COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0),
+               COALESCE(SUM(lab_expense), 0)
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}
+        GROUP BY dentist_id
+    ''', params)
+    followup_by_dentist = {row[0]: (float(row[1]), float(row[2])) for row in cursor.fetchall()}
+
+    bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
+    cursor.execute(f'''
+        SELECT dentist_id, COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
+        FROM billing WHERE 1 = 1{bclause}
+        GROUP BY dentist_id
+    ''', bparams)
+    billing_by_dentist = {row[0]: float(row[1]) for row in cursor.fetchall()}
+
+    # No is_dentist filter here: a dentist_id on a historical row was valid
+    # when that row was created, even if the user is later un-flagged --
+    # their real name must still show, not silently fall into "Unassigned".
+    cursor.execute('SELECT id, display_name FROM users')
+    dentist_names = {row[0]: row[1] for row in cursor.fetchall()}
+
+    all_dentist_ids = set(followup_by_dentist) | set(billing_by_dentist)
+    dentist_breakdown = []
+    for did in all_dentist_ids:
+        f_charge, f_lab = followup_by_dentist.get(did, (0.0, 0.0))
+        b_charge = billing_by_dentist.get(did, 0.0)
+        revenue = f_charge + b_charge
+        lab_expense = f_lab
+        dentist_breakdown.append({
+            'dentist_id': did,
+            'dentist_name': dentist_names.get(did, 'Unassigned') if did is not None else 'Unassigned',
+            'revenue': revenue,
+            'lab_expense': lab_expense,
+            'gross_margin': revenue - lab_expense,
+        })
+    dentist_breakdown.sort(key=lambda d: (d['dentist_id'] is None, d['dentist_name']))
+
     clause, params = build_date_clause('start_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM treatment_plans WHERE 1=1{clause}', params)
     plans_count = cursor.fetchone()[0]
@@ -4413,6 +4457,7 @@ def reports_summary():
         'revenue': float(revenue or 0),
         'lab_expenses': float(lab_expenses or 0),
         'clinic_gross_profit': float(clinic_gross_profit or 0),
+        'dentist_breakdown': dentist_breakdown,
         'expenses': expenses_total,
         'expenses_paid': float(expenses_paid or 0),
         'expenses_postponed': float(expenses_postponed or 0),
