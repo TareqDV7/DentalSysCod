@@ -3617,6 +3617,12 @@ HTML_TEMPLATE = '''
                 <div class="form-group"><label data-i18n="display_name">Display Name</label>
                     <input type="text" id="staff-add-display-name" autocomplete="off"></div>
                 <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="staff-add-is-dentist">
+                        <span data-i18n="staff_is_dentist">Is dentist</span>
+                    </label>
+                </div>
+                <div class="form-group">
                     <label data-i18n="permissions">Permissions</label>
                     <div id="staff-add-permissions-grid" class="perm-grid"></div>
                 </div>
@@ -4230,6 +4236,9 @@ HTML_TEMPLATE = '''
                 add_staff_hint: 'Add a staff account to give them their own login.',
                 unable_save_staff: 'Unable to save staff account.',
                 staff_saved: 'Staff account saved.',
+                staff_is_dentist: 'Is dentist',
+                mark_dentist: 'Mark as dentist',
+                unmark_dentist: 'Unmark dentist',
                 unable_save_permission: 'Unable to save a permission.',
                 permissions_saved: 'Permissions saved.',
                 staff_reactivated: 'Staff account reactivated.',
@@ -4779,6 +4788,9 @@ HTML_TEMPLATE = '''
                 add_staff_hint: 'أضف حساب موظف لمنحه تسجيل دخول خاص به.',
                 unable_save_staff: 'تعذّر حفظ حساب الموظف.',
                 staff_saved: 'تم حفظ حساب الموظف.',
+                staff_is_dentist: 'طبيب',
+                mark_dentist: 'تعيين كطبيب',
+                unmark_dentist: 'إلغاء تعيين كطبيب',
                 unable_save_permission: 'تعذّر حفظ إحدى الصلاحيات.',
                 permissions_saved: 'تم حفظ الصلاحيات.',
                 staff_reactivated: 'تمت إعادة تفعيل حساب الموظف.',
@@ -7102,6 +7114,7 @@ HTML_TEMPLATE = '''
                             <div style="display:flex;gap:6px;flex-wrap:wrap;">
                                 <button class="btn btn-primary" type="button" onclick="openStaffPermissionsModal(${u.id})">${t('edit_permissions', 'Edit Permissions')}</button>
                                 <button class="btn ${toggleClass}" type="button" onclick="toggleStaffActive(${u.id}, ${!isActive})">${toggleLabel}</button>
+                                <button class="btn btn-secondary" type="button" onclick="toggleStaffIsDentist(${u.id}, ${parseInt(u.is_dentist, 10) !== 1})">${parseInt(u.is_dentist, 10) === 1 ? t('unmark_dentist', 'Unmark dentist') : t('mark_dentist', 'Mark as dentist')}</button>
                             </div>
                         </td>
                     </tr>
@@ -7113,6 +7126,7 @@ HTML_TEMPLATE = '''
             document.getElementById('staff-add-username').value = '';
             document.getElementById('staff-add-password').value = '';
             document.getElementById('staff-add-display-name').value = '';
+            document.getElementById('staff-add-is-dentist').checked = false;
             const allKeys = await ensureStaffPermissionKeys();
             renderPermissionGrid('staff-add-permissions-grid', allKeys, []);
             document.getElementById('staff-add-modal').classList.add('active');
@@ -7129,7 +7143,10 @@ HTML_TEMPLATE = '''
                 const res = await fetch('/api/staff', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password, display_name: displayName || username, permissions: checked })
+                    body: JSON.stringify({
+                        username, password, display_name: displayName || username, permissions: checked,
+                        is_dentist: document.getElementById('staff-add-is-dentist').checked
+                    })
                 });
                 const payload = await res.json().catch(() => ({}));
                 if (!res.ok) { showToast(payload.error || t('unable_save_staff', 'Unable to save staff account.'), 'error'); return; }
@@ -7205,6 +7222,20 @@ HTML_TEMPLATE = '''
                 const payload = await res.json().catch(() => ({}));
                 if (!res.ok) { showToast(payload.error || t('unable_save_staff', 'Unable to save staff account.'), 'error'); return; }
                 showToast(makeActive ? t('staff_reactivated', 'Staff account reactivated.') : t('staff_deactivated', 'Staff account deactivated.'), 'success');
+                await loadStaffAccounts();
+            } catch (_) {
+                showToast(t('unable_save_staff', 'Unable to save staff account.'), 'error');
+            }
+        }
+
+        async function toggleStaffIsDentist(userId, makeDentist) {
+            try {
+                const res = await fetch(`/api/staff/${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_dentist: makeDentist })
+                });
+                if (!res.ok) throw new Error(res.status);
                 await loadStaffAccounts();
             } catch (_) {
                 showToast(t('unable_save_staff', 'Unable to save staff account.'), 'error');

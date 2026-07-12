@@ -2647,7 +2647,7 @@ def staff_accounts():
     cursor = conn.cursor()
     if request.method == 'GET':
         rows = cursor.execute(
-            'SELECT id, username, display_name, is_active, created_at, last_login_at FROM users '
+            'SELECT id, username, display_name, is_active, is_dentist, created_at, last_login_at FROM users '
             'ORDER BY username'
         ).fetchall()
         conn.close()
@@ -2664,8 +2664,9 @@ def staff_accounts():
         conn.close()
         return jsonify({'error': 'That username is already in use'}), 400
     cursor.execute(
-        'INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)',
-        (username, hash_password(password), data.get('display_name') or username))
+        'INSERT INTO users (username, password_hash, display_name, is_dentist) VALUES (?, ?, ?, ?)',
+        (username, hash_password(password), data.get('display_name') or username,
+         1 if data.get('is_dentist') else 0))
     new_id = cursor.lastrowid
     requested_perms = data.get('permissions') or []
     for key in requested_perms:
@@ -2696,6 +2697,8 @@ def staff_account_update(user_id):
         sets.append('is_active = ?'); vals.append(1 if data['is_active'] else 0)
     if 'display_name' in data:
         sets.append('display_name = ?'); vals.append(data['display_name'])
+    if 'is_dentist' in data:
+        sets.append('is_dentist = ?'); vals.append(1 if data['is_dentist'] else 0)
     if not sets:
         conn.close()
         return jsonify({'error': 'No fields to update'}), 400
