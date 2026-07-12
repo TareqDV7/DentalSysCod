@@ -25,7 +25,7 @@ class DatabaseService {
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'clinic_local.db');
     return openDatabase(path,
-        version: 9, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: 10, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   /// Maps a local table name to the server-side ("remote") table name it syncs to.
@@ -188,6 +188,11 @@ class DatabaseService {
       await db.execute(_createTreatmentPlanTeeth);
       await db.execute(_idxPlanTeethPlan);
     }
+    if (oldVersion < 10) {
+      await _addColumnIfMissing(db, 'appointments', 'dentist_id', 'INTEGER');
+      await _addColumnIfMissing(db, 'followups', 'dentist_id', 'INTEGER');
+      await _addColumnIfMissing(db, 'billing_records', 'dentist_id', 'INTEGER');
+    }
   }
 
   /// ALTER TABLE ADD COLUMN, but a no-op if the column is already there
@@ -255,6 +260,7 @@ class DatabaseService {
       lab_expense_expr TEXT,
       payment_expr TEXT,
       updated_at TEXT,
+      dentist_id INTEGER,
       is_synced INTEGER DEFAULT 0
     )
   ''';
@@ -290,6 +296,7 @@ class DatabaseService {
         status TEXT DEFAULT 'scheduled',
         notes TEXT,
         updated_at TEXT,
+        dentist_id INTEGER,
         is_synced INTEGER DEFAULT 0
       )
     ''');
@@ -325,6 +332,7 @@ class DatabaseService {
         discount_expr TEXT,
         paid_amount_expr TEXT,
         updated_at TEXT,
+        dentist_id INTEGER,
         is_synced INTEGER DEFAULT 0
       )
     ''');
