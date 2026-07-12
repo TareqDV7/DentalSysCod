@@ -3353,6 +3353,25 @@ def patient_followups(patient_id):
         lab_expense = 0
         clinic_profit = price - discount
 
+    dentist_id = data.get('dentist_id')
+    if dentist_id not in (None, ''):
+        try:
+            dentist_id = int(dentist_id)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'error': 'Invalid dentist_id'}), 400
+        cursor.execute('SELECT 1 FROM users WHERE id = ? AND is_dentist = 1 AND is_active = 1', (dentist_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'dentist_id must refer to an active dentist'}), 400
+    else:
+        dentist_id = None
+        uid = session.get('uid')
+        if uid:
+            cursor.execute('SELECT 1 FROM users WHERE id = ? AND is_dentist = 1 AND is_active = 1', (uid,))
+            if cursor.fetchone():
+                dentist_id = uid
+
     # Parse followup date to ensure YYYY-MM-DD format
     followup_date = data.get('followup_date')
     if not followup_date:
@@ -3368,8 +3387,8 @@ def patient_followups(patient_id):
         INSERT INTO patient_followups (
             patient_id, followup_date, tooth_no, diagnosis, treatment_procedure, procedure_id,
             price, discount, lab_expense, clinic_profit, payment, remaining_amount, notes,
-            price_expr, discount_expr, lab_expense_expr, payment_expr
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            price_expr, discount_expr, lab_expense_expr, payment_expr, dentist_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         patient_id,
         parsed_followup_date,
@@ -3387,7 +3406,8 @@ def patient_followups(patient_id):
         price_expr,
         discount_expr,
         lab_expense_expr,
-        payment_expr
+        payment_expr,
+        dentist_id
     ))
 
     followup_id = cursor.lastrowid
