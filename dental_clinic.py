@@ -5950,7 +5950,8 @@ def billing():
                 'payment_status': row_data.get('payment_status'),
                 'payment_date': row_data.get('payment_date'),
                 'created_at': row_data.get('created_at'),
-                'patient_name': row_data.get('patient_name')
+                'patient_name': row_data.get('patient_name'),
+                'dentist_id': row_data.get('dentist_id'),
             })
         conn.close()
         return jsonify(billing_records)
@@ -6001,6 +6002,25 @@ def billing():
         else:
             payment_status = 'pending'
 
+        dentist_id = data.get('dentist_id')
+        if dentist_id not in (None, ''):
+            try:
+                dentist_id = int(dentist_id)
+            except (TypeError, ValueError):
+                conn.close()
+                return jsonify({'error': 'Invalid dentist_id'}), 400
+            cursor.execute('SELECT 1 FROM users WHERE id = ? AND is_dentist = 1 AND is_active = 1', (dentist_id,))
+            if not cursor.fetchone():
+                conn.close()
+                return jsonify({'error': 'dentist_id must refer to an active dentist'}), 400
+        else:
+            dentist_id = None
+            uid = session.get('uid')
+            if uid:
+                cursor.execute('SELECT 1 FROM users WHERE id = ? AND is_dentist = 1 AND is_active = 1', (uid,))
+                if cursor.fetchone():
+                    dentist_id = uid
+
         invoice_number = data.get('invoice_number') or generate_invoice_number()
         subtotal_expr = sanitize_amount_expr(data.get('subtotal_expr'), subtotal)
         discount_expr = sanitize_amount_expr(data.get('discount_expr'), discount, base=subtotal)
@@ -6020,9 +6040,9 @@ def billing():
                 patient_id, treatment_id, invoice_number, amount,
                 subtotal, discount, paid_amount, credit_used, balance_due,
                 payment_method, payment_status, payment_date,
-                subtotal_expr, discount_expr, paid_amount_expr
+                subtotal_expr, discount_expr, paid_amount_expr, dentist_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['patient_id'],
             data.get('treatment_id'),
@@ -6037,7 +6057,8 @@ def billing():
             payment_date,
             subtotal_expr,
             discount_expr,
-            paid_amount_expr
+            paid_amount_expr,
+            dentist_id
         ))
         billing_id = cursor.lastrowid
         append_audit_log(cursor, 'create', 'billing', billing_id, {
