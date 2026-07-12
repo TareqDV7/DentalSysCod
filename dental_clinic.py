@@ -1701,6 +1701,7 @@ def appointment_row_to_dict(row):
         notes = row['notes']
         created_at = row['created_at']
         patient_name_raw = row['patient_name'] if 'patient_name' in row.keys() else ''
+        dentist_id = row['dentist_id'] if 'dentist_id' in row.keys() else None
     else:
         appointment_id = row[0]
         patient_id = row[1]
@@ -1711,6 +1712,14 @@ def appointment_row_to_dict(row):
         notes = row[6]
         created_at = row[7] if len(row) > 7 else None
         patient_name_raw = row[-1] if len(row) > 8 else ''
+        # dentist_id has no reliable position here: it was added inside the
+        # CREATE TABLE literal (before FOREIGN KEY) while updated_at is
+        # always ALTER-appended after the fact, so their relative order
+        # isn't fixed across a fresh-install vs. an upgraded database. Every
+        # current caller passes with_row_factory=True rows (named-access
+        # branch above), so this is a safe default rather than a guessed,
+        # possibly-wrong index.
+        dentist_id = None
 
     patient_name = str(patient_name_raw or '').strip() or f'Patient #{patient_id}'
     try:
@@ -1730,6 +1739,7 @@ def appointment_row_to_dict(row):
         'notes': notes or '',
         'created_at': created_at,
         'patient_name': patient_name,
+        'dentist_id': dentist_id,
     }
 
 
@@ -3772,9 +3782,16 @@ def inventory_procedure_materials(procedure_id):
 
 @app.route('/api/appointments', methods=['GET', 'POST'])
 def appointments():
-    conn = get_db_connection()
+    # with_row_factory=True: appointment_row_to_dict()'s named-access branch
+    # (row['dentist_id']) is reliable regardless of physical column order;
+    # the positional-index fallback branch cannot be, since dentist_id was
+    # added inside the CREATE TABLE literal (before FOREIGN KEY) while
+    # updated_at is always ALTER-appended after the fact -- on a fresh
+    # database updated_at ends up physically AFTER dentist_id, not before,
+    # breaking any "newest column is always last" assumption.
+    conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
-    
+
     if request.method == 'GET':
         cursor.execute('''
             SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
@@ -3823,6 +3840,25 @@ def appointments():
             conn.close()
             return jsonify({'error': 'Patient not found'}), 404
 
+        dentist_id = data.get('dentist_id')
+        if dentist_id not in (None, ''):
+            try:
+                dentist_id = int(dentist_id)
+            except (TypeError, ValueError):
+                conn.close()
+                return jsonify({'error': 'Invalid dentist_id'}), 400
+            cursor.execute('SELECT 1 FROM users WHERE id = ? AND is_dentist = 1 AND is_active = 1', (dentist_id,))
+            if not cursor.fetchone():
+                conn.close()
+                return jsonify({'error': 'dentist_id must refer to an active dentist'}), 400
+        else:
+            dentist_id = None
+            uid = session.get('uid')
+            if uid:
+                cursor.execute('SELECT 1 FROM users WHERE id = ? AND is_dentist = 1 AND is_active = 1', (uid,))
+                if cursor.fetchone():
+                    dentist_id = uid
+
         cursor.execute('''
             SELECT a.id, a.appointment_date, a.duration,
                    p.first_name || ' ' || p.last_name as patient_name
@@ -3851,10 +3887,10 @@ def appointments():
         status = status_raw if status_raw in ('scheduled', 'confirmed', 'cancelled', 'completed') else 'scheduled'
 
         cursor.execute('''
-            INSERT INTO appointments (patient_id, appointment_date, duration, treatment_type, status, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO appointments (patient_id, appointment_date, duration, treatment_type, status, notes, dentist_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (patient_id, appointment_date, duration,
-              data.get('treatment_type'), status, data.get('notes')))
+              data.get('treatment_type'), status, data.get('notes'), dentist_id))
         appointment_id = cursor.lastrowid
 
         cursor.execute('''
@@ -3870,7 +3906,7 @@ def appointments():
 
 @app.route('/api/appointments/recent')
 def recent_appointments():
-    conn = get_db_connection()
+    conn = get_db_connection(with_row_factory=True)  # see appointments()'s comment on dentist_id column order
     cursor = conn.cursor()
     cursor.execute('''
         SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
