@@ -870,6 +870,7 @@ def init_database():
             status TEXT DEFAULT 'scheduled',
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            dentist_id INTEGER,
             FOREIGN KEY (patient_id) REFERENCES patients (id)
         )
     ''')
@@ -1057,6 +1058,7 @@ def init_database():
             remaining_amount REAL DEFAULT 0,
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            dentist_id INTEGER,
             FOREIGN KEY (patient_id) REFERENCES patients (id),
             FOREIGN KEY (procedure_id) REFERENCES treatment_procedures (id)
         )
@@ -1096,6 +1098,7 @@ def init_database():
             payment_status TEXT DEFAULT 'pending',
             payment_date TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            dentist_id INTEGER,
             FOREIGN KEY (patient_id) REFERENCES patients (id),
             FOREIGN KEY (treatment_id) REFERENCES treatments (id)
         )
@@ -1168,6 +1171,7 @@ def init_database():
             password_hash TEXT NOT NULL,
             display_name TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
+            is_dentist INTEGER DEFAULT 0,
             must_change_password INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login_at TIMESTAMP
@@ -1341,6 +1345,10 @@ def init_database():
     ensure_table_column(cursor, 'patient_followups', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
     ensure_table_column(cursor, 'expenses', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
     ensure_table_column(cursor, 'billing', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+    ensure_table_column(cursor, 'users', 'is_dentist', 'INTEGER DEFAULT 0')
+    ensure_table_column(cursor, 'appointments', 'dentist_id', 'INTEGER')
+    ensure_table_column(cursor, 'patient_followups', 'dentist_id', 'INTEGER')
+    ensure_table_column(cursor, 'billing', 'dentist_id', 'INTEGER')
     ensure_table_column(cursor, 'holidays', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
     # Cloud authority: cache the signed token + clinic name so a clinic can later
     # activate by short serial alone — the cloud hands the stored token back via
@@ -2610,6 +2618,17 @@ def _count_users_with_permission(cursor, permission_key, exclude_user_id=None):
         tuple(ids)
     ).fetchone()[0]
     return active
+
+
+@app.route('/api/dentists')
+def list_dentists():
+    conn = get_db_connection(with_row_factory=True)
+    rows = conn.execute(
+        'SELECT id, display_name FROM users WHERE is_dentist = 1 AND is_active = 1 '
+        'ORDER BY display_name'
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
 
 
 @app.route('/api/staff', methods=['GET', 'POST'])
