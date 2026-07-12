@@ -174,7 +174,7 @@ git commit -m "feat(multi-dentist): add is_dentist flag, dentist_id columns, GET
 - Consumes: `users.is_dentist` (Task 1).
 - Produces: `appointment_row_to_dict()` now includes `dentist_id` in its returned dict.
 
-**Design note — `appointment_row_to_dict()` has a fragile dual code path** (search for `def appointment_row_to_dict`): a named-access branch (`row['id']`, used when the caller passed `with_row_factory=True`) and a **positional** branch (`row[0]`, `row[1]`, ...) used by the `appointments()` GET route specifically, which calls `get_db_connection()` **without** `with_row_factory=True`. The positional branch already relies on `row[-1]` always being `patient_name` (the JOIN always appends it last, regardless of how many `appointments` columns precede it) and `row[7] if len(row) > 7` for `created_at`. Since `dentist_id` is appended via `ALTER TABLE` (so it becomes the *last* column of `appointments` itself, after `updated_at`), it will land at `row[-2]` in the `SELECT a.*, p.first_name...` result — the second-to-last element, immediately before the always-last `patient_name`. This holds regardless of how many other `appointments` columns exist, exactly like the existing `row[-1]` trick for `patient_name`.
+**Design note — `appointment_row_to_dict()` has a fragile dual code path** (search for `def appointment_row_to_dict`): a named-access branch (`row['id']`, used when the caller passed `with_row_factory=True`) and a **positional** branch (`row[0]`, `row[1]`, ...) used by the `appointments()`/`recent_appointments()` GET routes, which call `get_db_connection()` **without** `with_row_factory=True`. Do not try to compute a magic index for `dentist_id` in the positional branch — this was tried and found wrong during execution: `dentist_id` was added inside the `appointments` CREATE TABLE literal (before `FOREIGN KEY`), while `updated_at` is always `ALTER TABLE`-appended after the fact via `ensure_table_column`, so on a **fresh** database `updated_at` physically lands *after* `dentist_id`, not before — there is no reliable "always last/second-to-last" position. **Fix at the root instead**: change `appointments()` and `recent_appointments()` to call `get_db_connection(with_row_factory=True)`, so the reliable named-access branch is always used. `sqlite3.Row` supports both `row['col']` and `row[0]`, so this is backward-compatible with every other positional access already in those two functions (e.g. the conflict-check query's `conflict[0]`, `conflict[3]`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -185,6 +185,7 @@ Create `tests/test_multi_dentist_appointments.py`:
 a dentist, leaves it unset otherwise, is overridable, and round-trips through
 both GET code paths (get_db_connection() with and without with_row_factory)."""
 import dental_clinic
+import permissions
 import pytest
 
 
@@ -208,6 +209,10 @@ def _patient(client=None):
 
 
 def _dentist(username='dr1', display_name='Dr. One'):
+    # Raw INSERT bypasses the /api/staff creation flow, which is what
+    # normally grants permissions -- without this, RBAC's appointments.edit
+    # gate 403s every session-authenticated POST in these tests before the
+    # dentist_id logic ever runs.
     conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -215,6 +220,7 @@ def _dentist(username='dr1', display_name='Dr. One'):
         (username, 'x', display_name),
     )
     uid = cur.lastrowid
+    permissions.grant_all(cur, uid)
     conn.commit()
     conn.close()
     return uid
@@ -228,6 +234,7 @@ def _front_desk(username='fd1'):
         (username, 'x', 'Front Desk'),
     )
     uid = cur.lastrowid
+    permissions.grant_all(cur, uid)
     conn.commit()
     conn.close()
     return uid
@@ -355,13 +362,51 @@ to:
               data.get('treatment_type'), status, data.get('notes'), dentist_id))
 ```
 
+Change the top of `appointments()` (search `def appointments():`) from:
+```python
+def appointments():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+```
+to:
+```python
+def appointments():
+    # with_row_factory=True: appointment_row_to_dict()'s named-access branch
+    # (row['dentist_id']) is reliable regardless of physical column order;
+    # the positional-index fallback branch cannot be, since dentist_id was
+    # added inside the CREATE TABLE literal (before FOREIGN KEY) while
+    # updated_at is always ALTER-appended after the fact -- on a fresh
+    # database updated_at ends up physically AFTER dentist_id, not before,
+    # breaking any "newest column is always last" assumption.
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+```
+
+Change the top of `recent_appointments()` (search `def recent_appointments():`) from:
+```python
+def recent_appointments():
+    conn = get_db_connection()
+```
+to:
+```python
+def recent_appointments():
+    conn = get_db_connection(with_row_factory=True)  # see appointments()'s comment on dentist_id column order
+```
+
 Now fix `appointment_row_to_dict()` (search `def appointment_row_to_dict`). In the named-access branch, add after `patient_name_raw = row['patient_name'] if 'patient_name' in row.keys() else ''`:
 ```python
         dentist_id = row['dentist_id'] if 'dentist_id' in row.keys() else None
 ```
 In the positional branch, add after `patient_name_raw = row[-1] if len(row) > 8 else ''`:
 ```python
-        dentist_id = row[-2] if len(row) > 9 else None
+        # dentist_id has no reliable position here: it was added inside the
+        # CREATE TABLE literal (before FOREIGN KEY) while updated_at is
+        # always ALTER-appended after the fact, so their relative order
+        # isn't fixed across a fresh-install vs. an upgraded database. Every
+        # current caller passes with_row_factory=True rows (named-access
+        # branch above), so this is a safe default rather than a guessed,
+        # possibly-wrong index.
+        dentist_id = None
 ```
 And in the returned dict literal, add a new key:
 ```python
@@ -403,6 +448,7 @@ appointments (Task 2). GET needs no code change: patient_followups() already
 returns `dict(row)` from a with_row_factory=True cursor, so a new column
 appears automatically -- this file just proves that."""
 import dental_clinic
+import permissions
 import pytest
 
 
@@ -426,6 +472,11 @@ def _patient():
 
 
 def _dentist(username='dr1'):
+    # Raw INSERT bypasses the /api/staff creation flow, which is what
+    # normally grants permissions -- without this, RBAC's appointments.edit/
+    # followups.edit/billing.edit gate 403s every session-authenticated POST
+    # in these tests before the dentist_id logic ever runs (found the hard
+    # way in Task 2's execution).
     conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -433,6 +484,7 @@ def _dentist(username='dr1'):
         (username,),
     )
     uid = cur.lastrowid
+    permissions.grant_all(cur, uid)
     conn.commit()
     conn.close()
     return uid
@@ -446,6 +498,7 @@ def _front_desk(username='fd1'):
         (username,),
     )
     uid = cur.lastrowid
+    permissions.grant_all(cur, uid)
     conn.commit()
     conn.close()
     return uid
@@ -607,6 +660,7 @@ Create `tests/test_multi_dentist_billing.py`:
 appointments/follow-ups. billing()'s GET builds an explicit dict per row
 (not dict(row)), so it needs its own added key -- unlike follow-ups."""
 import dental_clinic
+import permissions
 import pytest
 
 
@@ -630,6 +684,10 @@ def _patient():
 
 
 def _dentist(username='dr1'):
+    # Raw INSERT bypasses the /api/staff creation flow, which is what
+    # normally grants permissions -- without this, RBAC's billing.edit gate
+    # 403s every session-authenticated POST in these tests before the
+    # dentist_id logic ever runs (found the hard way in Task 2's execution).
     conn = dental_clinic.get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -637,6 +695,7 @@ def _dentist(username='dr1'):
         (username,),
     )
     uid = cur.lastrowid
+    permissions.grant_all(cur, uid)
     conn.commit()
     conn.close()
     return uid
@@ -650,6 +709,7 @@ def _front_desk(username='fd1'):
         (username,),
     )
     uid = cur.lastrowid
+    permissions.grant_all(cur, uid)
     conn.commit()
     conn.close()
     return uid
