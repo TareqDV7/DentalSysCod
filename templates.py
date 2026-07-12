@@ -2760,6 +2760,18 @@ HTML_TEMPLATE = '''
                     <div class="stat-card"><h3 id="report-expenses-postponed">₪ 0</h3><p data-i18n="expenses_postponed">Expenses Postponed</p></div>
                     <div class="stat-card"><h3 id="report-expenses">₪ 0</h3><p data-i18n="expenses">Expenses</p></div>
                 </div>
+                <h3 style="margin-top:20px;" data-i18n="dentist_breakdown_title">By Dentist</h3>
+                <div class="table-container">
+                    <table>
+                        <thead><tr>
+                            <th data-i18n="dentist">Dentist</th>
+                            <th data-i18n="revenue">Revenue</th>
+                            <th data-i18n="lab_expense">Lab Expense</th>
+                            <th data-i18n="gross_margin">Gross Margin</th>
+                        </tr></thead>
+                        <tbody id="report-dentist-breakdown-body"><tr><td colspan="4" data-i18n="no_data">No data</td></tr></tbody>
+                    </table>
+                </div>
             </div>
 
             <div id="financial" class="tab-content">
@@ -4247,6 +4259,8 @@ HTML_TEMPLATE = '''
                 staff_saved: 'Staff account saved.',
                 staff_is_dentist: 'Is dentist',
                 unassigned: 'Unassigned',
+                dentist_breakdown_title: 'By Dentist',
+                gross_margin: 'Gross Margin',
                 dentist: 'Dentist',
                 mark_dentist: 'Mark as dentist',
                 unmark_dentist: 'Unmark dentist',
@@ -4801,6 +4815,8 @@ HTML_TEMPLATE = '''
                 staff_saved: 'تم حفظ حساب الموظف.',
                 staff_is_dentist: 'طبيب',
                 unassigned: 'غير معيّن',
+                dentist_breakdown_title: 'حسب الطبيب',
+                gross_margin: 'هامش الربح',
                 dentist: 'طبيب',
                 mark_dentist: 'تعيين كطبيب',
                 unmark_dentist: 'إلغاء تعيين كطبيب',
@@ -6870,6 +6886,25 @@ HTML_TEMPLATE = '''
             setText('report-expenses-paid', money(data.expenses_paid));
             setText('report-expenses-postponed', money(data.expenses_postponed));
             setText('report-expenses', money(data.expenses));
+            renderDentistBreakdownTable(data.dentist_breakdown || []);
+        }
+
+        function renderDentistBreakdownTable(rows) {
+            const tbody = document.getElementById('report-dentist-breakdown-body');
+            if (!tbody) return;
+            const money = (v) => '₪ ' + parseCurrency(v).toFixed(2);
+            if (!Array.isArray(rows) || !rows.length) {
+                tbody.innerHTML = `<tr><td colspan="4">${t('no_data', 'No data')}</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = rows.map(row => `
+                <tr>
+                    <td>${escapeHtml(row.dentist_name || '')}</td>
+                    <td>${money(row.revenue)}</td>
+                    <td>${money(row.lab_expense)}</td>
+                    <td>${money(row.gross_margin)}</td>
+                </tr>
+            `).join('');
         }
 
         async function loadWeeklyReportFromPicker() {
