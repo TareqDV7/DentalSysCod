@@ -3890,9 +3890,10 @@ def appointments():
             WHERE a.status IN ('scheduled', 'confirmed')
               AND datetime(?) < datetime(a.appointment_date, '+' || a.duration || ' minutes')
               AND datetime(?, '+' || ? || ' minutes') > datetime(a.appointment_date)
+              AND (? IS NULL OR a.dentist_id IS NULL OR a.dentist_id = ?)
             ORDER BY a.appointment_date ASC
             LIMIT 1
-        ''', (appointment_date, appointment_date, duration))
+        ''', (appointment_date, appointment_date, duration, dentist_id, dentist_id))
         conflict = cursor.fetchone()
         if conflict:
             conn.close()
