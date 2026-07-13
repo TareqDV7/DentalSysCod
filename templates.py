@@ -2442,6 +2442,7 @@ HTML_TEMPLATE = '''
                                     <button class="btn btn-warning" type="button" onclick="changeCalendarMonth(-1)" data-i18n="previous_month">Previous Month</button>
                                     <button class="btn btn-warning" type="button" onclick="goToCurrentCalendarMonth()" data-i18n="current_month">Current Month</button>
                                     <button class="btn btn-warning" type="button" onclick="changeCalendarMonth(1)" data-i18n="next_month">Next Month</button>
+                                    <select id="calendar-dentist-filter" class="form-control" style="max-width:220px;" onchange="renderAppointmentsCalendar(appointmentsCache)"></select>
                                 </div>
                                 <div id="calendar-month-label" class="calendar-month-title"></div>
                             </div>
@@ -5441,6 +5442,20 @@ HTML_TEMPLATE = '''
             sel.innerHTML = opts.join('');
         }
 
+        function populateCalendarDentistFilter() {
+            const sel = document.getElementById('calendar-dentist-filter');
+            if (!sel) return;
+            const previous = sel.value;
+            const opts = [`<option value="">${t('all_dentists', 'All dentists')}</option>`];
+            dentistsCache.forEach(d => {
+                const name = String(d.display_name || '').trim();
+                if (name) opts.push(`<option value="${d.id}">${escapeHtml(name)}</option>`);
+            });
+            opts.push(`<option value="unassigned">${t('unassigned', 'Unassigned')}</option>`);
+            sel.innerHTML = opts.join('');
+            if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
+        }
+
         function getProcedureById(idValue) {
             const id = parseInt(idValue, 10);
             if (!Number.isFinite(id)) return null;
@@ -6668,6 +6683,7 @@ HTML_TEMPLATE = '''
                 const appointments = await fetch('/api/appointments').then(r => r.json());
                 appointmentsCache = appointments;
                 holidaysCache = await fetch('/api/holidays').then(r => r.json());
+                populateCalendarDentistFilter();
                 renderAppointmentsCalendar(appointmentsCache);
                 renderHolidaysTable();
                 if (!tbody) return;
@@ -6721,8 +6737,15 @@ HTML_TEMPLATE = '''
                 monthLabelElement.textContent = monthLabel(currentCalendarDate);
             }
 
+            const filterSelect = document.getElementById('calendar-dentist-filter');
+            const filterValue = filterSelect ? filterSelect.value : '';
+            const filtered = !filterValue ? appointments : appointments.filter(apt => {
+                if (filterValue === 'unassigned') return apt.dentist_id == null;
+                return String(apt.dentist_id) === filterValue;
+            });
+
             const grouped = {};
-            appointments.forEach(apt => {
+            filtered.forEach(apt => {
                 const d = parseAppointmentDate(getAppointmentDateValue(apt));
                 if (!d) return;
                 if (d.getFullYear() === year && d.getMonth() === month) {
