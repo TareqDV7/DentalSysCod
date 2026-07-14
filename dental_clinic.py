@@ -833,6 +833,22 @@ def get_table_columns(cursor, table_name):
     return [row[1] for row in cursor.fetchall()]
 
 
+def migrate_user_roles(cursor):
+    """Derive role for users whose role is NULL/empty. admin (holds
+    staff.manage) > dentist (is_dentist=1) > staff. Idempotent: rows with a
+    role already set are never touched, so later manual demotions stick."""
+    rows = cursor.execute(
+        "SELECT id, is_dentist FROM users WHERE role IS NULL OR role = ''"
+    ).fetchall()
+    for row in rows:
+        uid, is_dentist = row[0], row[1]
+        has_manage = cursor.execute(
+            'SELECT 1 FROM user_permissions WHERE user_id = ? AND '
+            "permission_key = 'staff.manage' AND granted = 1", (uid,)).fetchone()
+        role = 'admin' if has_manage else ('dentist' if is_dentist else 'staff')
+        cursor.execute('UPDATE users SET role = ? WHERE id = ?', (role, uid))
+
+
 def init_database():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1189,6 +1205,29 @@ def init_database():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS auth_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            purpose TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            attempts INTEGER DEFAULT 0,
+            consumed INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admin_recovery (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            used_at TEXT
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS pairing_requests (
             pair_code TEXT PRIMARY KEY,
             device_name TEXT NOT NULL,
@@ -1356,6 +1395,14 @@ def init_database():
     ensure_table_column(cursor, 'users', 'must_change_password', 'INTEGER DEFAULT 0')
     ensure_table_column(cursor, 'license_serials', 'serial_token', 'TEXT')
     ensure_table_column(cursor, 'license_serials', 'clinic_name', 'TEXT')
+    ensure_table_column(cursor, 'users', 'email', 'TEXT')
+    ensure_table_column(cursor, 'users', 'email_verified', 'INTEGER DEFAULT 0')
+    ensure_table_column(cursor, 'users', 'role', 'TEXT')
+    ensure_table_column(cursor, 'users', 'failed_login_count', 'INTEGER DEFAULT 0')
+    ensure_table_column(cursor, 'users', 'locked_until', 'TEXT')
+    # SQLite can't add UNIQUE via ALTER; partial unique index instead.
+    cursor.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
+                      ON users (email) WHERE email IS NOT NULL AND email != '' ''')
 
     # New tables for features
     cursor.execute('''
@@ -1537,6 +1584,7 @@ def init_database():
 
     import permissions as _permissions
     _permissions.migrate_default_grants(cursor)
+    migrate_user_roles(cursor)
 
     conn.commit()
     conn.close()
