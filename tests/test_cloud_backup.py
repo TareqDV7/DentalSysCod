@@ -225,3 +225,157 @@ def test_run_once_prunes_old_snapshot_dirs(tmp_path):
     # (NOW, day-30, day-40); the other 6 are all beyond retention -> pruned.
     assert _stamp(NOW) in remaining
     assert remaining == sorted([_stamp(NOW), _days_ago(30), _days_ago(40)])
+
+
+# --------------------------------------------------------------------------- #
+# _env_int / _env_bool
+# --------------------------------------------------------------------------- #
+def test_env_int_unset_blank_garbage(monkeypatch, capsys):
+    monkeypatch.delenv("MY_INT", raising=False)
+    assert backup._env_int("MY_INT", 5) == 5
+
+    monkeypatch.setenv("MY_INT", "   ")
+    assert backup._env_int("MY_INT", 5) == 5
+
+    monkeypatch.setenv("MY_INT", "abc")
+    assert backup._env_int("MY_INT", 5) == 5
+    assert "not an integer" in capsys.readouterr().out
+
+    monkeypatch.setenv("MY_INT", "42")
+    assert backup._env_int("MY_INT", 5) == 42
+
+
+def test_env_bool_variants(monkeypatch):
+    monkeypatch.delenv("MY_BOOL", raising=False)
+    assert backup._env_bool("MY_BOOL", default=True) is True
+    assert backup._env_bool("MY_BOOL", default=False) is False
+
+    for v in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("MY_BOOL", v)
+        assert backup._env_bool("MY_BOOL") is True
+
+    for v in ("0", "no", "garbage"):
+        monkeypatch.setenv("MY_BOOL", v)
+        assert backup._env_bool("MY_BOOL") is False
+
+
+# --------------------------------------------------------------------------- #
+# Failure branches
+# --------------------------------------------------------------------------- #
+def test_prune_logs_and_continues_on_oserror(tmp_path, monkeypatch, capsys):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    bad_name = _days_ago(40)
+    good_name = _days_ago(50)
+    (backup_dir / bad_name).mkdir()
+    (backup_dir / good_name).mkdir()
+
+    real_rmtree = backup.shutil.rmtree
+
+    def _rmtree(path, *a, **kw):
+        if Path(path).name == bad_name:
+            raise OSError("locked")
+        return real_rmtree(path, *a, **kw)
+
+    monkeypatch.setattr(backup.shutil, "rmtree", _rmtree)
+
+    removed = backup.prune_old_snapshots(backup_dir, NOW, retention_days=14, min_keep=0)
+    assert good_name in removed
+    assert bad_name not in removed
+    assert (backup_dir / bad_name).is_dir()
+    assert not (backup_dir / good_name).exists()
+    assert "could not prune" in capsys.readouterr().out
+
+
+def test_snapshot_gzip_failure_removes_intermediate(tmp_path, monkeypatch):
+    src = tmp_path / "clinic_1.db"
+    _make_sqlite_db(src, "x")
+    dest = tmp_path / "snap" / "clinic_1.db"
+
+    def _raise(*a, **kw):
+        raise OSError("boom")
+
+    monkeypatch.setattr(backup.gzip, "open", _raise)
+    with pytest.raises(OSError):
+        backup.snapshot_database(src, dest, use_gzip=True)
+    assert not dest.exists()
+
+
+def test_run_once_all_dbs_fail_raises_and_removes_empty_dir(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "clinic_bad.db").write_bytes(b"not a sqlite database at all")
+    backup_dir = tmp_path / "backups"
+
+    with pytest.raises(RuntimeError):
+        backup.run_once(
+            data_dir, backup_dir, use_gzip=False, retention_days=14, min_keep=7, now=NOW
+        )
+    snap_dir = backup_dir / _stamp(NOW)
+    assert not snap_dir.exists()
+
+
+# --------------------------------------------------------------------------- #
+# main()
+# --------------------------------------------------------------------------- #
+class _StopLoop(Exception):
+    """Sentinel raised from a patched time.sleep to escape the --loop while-True."""
+
+
+def test_main_one_shot_success(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _make_sqlite_db(data_dir / "cloud_master.db", "ok")
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setenv("CLINIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("BACKUP_DIR", str(backup_dir))
+
+    rc = backup.main([])
+    assert rc == 0
+    assert any(backup_dir.iterdir())
+
+
+def test_main_one_shot_failure_returns_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLINIC_DATA_DIR", str(tmp_path / "nope"))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+
+    rc = backup.main([])
+    assert rc == 1
+    assert "one-shot backup failed" in capsys.readouterr().out
+
+
+def test_main_loop_mode_runs_once_and_sleeps(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _make_sqlite_db(data_dir / "cloud_master.db", "ok")
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setenv("CLINIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("BACKUP_DIR", str(backup_dir))
+    monkeypatch.setenv("BACKUP_INTERVAL_HOURS", "0")  # invalid -> WARN + fallback
+
+    sleep_calls = []
+
+    def _fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise _StopLoop()
+
+    monkeypatch.setattr(backup.time, "sleep", _fake_sleep)
+
+    with pytest.raises(_StopLoop):
+        backup.main(["--loop"])
+
+    assert sleep_calls == [backup.DEFAULT_INTERVAL_HOURS * 3600]
+    assert any(backup_dir.iterdir())
+
+
+def test_main_loop_swallows_run_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLINIC_DATA_DIR", str(tmp_path / "nope"))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+
+    def _fake_sleep(seconds):
+        raise _StopLoop()
+
+    monkeypatch.setattr(backup.time, "sleep", _fake_sleep)
+
+    with pytest.raises(_StopLoop):
+        backup.main(["--loop"])
