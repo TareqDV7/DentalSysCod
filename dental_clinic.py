@@ -2609,6 +2609,19 @@ def change_password_page():
     return redirect(url_for('index'))
 
 
+# Per-user lockout (Task 6): 5 consecutive failed sign-ins locks the account for
+# 15 minutes. Threshold/duration are module-level constants so Task 9 (or ops)
+# can tune them without hunting through login_page().
+LOCKOUT_THRESHOLD = 5
+LOCKOUT_MINUTES = 15
+
+
+def _alert_admins(event, detail):
+    """Stub: Task 9 wires this to a real admin notification (e.g. via
+    send_system_email_async). No-op for now so lockout events don't crash."""
+    pass
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     next_url = _safe_next_url(request.values.get('next', ''))
@@ -2618,14 +2631,27 @@ def login_page():
                 LOGIN_TEMPLATE,
                 error='Security check failed — please reload and try again.',
                 next_url=next_url, csrf_token=_get_or_create_csrf_token()), 400
-        username = (request.form.get('username') or '').strip()
+        identifier = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
         conn = get_db_connection(with_row_factory=True)
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE username = ? AND is_active = 1', (username,))
+        cursor.execute(
+            'SELECT * FROM users WHERE (username = ? OR (email IS NOT NULL AND '
+            "email != '' AND lower(email) = lower(?))) AND is_active = 1",
+            (identifier, identifier))
         user = cursor.fetchone()
+        now_iso = datetime.utcnow().isoformat(timespec='seconds')
+        if user and user['locked_until'] and user['locked_until'] > now_iso:
+            conn.close()
+            return render_template_string(
+                LOGIN_TEMPLATE,
+                error='Too many failed attempts — try again in a few minutes.',
+                next_url=next_url, csrf_token=_get_or_create_csrf_token()), 401
         if user and check_password_hash(user['password_hash'], password):
-            cursor.execute('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?', (user['id'],))
+            cursor.execute(
+                'UPDATE users SET last_login_at = CURRENT_TIMESTAMP, '
+                'failed_login_count = 0, locked_until = NULL WHERE id = ?',
+                (user['id'],))
             conn.commit()
             conn.close()
             session.clear()
@@ -2633,6 +2659,18 @@ def login_page():
             session['uname'] = user['username']
             session['csrf_token'] = _new_csrf_token()  # rotate on privilege change
             return redirect(next_url or url_for('index'))
+        if user:
+            failed = (user['failed_login_count'] or 0) + 1
+            locked_until = None
+            if failed >= LOCKOUT_THRESHOLD:
+                locked_until = (datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+                                ).isoformat(timespec='seconds')
+                _alert_admins('account_locked', f"user '{user['username']}' locked after "
+                              f'{failed} failed sign-ins')  # Task 9 wires a real alert; stub no-ops for now
+            cursor.execute(
+                'UPDATE users SET failed_login_count = ?, locked_until = ? WHERE id = ?',
+                (failed, locked_until, user['id']))
+            conn.commit()
         conn.close()
         return render_template_string(LOGIN_TEMPLATE, error='Invalid username or password.',
                                       next_url=next_url,
