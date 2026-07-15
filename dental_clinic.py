@@ -6697,10 +6697,15 @@ def api_relay_email():
     to = str(data.get('to') or '').strip()
     if '@' not in to or len(to) > 254:
         return jsonify({'error': 'Invalid recipient address'}), 400
+    params = data.get('params') or {}
+    if not isinstance(params, dict):
+        # non-dict params would TypeError inside render's dict merge — reject
+        # cleanly instead of burning the clinic's rate budget on a 500
+        return jsonify({'error': 'Invalid params'}), 400
     try:
         subject, body = email_templates.render(
             str(data.get('template') or ''), str(data.get('lang') or 'en'),
-            data.get('params') or {})
+            params)
     except ValueError:
         return jsonify({'error': 'Unknown template'}), 400
     try:

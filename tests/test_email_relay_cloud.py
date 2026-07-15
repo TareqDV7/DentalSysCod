@@ -101,6 +101,18 @@ def test_relay_unknown_template_400(cloud_client, clinic_token):
     assert 'error' in r.get_json()
 
 
+def test_relay_non_dict_params_400(cloud_client, monkeypatch, clinic_token):
+    # non-dict params must be a clean 400, not a TypeError-driven 500
+    monkeypatch.setattr(dental_clinic, '_send_via_resend', lambda to, subject, body: None)
+    for bad in (['x'], 'x', 5, True):
+        r = cloud_client.post('/api/relay/email',
+                              json={'to': 'a@b.c', 'template': 'password_reset',
+                                    'params': bad, 'lang': 'en'},
+                              headers=_h(clinic_token))
+        assert r.status_code == 400, bad
+        assert 'error' in r.get_json()
+
+
 def test_relay_rate_limit_429(cloud_client, monkeypatch, clinic_token):
     # monkeypatch dental_clinic._RELAY_HOURLY_LIMIT to 2, send 3, expect 429
     monkeypatch.setattr(dental_clinic, '_RELAY_HOURLY_LIMIT', 2)
