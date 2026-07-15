@@ -9228,6 +9228,49 @@ def _cloud_sync_config():
     return (url.rstrip('/') or None), (token or None), CLOUD_SYNC_INTERVAL_MINUTES
 
 
+def send_system_email(to, template, params, lang='en'):
+    """Send one system email through the cloud relay (POST /api/relay/email —
+    see api_relay_email). Returns (True, '') on success or (False, reason)
+    where reason is one of 'not_paired' | 'unreachable' | 'rate_limited' |
+    'rejected' | 'provider'. Never raises, so callers (invites, OTP,
+    recovery-code alerts) can branch on the tuple without wrapping every call
+    site in try/except. Never logs the recipient address or email body."""
+    cloud_url, clinic_token, _interval = _cloud_sync_config()
+    if not (cloud_url and clinic_token):
+        return False, 'not_paired'
+    try:
+        status, _resp = _cloud_http_request(
+            'POST', cloud_url.rstrip('/') + '/api/relay/email',
+            headers={'X-Clinic-Token': clinic_token},
+            body={'to': to, 'template': template, 'params': params, 'lang': lang},
+            timeout=10)
+    except Exception:  # noqa: BLE001 — offline/DNS/connect failure is an expected offline state
+        return False, 'unreachable'
+    if status == 200:
+        return True, ''
+    if status == 429:
+        return False, 'rate_limited'
+    if status in (400, 401):
+        return False, 'rejected'
+    return False, 'provider'
+
+
+def send_system_email_async(to, template, params, lang='en'):
+    """Fire-and-forget wrapper for security alerts (OTP / recovery-code /
+    staff-invite emails): runs send_system_email on a daemon thread so a slow
+    or offline cloud relay never blocks the request that triggered it. Never
+    raises; failures are only logged as a skip reason or an exception
+    traceback — never the recipient address or email body."""
+    def _run():
+        try:
+            ok, reason = send_system_email(to, template, params, lang)
+            if not ok:
+                logging.getLogger(__name__).info('alert email skipped: %s', reason)
+        except Exception:  # noqa: BLE001 — this thread must never crash unnoticed
+            logging.getLogger(__name__).exception('alert email crashed')
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def _run_cloud_sync_once(cloud_url, clinic_token, http=None):
     """One pull-then-push cycle against the cloud node. Records the outcome in
     app_settings (cloud_last_sync_at / cloud_last_sync_result / cloud_last_*_at)
