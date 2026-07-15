@@ -2249,6 +2249,7 @@ CLINIC_CONFIG = {
 # HTML templates extracted to templates.py (see that module).
 from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE, FORCE_CHANGE_TEMPLATE
 # Data-tools helpers (pure, no Flask).
+import auth_codes
 import db_import
 import db_merge
 import email_templates
@@ -2456,9 +2457,12 @@ def _enforce_staff_permission():
 
 
 # Endpoints that stay writable even in view-only mode: licensing (so you can renew),
-# auth (login/logout), cloud connectivity, and health. Everything else clinical is
-# read-only once the subscription lapses.
-_VIEW_ONLY_WRITE_ALLOW_PREFIXES = ('/api/license/', '/api/auth/', '/api/cloud/', '/api/onboarding/')
+# auth (login/logout, forgot/reset password), cloud connectivity, and health.
+# Everything else clinical is read-only once the subscription lapses. A locked-out
+# staffer must still be able to recover their own account while the license is
+# lapsed — otherwise an expired license could compound into a permanent lockout.
+_VIEW_ONLY_WRITE_ALLOW_PREFIXES = ('/api/license/', '/api/auth/', '/api/cloud/',
+                                   '/api/onboarding/', '/api/login/')
 _VIEW_ONLY_WRITE_ALLOW_EXACT = {'/healthz'}
 
 
@@ -2518,7 +2522,15 @@ def _require_password_change():
 
 
 _CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
-_CSRF_FORM_ROUTES = {'/login', '/change-password'}
+# '/login' and '/change-password' are no-JS form posts that self-validate (see
+# _form_csrf_ok) + re-render on failure. The two /api/login/* routes are JSON
+# posts reachable by a signed-out visitor who has no session-bound CSRF token
+# to send yet (there is no HTML page in this codebase that seeds one before
+# they're used) — same pre-auth posture as /login itself, and CSRF's threat
+# model (hijacking an authenticated session) doesn't apply pre-auth anyway.
+# Anti-enumeration + auth_codes' attempt/expiry limits are the abuse guard
+# here instead of a token.
+_CSRF_FORM_ROUTES = {'/login', '/change-password', '/api/login/forgot', '/api/login/reset'}
 _CSRF_ENABLED = os.environ.get('CLINIC_DISABLE_CSRF', '0').strip().lower() \
     not in ('1', 'true', 'yes', 'on')
 if not _CSRF_ENABLED:
@@ -2685,6 +2697,77 @@ def login_page():
 def logout():
     session.clear()
     return redirect(url_for('login_page'))
+
+
+_USER_LOOKUP_SQL = (
+    'SELECT * FROM users WHERE (username = ? OR (email IS NOT NULL AND '
+    "email != '' AND lower(email) = lower(?))) AND is_active = 1")
+
+
+@app.route('/api/login/forgot', methods=['POST'])
+def api_login_forgot():
+    """Request a password-reset code by email. ALWAYS returns the same 200
+    {'sent': True} response — whether the identifier matches no account, an
+    account with no/unverified email, or the relay itself fails — so a caller
+    can never distinguish account existence from the response (anti-
+    enumeration). The real outcome is only ever logged server-side."""
+    data = request.json or {}
+    identifier = str(data.get('identifier') or '').strip()
+    generic = jsonify({'sent': True})
+    if not identifier:
+        return generic
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    cursor.execute(_USER_LOOKUP_SQL, (identifier, identifier))
+    user = cursor.fetchone()
+    log = logging.getLogger(__name__)
+    if user and user['email'] and user['email_verified']:
+        code = auth_codes.issue_code(cursor, user['id'], 'password_reset')
+        conn.commit()
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        ok, reason = send_system_email(user['email'], 'password_reset',
+                                       {'clinic_name': clinic_name, 'code': code}, 'en')
+        if ok:
+            log.info('password reset code sent for user id %s', user['id'])
+        else:
+            log.info('password reset email not sent for user id %s: %s', user['id'], reason)
+    else:
+        log.info('password reset requested for unknown/unverified identifier')
+    conn.close()
+    return generic
+
+
+@app.route('/api/login/reset', methods=['POST'])
+def api_login_reset():
+    """Complete a password reset with the emailed code. Returns one generic
+    400 for every failure kind (unknown identifier, wrong/expired/locked
+    code) so a caller can't distinguish them (anti-enumeration) — only the
+    too-short-password 400 differs, since that's pre-validation before any
+    account lookup happens."""
+    data = request.json or {}
+    identifier = str(data.get('identifier') or '').strip()
+    code = str(data.get('code') or '').strip()
+    new_password = str(data.get('new_password') or '')
+    fail = (jsonify({'error': 'Invalid or expired code'}), 400)
+    if len(new_password) < 4:
+        return jsonify({'error': 'New password must be at least 4 characters.'}), 400
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    cursor.execute(_USER_LOOKUP_SQL, (identifier, identifier))
+    user = cursor.fetchone()
+    if not user or auth_codes.verify_code(cursor, user['id'], 'password_reset', code) != 'ok':
+        conn.commit()  # persist the auth_codes attempt counter even on failure
+        conn.close()
+        return fail
+    cursor.execute(
+        'UPDATE users SET password_hash = ?, failed_login_count = 0, '
+        'locked_until = NULL, must_change_password = 0 WHERE id = ?',
+        (hash_password(new_password), user['id']))
+    append_audit_log(cursor, 'update', 'password_reset', user['id'], {'via': 'email_code'})
+    conn.commit()
+    conn.close()
+    _alert_admins('password_changed', f"password reset via email for '{user['username']}'")
+    return jsonify({'success': True})
 
 
 @app.route('/api/auth/me')
