@@ -2251,6 +2251,7 @@ from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE, FOR
 # Data-tools helpers (pure, no Flask).
 import db_import
 import db_merge
+import email_templates
 import inventory
 import patient_dedupe
 import patient_import
@@ -6609,6 +6610,105 @@ def register_clinic():
         'success': True, 'already_registered': False,
         'clinic_id': clinic_id, 'clinic_name': clinic_name, 'clinic_token': clinic_token,
     })
+
+
+# --- system email relay (cloud node only) -----------------------------------
+# Stateless relay: a clinic's LOCAL server calls this so cloud-side email
+# templates/branding stay consistent and the Resend API key never has to be
+# distributed to every clinic's machine. Auth is the same clinic_token every
+# other /api/* route uses (already validated once by _cloud_tenant_routing
+# before this handler even runs — see :511); rate limiting here is PER CLINIC,
+# not per caller IP, because the caller is always that clinic's own local
+# server (often sharing a NAT IP with other clinics, which would make an
+# IP-keyed limiter both leaky and unfair). _check_relay_attempts below mirrors
+# _check_attempts's (:419) sliding-window/lock contract but takes an explicit
+# key instead of always deriving it from _client_ip().
+_RELAY_HOURLY_LIMIT = _env_int('CLINIC_RELAY_HOURLY_LIMIT', 10)
+_RELAY_DAILY_LIMIT = _env_int('CLINIC_RELAY_DAILY_LIMIT', 30)
+_relay_attempts_hour = {}  # clinic_id -> list[timestamps]; sliding window (relay, hourly)
+_relay_attempts_day = {}   # clinic_id -> list[timestamps]; sliding window (relay, daily)
+_relay_attempts_lock = threading.Lock()
+
+
+def _check_relay_attempts(store, clinic_id, limit, window, what):
+    """Same sliding-window/lock contract as _check_attempts (:419) — return
+    None if allowed, else a (response, 429) tuple — but keyed by clinic_id
+    instead of client IP."""
+    if limit <= 0:
+        return None
+    now = time.monotonic()
+    cutoff = now - window
+    with _relay_attempts_lock:
+        bucket = [t for t in store.get(clinic_id, []) if t > cutoff]
+        if len(bucket) >= limit:
+            store[clinic_id] = bucket
+            return jsonify({
+                'error': f'Too many {what} — try again later '
+                         f'(limit {limit} per {window}s).'
+            }), 429
+        bucket.append(now)
+        store[clinic_id] = bucket
+    return None
+
+
+def _send_via_resend(to, subject, body):
+    """POST to Resend HTTP API. Raises on any failure (caller maps to 502).
+    stdlib urllib only, per the codebase convention (see _cloud_http_request)."""
+    api_key = os.environ.get('RESEND_API_KEY', '').strip()
+    sender = os.environ.get('CLINIC_EMAIL_FROM', 'DentaCare <no-reply@dentacare.tech>').strip()
+    if not api_key:
+        raise RuntimeError('RESEND_API_KEY not configured')
+    payload = json.dumps({'from': sender, 'to': [to], 'subject': subject,
+                          'text': body}).encode('utf-8')
+    req = urllib.request.Request(
+        'https://api.resend.com/emails', data=payload, method='POST',
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        if resp.status >= 300:
+            raise RuntimeError(f'Resend status {resp.status}')
+
+
+@app.route('/api/relay/email', methods=['POST'])
+def api_relay_email():
+    """Cloud node only: render a system email template and send it via Resend
+    on behalf of a clinic's local server. Auth: X-Clinic-Token — already
+    checked once by _cloud_tenant_routing, but we re-resolve the clinics row
+    here too, both defensively and to get clinic_id for the per-clinic rate
+    limit (the before_request hook doesn't stash it anywhere this handler can
+    read)."""
+    if not CLOUD_MODE:
+        return jsonify({'error': 'Not found'}), 404
+    token = _resolve_clinic_token()
+    conn = sqlite3.connect(MASTER_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute('SELECT id, active FROM clinics WHERE clinic_token = ?', (token,)).fetchone()
+    conn.close()
+    if not token or not row or int(row['active']) != 1:
+        return jsonify({'error': 'Unauthorized'}), 401
+    clinic_id = row['id']
+
+    err = _check_relay_attempts(_relay_attempts_hour, clinic_id, _RELAY_HOURLY_LIMIT, 3600, 'relay emails')
+    if err is None:
+        err = _check_relay_attempts(_relay_attempts_day, clinic_id, _RELAY_DAILY_LIMIT, 86400, 'relay emails')
+    if err is not None:
+        return err
+
+    data = request.json or {}
+    to = str(data.get('to') or '').strip()
+    if '@' not in to or len(to) > 254:
+        return jsonify({'error': 'Invalid recipient address'}), 400
+    try:
+        subject, body = email_templates.render(
+            str(data.get('template') or ''), str(data.get('lang') or 'en'),
+            data.get('params') or {})
+    except ValueError:
+        return jsonify({'error': 'Unknown template'}), 400
+    try:
+        _send_via_resend(to, subject, body)
+    except Exception as exc:  # noqa: BLE001 — provider/network failure maps to 502
+        logging.getLogger(__name__).warning('relay email send failed: %s', exc)
+        return jsonify({'error': 'Email provider failure'}), 502
+    return jsonify({'sent': True})
 
 
 @app.route('/api/license/validate', methods=['POST'])
