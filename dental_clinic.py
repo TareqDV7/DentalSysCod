@@ -2774,12 +2774,20 @@ def api_login_reset():
 def auth_me():
     uid = session.get('uid')
     granted = []
+    role, email, email_verified = None, '', False
     if uid:
-        conn = get_db_connection()
-        granted = sorted(permissions.get_permissions(conn.cursor(), uid))
+        conn = get_db_connection(with_row_factory=True)
+        cursor = conn.cursor()
+        granted = sorted(permissions.get_permissions(cursor, uid))
+        row = cursor.execute('SELECT role, email, email_verified FROM users WHERE id = ?', (uid,)).fetchone()
+        if row:
+            role = row['role']
+            email = row['email'] or ''
+            email_verified = bool(row['email_verified'])
         conn.close()
     return jsonify({'authenticated': bool(uid), 'username': session.get('uname', ''),
-                    'permissions': granted})
+                    'permissions': granted, 'role': role, 'email': email,
+                    'email_verified': email_verified})
 
 
 def _count_users_with_permission(cursor, permission_key, exclude_user_id=None):
@@ -2811,14 +2819,17 @@ def list_dentists():
     return jsonify([dict(r) for r in rows])
 
 
+_VALID_ROLES = ('admin', 'dentist', 'staff')
+
+
 @app.route('/api/staff', methods=['GET', 'POST'])
 def staff_accounts():
     conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     if request.method == 'GET':
         rows = cursor.execute(
-            'SELECT id, username, display_name, is_active, is_dentist, created_at, last_login_at FROM users '
-            'ORDER BY username'
+            'SELECT id, username, display_name, is_active, is_dentist, role, email, email_verified, '
+            'created_at, last_login_at FROM users ORDER BY username'
         ).fetchall()
         conn.close()
         return jsonify([dict(r) for r in rows])
@@ -2833,10 +2844,35 @@ def staff_accounts():
     if existing:
         conn.close()
         return jsonify({'error': 'That username is already in use'}), 400
+    # role, when supplied, drives is_dentist (sync: is_dentist = 1 iff role ==
+    # 'dentist'), overriding any is_dentist field passed alongside it. When
+    # role is omitted, fall back to the legacy is_dentist-only behavior (role
+    # defaults to 'staff') so older callers keep working unchanged.
+    if 'role' in data:
+        role = str(data.get('role') or '').strip().lower()
+        if role not in _VALID_ROLES:
+            conn.close()
+            return jsonify({'error': 'Role must be one of admin, dentist, staff'}), 400
+        is_dentist = 1 if role == 'dentist' else 0
+    else:
+        role = 'staff'
+        is_dentist = 1 if data.get('is_dentist') else 0
+    email = data.get('email')
+    if email is not None:
+        email = str(email).strip().lower()
+        if email:
+            if not ('@' in email and 3 <= len(email) <= 254):
+                conn.close()
+                return jsonify({'error': 'Please enter a valid email address.'}), 400
+            dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?)', (email,)).fetchone()
+            if dup:
+                conn.close()
+                return jsonify({'error': 'That email is already in use'}), 400
     cursor.execute(
-        'INSERT INTO users (username, password_hash, display_name, is_dentist) VALUES (?, ?, ?, ?)',
+        'INSERT INTO users (username, password_hash, display_name, is_dentist, role, email) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
         (username, hash_password(password), data.get('display_name') or username,
-         1 if data.get('is_dentist') else 0))
+         is_dentist, role, email or None))
     new_id = cursor.lastrowid
     requested_perms = data.get('permissions') or []
     for key in requested_perms:
@@ -2845,6 +2881,14 @@ def staff_accounts():
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'id': new_id})
+
+
+def _count_active_admins(cursor, exclude_user_id=None):
+    if exclude_user_id is not None:
+        return cursor.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1 AND id != ?",
+            (exclude_user_id,)).fetchone()[0]
+    return cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1").fetchone()[0]
 
 
 @app.route('/api/staff/<int:user_id>', methods=['PUT'])
@@ -2862,21 +2906,66 @@ def staff_account_update(user_id):
             if remaining == 0:
                 conn.close()
                 return jsonify({'error': 'Cannot deactivate the last account with staff management access'}), 400
+    new_role = None
+    if 'role' in data:
+        new_role = str(data.get('role') or '').strip().lower()
+        if new_role not in _VALID_ROLES:
+            conn.close()
+            return jsonify({'error': 'Role must be one of admin, dentist, staff'}), 400
+        # Refuse to demote the last active admin — role and permissions are
+        # independent (changing role never touches user_permissions), but
+        # losing the last admin would still leave the clinic without anyone
+        # in the Owner role.
+        current = cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,)).fetchone()
+        current_role = current[0] if current else None
+        if current_role == 'admin' and new_role != 'admin':
+            remaining = _count_active_admins(cursor, exclude_user_id=user_id)
+            if remaining == 0:
+                conn.close()
+                return jsonify({'error': 'Cannot demote the last active admin account'}), 400
+    new_email = None
+    if 'email' in data:
+        new_email = str(data.get('email') or '').strip().lower()
+        if new_email:
+            if not ('@' in new_email and 3 <= len(new_email) <= 254):
+                conn.close()
+                return jsonify({'error': 'Please enter a valid email address.'}), 400
+            dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?) AND id != ?',
+                                 (new_email, user_id)).fetchone()
+            if dup:
+                conn.close()
+                return jsonify({'error': 'That email is already in use'}), 400
     sets, vals = [], []
     if 'is_active' in data:
         sets.append('is_active = ?'); vals.append(1 if data['is_active'] else 0)
     if 'display_name' in data:
         sets.append('display_name = ?'); vals.append(data['display_name'])
-    if 'is_dentist' in data:
+    if 'is_dentist' in data and 'role' not in data:
         sets.append('is_dentist = ?'); vals.append(1 if data['is_dentist'] else 0)
+    if 'role' in data:
+        sets.append('role = ?'); vals.append(new_role)
+        sets.append('is_dentist = ?'); vals.append(1 if new_role == 'dentist' else 0)
+    if 'email' in data:
+        sets.append('email = ?'); vals.append(new_email or None)
+        sets.append('email_verified = ?'); vals.append(0)
     if not sets:
         conn.close()
         return jsonify({'error': 'No fields to update'}), 400
     vals.append(user_id)
     cursor.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", vals)
+    verify_code = None
+    if 'email' in data and new_email:
+        verify_code = auth_codes.issue_code(cursor, user_id, 'email_verify')
     append_audit_log(cursor, 'update', 'staff_account', user_id, data)
     conn.commit()
     conn.close()
+    if verify_code:
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        ok, reason = send_system_email(new_email, 'email_verify',
+                                       {'clinic_name': clinic_name, 'code': verify_code}, 'en')
+        if not ok:
+            logging.getLogger(__name__).info(
+                'staff email verification code not sent for user id %s: %s', user_id, reason)
     return jsonify({'success': True})
 
 
@@ -2926,6 +3015,66 @@ def auth_change_password():
         return jsonify({'error': 'Current password is incorrect.'}), 400
     cursor.execute('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
                    (hash_password(new), user['id']))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+def _valid_email_format(email):
+    return bool(email) and '@' in email and 3 <= len(email) <= 254
+
+
+@app.route('/api/profile/email', methods=['POST'])
+def api_profile_email():
+    """Self-service: any logged-in user sets/changes their own email. Stores
+    it lowercased, resets email_verified=0, and issues + sends a fresh
+    'email_verify' OTP. The send itself is best-effort — a relay failure is
+    logged server-side but never fails the request, since the email is
+    already stored and the user can request a fresh code."""
+    uid = session.get('uid')
+    if not uid:
+        return jsonify({'error': 'Authentication required'}), 401
+    data = request.json or {}
+    email = str(data.get('email') or '').strip().lower()
+    if not _valid_email_format(email):
+        return jsonify({'error': 'Please enter a valid email address.'}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?) AND id != ?',
+                         (email, uid)).fetchone()
+    if dup:
+        conn.close()
+        return jsonify({'error': 'That email is already in use'}), 400
+    cursor.execute('UPDATE users SET email = ?, email_verified = 0 WHERE id = ?', (email, uid))
+    code = auth_codes.issue_code(cursor, uid, 'email_verify')
+    conn.commit()
+    conn.close()
+    clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+    ok, reason = send_system_email(email, 'email_verify', {'clinic_name': clinic_name, 'code': code}, 'en')
+    if not ok:
+        logging.getLogger(__name__).info(
+            'email verification code not sent for user id %s: %s', uid, reason)
+    return jsonify({'success': True, 'sent': ok})
+
+
+@app.route('/api/profile/email/verify', methods=['POST'])
+def api_profile_email_verify():
+    """Self-service: consume the OTP issued by api_profile_email. 'ok' sets
+    email_verified=1; any other outcome (wrong/expired/locked/no code) is one
+    generic 400."""
+    uid = session.get('uid')
+    if not uid:
+        return jsonify({'error': 'Authentication required'}), 401
+    data = request.json or {}
+    code = str(data.get('code') or '').strip()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    result = auth_codes.verify_code(cursor, uid, 'email_verify', code)
+    if result != 'ok':
+        conn.commit()  # persist the auth_codes attempt counter even on failure
+        conn.close()
+        return jsonify({'error': 'Invalid or expired code'}), 400
+    cursor.execute('UPDATE users SET email_verified = 1 WHERE id = ?', (uid,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
