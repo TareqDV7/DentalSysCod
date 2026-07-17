@@ -2420,6 +2420,44 @@ def _permission_required_for(method, path):
     return None
 
 
+def _session_role(cursor):
+    """Role of the signed-in user ('' when anonymous). Role gates DATA
+    VISIBILITY (whose rows you see); the permission keys above keep gating
+    feature access — the two are deliberately orthogonal."""
+    uid = session.get('uid')
+    if not uid:
+        return ''
+    row = cursor.execute('SELECT role FROM users WHERE id = ?', (uid,)).fetchone()
+    return (row[0] if row else '') or ''
+
+
+def dentist_scope(cursor, alias=''):
+    """SQL fragment confining reads to the signed-in dentist's own rows.
+
+    role='dentist' → (' AND <alias.>dentist_id = ?', [uid]); anyone else →
+    ('', []). NULL-dentist rows are handled by callers that must keep
+    legacy/front-desk bookings visible (they OR in `dentist_id IS NULL`).
+    This is a security boundary, not a UI filter: it is applied server-side
+    in every scoped read, and client-supplied dentist filters are ignored
+    for the dentist role."""
+    if _session_role(cursor) != 'dentist':
+        return '', []
+    prefix = f'{alias}.' if alias else ''
+    return f' AND {prefix}dentist_id = ?', [session['uid']]
+
+
+def _dentist_owns_or_403(cursor, table, row_id):
+    """For mutating routes: 403 when a dentist touches a row that isn't
+    theirs (including NULL-dentist rows — those stay read-only for
+    dentists). Returns (row_exists, error_response_or_None)."""
+    row = cursor.execute(f'SELECT dentist_id FROM {table} WHERE id = ?', (row_id,)).fetchone()
+    if row is None:
+        return False, None
+    if _session_role(cursor) == 'dentist' and row[0] != session.get('uid'):
+        return True, (jsonify({'error': 'Not your record'}), 403)
+    return True, None
+
+
 @app.before_request
 def _enforce_staff_permission():
     if request.method == 'OPTIONS':
@@ -4247,12 +4285,18 @@ def appointments():
     cursor = conn.cursor()
 
     if request.method == 'GET':
-        cursor.execute('''
+        scope_sql, scope_params = dentist_scope(cursor, 'a')
+        if scope_sql:
+            # own rows + unassigned (NULL) rows — legacy/front-desk bookings
+            # must stay visible to dentists (read-only)
+            scope_sql = f' WHERE (a.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+        cursor.execute(f'''
             SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
             FROM appointments a
             JOIN patients p ON a.patient_id = p.id
+            {scope_sql}
             ORDER BY datetime(a.appointment_date) DESC, a.id DESC
-        ''')
+        ''', scope_params)
         appointments = [appointment_row_to_dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify(appointments)
@@ -4294,6 +4338,11 @@ def appointments():
             conn.close()
             return jsonify({'error': 'Patient not found'}), 404
 
+        # A dentist-role session always books for themself — any client-sent
+        # dentist_id (forged or stale UI state) is overridden, never trusted.
+        if _session_role(cursor) == 'dentist':
+            data = dict(data)
+            data['dentist_id'] = session['uid']
         dentist_id = data.get('dentist_id')
         if dentist_id not in (None, ''):
             try:
@@ -4363,13 +4412,17 @@ def appointments():
 def recent_appointments():
     conn = get_db_connection(with_row_factory=True)  # see appointments()'s comment on dentist_id column order
     cursor = conn.cursor()
-    cursor.execute('''
+    scope_sql, scope_params = dentist_scope(cursor, 'a')
+    if scope_sql:
+        scope_sql = f' WHERE (a.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+    cursor.execute(f'''
         SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
+        {scope_sql}
         ORDER BY datetime(a.appointment_date) DESC, a.id DESC
         LIMIT 10
-    ''')
+    ''', scope_params)
     appointments = [appointment_row_to_dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify(appointments)
@@ -4383,6 +4436,10 @@ def update_appointment_status(appointment_id):
     if status not in {'scheduled', 'confirmed', 'completed', 'cancelled'}:
         conn.close()
         return jsonify({'error': 'Invalid appointment status'}), 400
+    exists, err = _dentist_owns_or_403(cursor, 'appointments', appointment_id)
+    if err is not None:
+        conn.close()
+        return err
     cursor.execute('UPDATE appointments SET status = ? WHERE id = ?', (status, appointment_id))
     if cursor.rowcount == 0:
         conn.close()
@@ -4396,6 +4453,10 @@ def update_appointment_status(appointment_id):
 def delete_appointment(appointment_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    exists, err = _dentist_owns_or_403(cursor, 'appointments', appointment_id)
+    if err is not None:
+        conn.close()
+        return err
     cursor.execute('DELETE FROM appointments WHERE id = ?', (appointment_id,))
     if cursor.rowcount == 0:
         conn.close()
