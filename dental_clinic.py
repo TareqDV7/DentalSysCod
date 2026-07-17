@@ -2694,6 +2694,25 @@ def _alert_admins(event, detail):
         logging.getLogger(__name__).exception('_alert_admins failed')
 
 
+def _login_tiles():
+    """Users shown as sign-in tiles on the login screen. Returns [] (no tile
+    grid — falls back to the classic identifier+password form) once there are
+    more than 12 active users; beyond that a grid stops being useful. Each
+    tile's display_name falls back to username when blank so the template
+    never has to special-case an empty avatar/label."""
+    conn = get_db_connection(with_row_factory=True)
+    rows = conn.execute(
+        'SELECT id, username, display_name, role FROM users WHERE is_active = 1 '
+        'ORDER BY display_name').fetchall()
+    conn.close()
+    tiles = []
+    for r in rows:
+        t = dict(r)
+        t['display_name'] = t['display_name'] or t['username']
+        tiles.append(t)
+    return tiles if len(tiles) <= 12 else []
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     next_url = _safe_next_url(request.values.get('next', ''))
@@ -2702,7 +2721,8 @@ def login_page():
             return render_template_string(
                 LOGIN_TEMPLATE,
                 error='Security check failed — please reload and try again.',
-                next_url=next_url, csrf_token=_get_or_create_csrf_token()), 400
+                next_url=next_url, csrf_token=_get_or_create_csrf_token(),
+                tiles=_login_tiles()), 400
         identifier = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
         conn = get_db_connection(with_row_factory=True)
@@ -2718,7 +2738,8 @@ def login_page():
             return render_template_string(
                 LOGIN_TEMPLATE,
                 error='Too many failed attempts — try again in a few minutes.',
-                next_url=next_url, csrf_token=_get_or_create_csrf_token()), 401
+                next_url=next_url, csrf_token=_get_or_create_csrf_token(),
+                tiles=_login_tiles()), 401
         if user and check_password_hash(user['password_hash'], password):
             cursor.execute(
                 'UPDATE users SET last_login_at = CURRENT_TIMESTAMP, '
@@ -2746,11 +2767,13 @@ def login_page():
         conn.close()
         return render_template_string(LOGIN_TEMPLATE, error='Invalid username or password.',
                                       next_url=next_url,
-                                      csrf_token=_get_or_create_csrf_token()), 401
+                                      csrf_token=_get_or_create_csrf_token(),
+                                      tiles=_login_tiles()), 401
     if session.get('uid'):
         return redirect(next_url or url_for('index'))
     return render_template_string(LOGIN_TEMPLATE, error=None, next_url=next_url,
-                                  csrf_token=_get_or_create_csrf_token())
+                                  csrf_token=_get_or_create_csrf_token(),
+                                  tiles=_login_tiles())
 
 
 @app.route('/logout')

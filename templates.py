@@ -10533,7 +10533,7 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
       linear-gradient(160deg, #0b1220, #111a2d);
   }
   .card {
-    position:relative; width:100%; max-width:380px; overflow:hidden;
+    position:relative; width:100%; max-width:420px; overflow:hidden;
     background:var(--panel); border:1px solid var(--line); border-radius:20px;
     box-shadow:0 30px 80px rgba(0,0,0,0.45); padding:36px 32px 30px;
   }
@@ -10566,24 +10566,320 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
     margin-top:18px; padding:10px 13px; border-radius:12px; font-size:13px; font-weight:600;
     color:#ffb3bd; background:rgba(218,76,88,0.14); border:1px solid rgba(218,76,88,0.45);
   }
+
+  .hidden { display:none !important; }
+
+  #login-tiles {
+    display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-top:6px;
+  }
+  .login-tile {
+    display:flex; flex-direction:column; align-items:center; gap:8px;
+    padding:14px 6px 12px; background:var(--bg-1); border:1.5px solid var(--line);
+    border-radius:14px; cursor:pointer; color:var(--text); font-family:inherit;
+    transition:0.16s ease;
+  }
+  .login-tile:hover { border-color:#7bb6e2; transform:translateY(-2px); box-shadow:0 10px 24px rgba(29,127,183,0.25); }
+  .login-tile:focus-visible { outline:none; border-color:#7bb6e2; box-shadow:0 0 0 4px rgba(61,149,211,0.16); }
+  .tile-avatar {
+    width:46px; height:46px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:17px; font-weight:800; color:#fff;
+    background:linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+  }
+  .tile-name { font-size:12px; font-weight:700; text-align:center; line-height:1.25; word-break:break-word; }
+  .tile-role {
+    font-size:9.5px; font-weight:800; letter-spacing:0.05em; text-transform:uppercase;
+    color:var(--muted); padding:2px 8px; border-radius:20px; background:rgba(255,255,255,0.06);
+  }
+
+  .link-row { text-align:center; margin-top:16px; }
+  .stack-links { display:flex; flex-direction:column; gap:8px; align-items:center; margin-top:16px; }
+  .link-btn {
+    background:none; border:none; padding:0; color:#7bb6e2; font-size:12.5px; font-weight:700;
+    cursor:pointer; text-decoration:underline; text-underline-offset:2px; font-family:inherit;
+  }
+  .link-btn:hover { color:#a7d1f2; }
+
+  .signing-as { text-align:center; font-size:13px; font-weight:700; color:var(--muted); margin:0 0 4px; }
+  .signing-as strong { color:var(--text); }
+
+  .panel-note {
+    margin:14px 0 0; padding:10px 13px; border-radius:12px; font-size:12.5px; font-weight:600; line-height:1.45;
+    color:#cfe3ff; background:rgba(29,127,183,0.14); border:1px solid rgba(29,127,183,0.40);
+  }
+
+  .recovery-code-box {
+    margin-top:14px; padding:14px; border-radius:12px; background:rgba(19,181,167,0.10);
+    border:1.5px dashed var(--accent); text-align:center;
+  }
+  .recovery-code-box code {
+    display:block; margin-top:6px; font-size:15px; font-weight:800; letter-spacing:0.02em;
+    color:var(--text); word-break:break-all;
+  }
+  .recovery-warn {
+    margin-top:8px; font-size:11px; font-weight:800; color:#ffcf6b;
+    text-transform:uppercase; letter-spacing:0.03em;
+  }
 </style>
 </head>
 <body>
-  <form class="card" method="POST" action="/login">
+  <div class="card">
     <div class="brand">
       <img src="/logo" alt="DentaCare">
       <h1>DentaCare</h1>
       <p>Dental Management System</p>
     </div>
+
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
-    <input type="hidden" name="next" value="{{ next_url }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label for="username">Username</label>
-    <input type="text" id="username" name="username" autocomplete="username" autofocus required>
-    <label for="password">Password</label>
-    <input type="password" id="password" name="password" autocomplete="current-password" required>
-    <button type="submit">Sign in</button>
-  </form>
+
+    {% if tiles %}
+    <div id="login-tiles" class="{% if error %}hidden{% endif %}">
+      {% for t in tiles %}
+      <button type="button" class="login-tile" data-username="{{ t.username }}" data-role="{{ t.role or '' }}" data-display="{{ t.display_name }}">
+        <span class="tile-avatar">{{ t.display_name[0]|upper }}</span>
+        <span class="tile-name">{{ t.display_name }}</span>
+        <span class="tile-role">{% if t.role == 'admin' %}Admin{% elif t.role == 'dentist' %}Dentist{% else %}Staff{% endif %}</span>
+      </button>
+      {% endfor %}
+    </div>
+    <div class="link-row"><button type="button" class="link-btn" id="show-classic-login">Sign in another way</button></div>
+    {% endif %}
+
+    <form id="classic-login-form" class="{% if tiles and not error %}hidden{% endif %}" method="POST" action="/login">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div id="signing-as-note" class="signing-as hidden">Signing in as <strong id="signing-as-name"></strong></div>
+      <div id="username-field">
+        <label for="username">Username or email</label>
+        <input type="text" id="username" name="username" autocomplete="username" required>
+      </div>
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+
+    <div class="stack-links">
+      <button type="button" class="link-btn" id="show-forgot-password">Forgot password?</button>
+      <button type="button" class="link-btn" id="show-recovery-code">Use recovery code</button>
+    </div>
+
+    <div id="forgot-password-panel" class="hidden">
+      <div id="forgot-step-1">
+        <label for="forgot-identifier">Username or email</label>
+        <input type="text" id="forgot-identifier" placeholder="Enter your username or email">
+        <button type="button" id="forgot-send-btn">Send reset code</button>
+      </div>
+      <div id="forgot-step-2" class="hidden">
+        <div class="panel-note">If an account exists, a code was sent.</div>
+        <label for="forgot-code">Reset code</label>
+        <input type="text" id="forgot-code" autocomplete="one-time-code">
+        <label for="forgot-new-password">New password</label>
+        <input type="password" id="forgot-new-password" minlength="4" autocomplete="new-password">
+        <button type="button" id="forgot-submit-btn">Reset password</button>
+      </div>
+      <div id="forgot-error" class="error hidden"></div>
+      <div id="forgot-success" class="panel-note hidden">Password updated. You can sign in now.</div>
+      <div class="link-row"><button type="button" class="link-btn" data-back="classic">Back to sign in</button></div>
+    </div>
+
+    <div id="recovery-panel" class="hidden">
+      <div class="panel-note">Offline lockout escape: redeem the printed one-time admin recovery code.</div>
+      <label for="recovery-code">Recovery code</label>
+      <input type="text" id="recovery-code" placeholder="XXXX-XXXX-XXXX-XXXX">
+      <label for="recovery-new-password">New admin password</label>
+      <input type="password" id="recovery-new-password" minlength="4" autocomplete="new-password">
+      <button type="button" id="recovery-submit-btn">Redeem code</button>
+      <div id="recovery-error" class="error hidden"></div>
+      <div id="recovery-result" class="hidden">
+        <div class="panel-note">Signed in as <strong id="recovery-username"></strong>. Password updated.</div>
+        <div class="recovery-code-box">
+          <span>Your new recovery code</span>
+          <code id="recovery-new-code"></code>
+          <div class="recovery-warn">Save this now — it will not be shown again</div>
+        </div>
+      </div>
+      <div class="link-row"><button type="button" class="link-btn" data-back="classic">Back to sign in</button></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  function hide(id) { var el = document.getElementById(id); if (el) { el.classList.add('hidden'); } }
+  function show(id) { var el = document.getElementById(id); if (el) { el.classList.remove('hidden'); } }
+
+  var tilesEl = document.getElementById('login-tiles');
+  var initialShowTiles = !!(tilesEl && !tilesEl.classList.contains('hidden'));
+
+  function showClassicLogin() {
+    hide('login-tiles');
+    hide('forgot-password-panel');
+    hide('recovery-panel');
+    show('classic-login-form');
+    show('username-field');
+    hide('signing-as-note');
+    var u = document.getElementById('username');
+    if (u) { u.value = ''; u.focus(); }
+  }
+
+  function backToStart() {
+    hide('forgot-password-panel');
+    hide('recovery-panel');
+    if (initialShowTiles) {
+      hide('classic-login-form');
+      show('login-tiles');
+    } else {
+      showClassicLogin();
+    }
+  }
+
+  function selectTile(btn) {
+    var username = btn.getAttribute('data-username') || '';
+    var display = btn.getAttribute('data-display') || username;
+    hide('login-tiles');
+    hide('forgot-password-panel');
+    hide('recovery-panel');
+    show('classic-login-form');
+    var u = document.getElementById('username');
+    if (u) { u.value = username; }
+    hide('username-field');
+    var nameEl = document.getElementById('signing-as-name');
+    if (nameEl) { nameEl.textContent = display; }
+    show('signing-as-note');
+    var p = document.getElementById('password');
+    if (p) { p.focus(); }
+  }
+
+  var showClassicBtn = document.getElementById('show-classic-login');
+  if (showClassicBtn) { showClassicBtn.addEventListener('click', showClassicLogin); }
+
+  var showForgotBtn = document.getElementById('show-forgot-password');
+  if (showForgotBtn) {
+    showForgotBtn.addEventListener('click', function () {
+      hide('login-tiles');
+      hide('classic-login-form');
+      hide('recovery-panel');
+      show('forgot-password-panel');
+    });
+  }
+
+  var showRecoveryBtn = document.getElementById('show-recovery-code');
+  if (showRecoveryBtn) {
+    showRecoveryBtn.addEventListener('click', function () {
+      hide('login-tiles');
+      hide('classic-login-form');
+      hide('forgot-password-panel');
+      show('recovery-panel');
+    });
+  }
+
+  var backButtons = document.querySelectorAll('[data-back="classic"]');
+  for (var i = 0; i < backButtons.length; i++) {
+    backButtons[i].addEventListener('click', backToStart);
+  }
+
+  var tileButtons = document.querySelectorAll('.login-tile');
+  for (var j = 0; j < tileButtons.length; j++) {
+    tileButtons[j].addEventListener('click', function (evt) {
+      selectTile(evt.currentTarget);
+    });
+  }
+
+  var forgotSendBtn = document.getElementById('forgot-send-btn');
+  if (forgotSendBtn) {
+    forgotSendBtn.addEventListener('click', function () {
+      var identifierEl = document.getElementById('forgot-identifier');
+      var identifier = identifierEl ? (identifierEl.value || '').trim() : '';
+      hide('forgot-error');
+      fetch('/api/login/forgot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: identifier })
+      }).then(function () {
+        hide('forgot-step-1');
+        show('forgot-step-2');
+      }).catch(function () {
+        hide('forgot-step-1');
+        show('forgot-step-2');
+      });
+    });
+  }
+
+  var forgotSubmitBtn = document.getElementById('forgot-submit-btn');
+  if (forgotSubmitBtn) {
+    forgotSubmitBtn.addEventListener('click', function () {
+      var identifierEl = document.getElementById('forgot-identifier');
+      var codeEl = document.getElementById('forgot-code');
+      var pwEl = document.getElementById('forgot-new-password');
+      var identifier = identifierEl ? (identifierEl.value || '').trim() : '';
+      var code = codeEl ? (codeEl.value || '').trim() : '';
+      var newPassword = pwEl ? (pwEl.value || '') : '';
+      hide('forgot-error');
+      fetch('/api/login/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: identifier, code: code, new_password: newPassword })
+      }).then(function (resp) {
+        return resp.json().then(function (payload) {
+          return { ok: resp.ok, payload: payload };
+        });
+      }).then(function (result) {
+        if (result.ok && result.payload && result.payload.success) {
+          hide('forgot-step-2');
+          show('forgot-success');
+        } else {
+          var msg = (result.payload && result.payload.error) || 'Something went wrong. Please try again.';
+          var errEl = document.getElementById('forgot-error');
+          if (errEl) { errEl.textContent = msg; }
+          show('forgot-error');
+        }
+      }).catch(function () {
+        var errEl = document.getElementById('forgot-error');
+        if (errEl) { errEl.textContent = 'Network error. Please try again.'; }
+        show('forgot-error');
+      });
+    });
+  }
+
+  var recoverySubmitBtn = document.getElementById('recovery-submit-btn');
+  if (recoverySubmitBtn) {
+    recoverySubmitBtn.addEventListener('click', function () {
+      var codeEl = document.getElementById('recovery-code');
+      var pwEl = document.getElementById('recovery-new-password');
+      var code = codeEl ? (codeEl.value || '').trim() : '';
+      var newPassword = pwEl ? (pwEl.value || '') : '';
+      hide('recovery-error');
+      fetch('/api/login/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code, new_password: newPassword })
+      }).then(function (resp) {
+        return resp.json().then(function (payload) {
+          return { ok: resp.ok, payload: payload };
+        });
+      }).then(function (result) {
+        if (result.ok && result.payload && result.payload.success) {
+          var userEl = document.getElementById('recovery-username');
+          if (userEl) { userEl.textContent = result.payload.username || ''; }
+          var newCodeEl = document.getElementById('recovery-new-code');
+          if (newCodeEl) { newCodeEl.textContent = result.payload.new_recovery_code || ''; }
+          show('recovery-result');
+          if (codeEl) { codeEl.disabled = true; }
+          if (pwEl) { pwEl.disabled = true; }
+          recoverySubmitBtn.disabled = true;
+        } else {
+          var msg = (result.payload && result.payload.error) || 'Invalid recovery code';
+          var errEl = document.getElementById('recovery-error');
+          if (errEl) { errEl.textContent = msg; }
+          show('recovery-error');
+        }
+      }).catch(function () {
+        var errEl = document.getElementById('recovery-error');
+        if (errEl) { errEl.textContent = 'Network error. Please try again.'; }
+        show('recovery-error');
+      });
+    });
+  }
+})();
+</script>
 </body>
 </html>'''
 
