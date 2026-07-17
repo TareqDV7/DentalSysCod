@@ -3459,30 +3459,39 @@ def patient_full_profile(patient_id):
         cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
+    # Patients are clinic-shared, but the dentist role only sees its own
+    # clinical/financial rows (plus unassigned NULL rows) inside the profile.
+    scope_sql, scope_params = dentist_scope(cursor)
+    if scope_sql:
+        scope_sql = f' AND (dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+    pf_scope, pf_params = dentist_scope(cursor, 'pf')
+    if pf_scope:
+        pf_scope = f' AND (pf.dentist_id IS NULL OR ({pf_scope.removeprefix(" AND ")}))'
+
     profile = {
         'patient': dict(patient),
-        'appointments': fetch_all('''
-            SELECT * FROM appointments WHERE patient_id = ? ORDER BY appointment_date DESC
-        ''', (patient_id,)),
+        'appointments': fetch_all(f'''
+            SELECT * FROM appointments WHERE patient_id = ?{scope_sql} ORDER BY appointment_date DESC
+        ''', [patient_id] + scope_params),
         'visits': fetch_all('''
             SELECT * FROM visits WHERE patient_id = ? ORDER BY visit_date DESC
         ''', (patient_id,)),
         'treatments': fetch_all('''
             SELECT * FROM treatments WHERE patient_id = ? ORDER BY id DESC
         ''', (patient_id,)),
-        'billing': fetch_all('''
-            SELECT * FROM billing WHERE patient_id = ? ORDER BY id DESC
-        ''', (patient_id,)),
+        'billing': fetch_all(f'''
+            SELECT * FROM billing WHERE patient_id = ?{scope_sql} ORDER BY id DESC
+        ''', [patient_id] + scope_params),
         'treatment_plans': fetch_all('''
             SELECT * FROM treatment_plans WHERE patient_id = ? ORDER BY id DESC
         ''', (patient_id,)),
-        'followups': fetch_all('''
+        'followups': fetch_all(f'''
             SELECT pf.*, tp.requires_lab as procedure_requires_lab
             FROM patient_followups pf
             LEFT JOIN treatment_procedures tp ON tp.id = pf.procedure_id
-            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0
+            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0{pf_scope}
             ORDER BY pf.followup_date DESC, pf.id DESC
-        ''', (patient_id,)),
+        ''', [patient_id] + pf_params),
         'medical_images': fetch_all('''
             SELECT * FROM medical_images WHERE patient_id = ? ORDER BY uploaded_at DESC
         ''', (patient_id,))
@@ -3747,13 +3756,16 @@ def patient_followups(patient_id):
         # Self-heal stored running balances, then return rows in chronological order.
         _recompute_followup_balances(cursor, patient_id)
         conn.commit()
-        cursor.execute('''
+        scope_sql, scope_params = dentist_scope(cursor, 'pf')
+        if scope_sql:
+            scope_sql = f' AND (pf.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+        cursor.execute(f'''
             SELECT pf.*, tp.requires_lab as procedure_requires_lab
             FROM patient_followups pf
             LEFT JOIN treatment_procedures tp ON tp.id = pf.procedure_id
-            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0
+            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0{scope_sql}
             ORDER BY pf.followup_date ASC, pf.id ASC
-        ''', (patient_id,))
+        ''', [patient_id] + scope_params)
         rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify(rows)
@@ -3825,6 +3837,11 @@ def patient_followups(patient_id):
         lab_expense = 0
         clinic_profit = price - discount
 
+    # A dentist-role session always records work as themself — client-sent
+    # dentist_id (forged or stale UI state) is overridden, never trusted.
+    if _session_role(cursor) == 'dentist':
+        data = dict(data)
+        data['dentist_id'] = session['uid']
     dentist_id = data.get('dentist_id')
     if dentist_id not in (None, ''):
         try:
@@ -3942,6 +3959,11 @@ def patient_followups(patient_id):
 def followup_detail(patient_id, followup_id):
     conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
+
+    exists, err = _dentist_owns_or_403(cursor, 'patient_followups', followup_id)
+    if err is not None:
+        conn.close()
+        return err
 
     if request.method == 'DELETE':
         cursor.execute(
@@ -6502,12 +6524,17 @@ def billing():
     cursor = conn.cursor()
     
     if request.method == 'GET':
-        cursor.execute('''
+        scope_sql, scope_params = dentist_scope(cursor, 'b')
+        if scope_sql:
+            # dentist: own rows + unassigned (NULL) rows, read-only elsewhere
+            scope_sql = f' WHERE (b.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+        cursor.execute(f'''
             SELECT b.*, p.first_name || ' ' || p.last_name as patient_name
             FROM billing b
             JOIN patients p ON b.patient_id = p.id
+            {scope_sql}
             ORDER BY b.id DESC
-        ''')
+        ''', scope_params)
         billing_records = []
         for row in cursor.fetchall():
             row_data = dict(row)
@@ -6581,6 +6608,11 @@ def billing():
         else:
             payment_status = 'pending'
 
+        # A dentist-role session always bills as themself — client-sent
+        # dentist_id (forged or stale UI state) is overridden, never trusted.
+        if _session_role(cursor) == 'dentist':
+            data = dict(data)
+            data['dentist_id'] = session['uid']
         dentist_id = data.get('dentist_id')
         if dentist_id not in (None, ''):
             try:
@@ -6658,6 +6690,10 @@ def billing():
 def delete_billing(billing_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    exists, err = _dentist_owns_or_403(cursor, 'billing', billing_id)
+    if err is not None:
+        conn.close()
+        return err
     cursor.execute('DELETE FROM billing WHERE id = ?', (billing_id,))
     record_tombstone(cursor, 'billing', billing_id)
     append_audit_log(cursor, 'delete', 'billing', billing_id, {'id': billing_id})
