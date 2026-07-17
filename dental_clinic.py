@@ -3121,6 +3121,15 @@ def staff_account_update(user_id):
     if 'email' in data:
         sets.append('email = ?'); vals.append(new_email or None)
         sets.append('email_verified = ?'); vals.append(0)
+    if 'new_password' in data:
+        new_password = str(data.get('new_password') or '')
+        if len(new_password) < 4:
+            conn.close()
+            return jsonify({'error': 'New password must be at least 4 characters.'}), 400
+        sets.append('password_hash = ?'); vals.append(hash_password(new_password))
+        sets.append('must_change_password = ?'); vals.append(1)
+        sets.append('failed_login_count = ?'); vals.append(0)
+        sets.append('locked_until = ?'); vals.append(None)
     if not sets:
         conn.close()
         return jsonify({'error': 'No fields to update'}), 400
