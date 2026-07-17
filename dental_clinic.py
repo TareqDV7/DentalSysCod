@@ -2618,6 +2618,7 @@ def change_password_page():
     )
     conn.commit()
     conn.close()
+    _alert_admins('password_changed', f"user '{user['username']}' changed their password")
     return redirect(url_for('index'))
 
 
@@ -2629,9 +2630,26 @@ LOCKOUT_MINUTES = 15
 
 
 def _alert_admins(event, detail):
-    """Stub: Task 9 wires this to a real admin notification (e.g. via
-    send_system_email_async). No-op for now so lockout events don't crash."""
-    pass
+    """Notify every active, verified admin of a security-relevant event
+    (lockout, password change/reset, new staff account) via a fire-and-forget
+    email. Opens its own DB connection since callers may already have closed
+    theirs (or be mid-transaction) by the time this runs. Never raises: this
+    is called deep inside auth-critical paths (login, password reset/change,
+    staff creation) that must never break because an alert failed to send."""
+    try:
+        conn = get_db_connection(with_row_factory=True)
+        admins = conn.execute(
+            "SELECT email FROM users WHERE role = 'admin' AND is_active = 1 "
+            "AND email IS NOT NULL AND email != '' AND email_verified = 1"
+        ).fetchall()
+        conn.close()
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        for admin in admins:
+            send_system_email_async(admin['email'], 'security_alert',
+                                    {'clinic_name': clinic_name, 'event': event,
+                                     'detail': detail}, 'en')
+    except Exception:  # noqa: BLE001 - alerting must never break the caller's auth flow
+        logging.getLogger(__name__).exception('_alert_admins failed')
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -2837,7 +2855,12 @@ def staff_accounts():
     data = request.json or {}
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
-    if not username or not password:
+    email = data.get('email')
+    if email is not None:
+        email = str(email).strip().lower()
+    # A missing password is only allowed when an email is supplied — that's
+    # the invite path below, where a one-time code becomes the password.
+    if not username or (not password and not email):
         conn.close()
         return jsonify({'error': 'Username and password are required'}), 400
     existing = cursor.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
@@ -2857,30 +2880,66 @@ def staff_accounts():
     else:
         role = 'staff'
         is_dentist = 1 if data.get('is_dentist') else 0
-    email = data.get('email')
-    if email is not None:
-        email = str(email).strip().lower()
-        if email:
-            if not ('@' in email and 3 <= len(email) <= 254):
-                conn.close()
-                return jsonify({'error': 'Please enter a valid email address.'}), 400
-            dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?)', (email,)).fetchone()
-            if dup:
-                conn.close()
-                return jsonify({'error': 'That email is already in use'}), 400
-    cursor.execute(
-        'INSERT INTO users (username, password_hash, display_name, is_dentist, role, email) '
-        'VALUES (?, ?, ?, ?, ?, ?)',
-        (username, hash_password(password), data.get('display_name') or username,
-         is_dentist, role, email or None))
-    new_id = cursor.lastrowid
+    if email:
+        if not ('@' in email and 3 <= len(email) <= 254):
+            conn.close()
+            return jsonify({'error': 'Please enter a valid email address.'}), 400
+        dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?)', (email,)).fetchone()
+        if dup:
+            conn.close()
+            return jsonify({'error': 'That email is already in use'}), 400
+
+    # Invite path: email present, no password supplied. A one-time 6-digit
+    # code (auth_codes — same mechanism as OTP login/reset) becomes the
+    # temporary password; must_change_password forces a real one on first
+    # sign-in. email_verified is set immediately — receiving and using the
+    # invite code from that inbox already proves ownership, so there's no
+    # separate verify-email step to redo.
+    invite = bool(email) and not password
+    invite_code = None
+    if invite:
+        cursor.execute(
+            'INSERT INTO users (username, password_hash, display_name, is_dentist, role, email, '
+            'must_change_password, email_verified) VALUES (?, ?, ?, ?, ?, ?, 1, 1)',
+            (username, hash_password(secrets.token_urlsafe(24)),
+             data.get('display_name') or username, is_dentist, role, email))
+        new_id = cursor.lastrowid
+        # The code needs the new user's id (FK), so it's issued after insert;
+        # the placeholder hash above is immediately overwritten with it.
+        invite_code = auth_codes.issue_code(cursor, new_id, 'invite')
+        cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?',
+                       (hash_password(invite_code), new_id))
+    else:
+        cursor.execute(
+            'INSERT INTO users (username, password_hash, display_name, is_dentist, role, email) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (username, hash_password(password), data.get('display_name') or username,
+             is_dentist, role, email or None))
+        new_id = cursor.lastrowid
     requested_perms = data.get('permissions') or []
     for key in requested_perms:
         permissions.set_permission(cursor, new_id, key, True)
     append_audit_log(cursor, 'create', 'staff_account', new_id, {'username': username})
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'id': new_id})
+
+    sent = None
+    if invite:
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        ok, reason = send_system_email(email, 'staff_invite',
+                                       {'clinic_name': clinic_name, 'username': username,
+                                        'code': invite_code}, 'en')
+        sent = ok
+        if not ok:
+            logging.getLogger(__name__).info(
+                'staff invite email not sent for user id %s: %s', new_id, reason)
+    _alert_admins('user_created', f"staff account '{username}' created")
+
+    resp = {'success': True, 'id': new_id}
+    if invite:
+        resp['invited'] = True
+        resp['sent'] = sent
+    return jsonify(resp)
 
 
 def _count_active_admins(cursor, exclude_user_id=None):
