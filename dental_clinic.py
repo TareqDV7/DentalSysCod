@@ -4849,10 +4849,14 @@ def reports_summary():
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    scope_sql, scope_params = dentist_scope(cursor)
+    is_dentist_view = bool(scope_sql)
+
     clause, params = build_date_clause('appointment_date', start_date, end_date)
-    cursor.execute(f'SELECT COUNT(*) FROM appointments WHERE 1=1{clause}', params)
+    cursor.execute(f'SELECT COUNT(*) FROM appointments WHERE 1=1{clause}{scope_sql}', params + scope_params)
     appointments_count = cursor.fetchone()[0]
 
+    # visits has no dentist_id column -- clinic-wide for all roles
     clause, params = build_date_clause('visit_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM visits WHERE 1=1{clause}', params)
     visits_count = cursor.fetchone()[0]
@@ -4860,23 +4864,29 @@ def reports_summary():
     # Revenue = payments collected across BOTH ledgers (follow-up sheet + billing)
     # so reports, the dashboard, and the mobile app all agree.
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
+    cursor.execute(f"SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}", params + scope_params)
     revenue = float(cursor.fetchone()[0] or 0)
     bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE 1 = 1{bclause}', bparams)
+    cursor.execute(f'SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE 1 = 1{bclause}{scope_sql}', bparams + scope_params)
     revenue += float(cursor.fetchone()[0] or 0)
 
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
+    cursor.execute(f"SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}", params + scope_params)
     lab_expenses = cursor.fetchone()[0]
 
-    clause, params = build_date_clause('expense_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND 1=1{clause}', params)
-    expenses_paid = cursor.fetchone()[0]
+    # General clinic expenses are never a single dentist's cost -- zeroed for
+    # the dentist view (same rationale as the per-dentist breakdown below).
+    if is_dentist_view:
+        expenses_paid = 0
+        expenses_postponed = 0
+    else:
+        clause, params = build_date_clause('expense_date', start_date, end_date)
+        cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND 1=1{clause}', params)
+        expenses_paid = cursor.fetchone()[0]
 
-    clause, params = build_date_clause('expense_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND 1=1{clause}', params)
-    expenses_postponed = cursor.fetchone()[0]
+        clause, params = build_date_clause('expense_date', start_date, end_date)
+        cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND 1=1{clause}', params)
+        expenses_postponed = cursor.fetchone()[0]
 
     expenses_total = float(expenses_paid or 0) + float(expenses_postponed or 0)
 
@@ -4888,15 +4898,15 @@ def reports_summary():
     clause, params = build_date_clause('followup_date', start_date, end_date)
     cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0)
-        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}
-    ''', params)
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}
+    ''', params + scope_params)
     followup_net_charge = float(cursor.fetchone()[0] or 0)
 
     bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
     cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE 1 = 1{bclause}
-    ''', bparams)
+        FROM billing WHERE 1 = 1{bclause}{scope_sql}
+    ''', bparams + scope_params)
     billing_net_charge = float(cursor.fetchone()[0] or 0)
 
     # Every lab-requiring follow-up auto-mirrors its lab_expense into the
@@ -4907,13 +4917,16 @@ def reports_summary():
     # lab_expenses directly from patient_followups -- counting the mirrored
     # expense row too would double-subtract the same cost. Exclude
     # source_type='followup' from ONLY the general-expenses term used here.
-    clause, params = build_date_clause('expense_date', start_date, end_date)
-    cursor.execute(f'''
-        SELECT COALESCE(SUM(amount), 0) FROM expenses
-        WHERE payment_status IN ('paid', 'postponed')
-        AND COALESCE(source_type, '') != 'followup'{clause}
-    ''', params)
-    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+    if is_dentist_view:
+        general_expenses_for_profit = 0.0
+    else:
+        clause, params = build_date_clause('expense_date', start_date, end_date)
+        cursor.execute(f'''
+            SELECT COALESCE(SUM(amount), 0) FROM expenses
+            WHERE payment_status IN ('paid', 'postponed')
+            AND COALESCE(source_type, '') != 'followup'{clause}
+        ''', params)
+        general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
 
     clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
@@ -4926,17 +4939,17 @@ def reports_summary():
         SELECT dentist_id,
                COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0),
                COALESCE(SUM(lab_expense), 0)
-        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}
         GROUP BY dentist_id
-    ''', params)
+    ''', params + scope_params)
     followup_by_dentist = {row[0]: (float(row[1]), float(row[2])) for row in cursor.fetchall()}
 
     bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
     cursor.execute(f'''
         SELECT dentist_id, COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE 1 = 1{bclause}
+        FROM billing WHERE 1 = 1{bclause}{scope_sql}
         GROUP BY dentist_id
-    ''', bparams)
+    ''', bparams + scope_params)
     billing_by_dentist = {row[0]: float(row[1]) for row in cursor.fetchall()}
 
     # No is_dentist filter here: a dentist_id on a historical row was valid
@@ -4950,17 +4963,22 @@ def reports_summary():
     for did in all_dentist_ids:
         f_charge, f_lab = followup_by_dentist.get(did, (0.0, 0.0))
         b_charge = billing_by_dentist.get(did, 0.0)
-        revenue = f_charge + b_charge
+        # Named distinctly from the outer `revenue` (payment-collected total)
+        # -- reusing that name here used to silently clobber it once the loop
+        # ran, corrupting the top-level 'revenue' field whenever 2+ dentist
+        # buckets existed (fixed as part of Task 13's scoping work).
+        dentist_revenue = f_charge + b_charge
         lab_expense = f_lab
         dentist_breakdown.append({
             'dentist_id': did,
             'dentist_name': dentist_names.get(did, 'Unassigned') if did is not None else 'Unassigned',
-            'revenue': revenue,
+            'revenue': dentist_revenue,
             'lab_expense': lab_expense,
-            'gross_margin': revenue - lab_expense,
+            'gross_margin': dentist_revenue - lab_expense,
         })
     dentist_breakdown.sort(key=lambda d: (d['dentist_id'] is None, d['dentist_name']))
 
+    # treatment_plans has no dentist_id column -- clinic-wide for all roles
     clause, params = build_date_clause('start_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM treatment_plans WHERE 1=1{clause}', params)
     plans_count = cursor.fetchone()[0]
@@ -4999,80 +5017,94 @@ def reports_weekly():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute('SELECT COUNT(*) FROM appointments WHERE date(appointment_date) BETWEEN ? AND ?', (start_str, end_str))
+    scope_sql, scope_params = dentist_scope(cursor)
+    is_dentist_view = bool(scope_sql)
+    scope_params = tuple(scope_params)
+
+    cursor.execute(f'SELECT COUNT(*) FROM appointments WHERE date(appointment_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     appointments_count = cursor.fetchone()[0]
 
+    # visits has no dentist_id column -- clinic-wide for all roles
     cursor.execute('SELECT COUNT(*) FROM visits WHERE date(visit_date) BETWEEN ? AND ?', (start_str, end_str))
     visits_count = cursor.fetchone()[0]
 
     # Count distinct teeth (excluding follow-ups marked as 'مراجعة')
-    cursor.execute('''
-        SELECT COUNT(DISTINCT tooth_no) FROM patient_followups 
-        WHERE date(followup_date) BETWEEN ? AND ? 
-        AND COALESCE(is_deleted, 0) = 0 
-        AND treatment_procedure != 'مراجعة'
-    ''', (start_str, end_str))
+    cursor.execute(f'''
+        SELECT COUNT(DISTINCT tooth_no) FROM patient_followups
+        WHERE date(followup_date) BETWEEN ? AND ?
+        AND COALESCE(is_deleted, 0) = 0
+        AND treatment_procedure != 'مراجعة'{scope_sql}
+    ''', (start_str, end_str) + scope_params)
     distinct_teeth = cursor.fetchone()[0] or 0
 
-    cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     revenue = float(cursor.fetchone()[0] or 0)
-    cursor.execute('SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     revenue += float(cursor.fetchone()[0] or 0)
 
-    cursor.execute('SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     lab_expenses = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
-    expenses_paid = cursor.fetchone()[0]
+    # General clinic expenses are never a single dentist's cost -- zeroed for
+    # the dentist view (same rationale as the per-dentist breakdown below).
+    if is_dentist_view:
+        expenses_paid = 0
+        expenses_postponed = 0
+    else:
+        cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
+        expenses_paid = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
-    expenses_postponed = cursor.fetchone()[0]
+        cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
+        expenses_postponed = cursor.fetchone()[0]
 
     expenses_total = float(expenses_paid or 0) + float(expenses_postponed or 0)
 
     # Unified gross profit -- see Task 1's identical comment/rationale.
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0)
-        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?
-    ''', (start_str, end_str))
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}
+    ''', (start_str, end_str) + scope_params)
     followup_net_charge = float(cursor.fetchone()[0] or 0)
 
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?
-    ''', (start_str, end_str))
+        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}
+    ''', (start_str, end_str) + scope_params)
     billing_net_charge = float(cursor.fetchone()[0] or 0)
 
     # See Task 1's identical comment: excludes the auto-mirrored lab_expense
     # rows (source_type='followup') already counted via `lab_expenses` above,
     # so the same cost isn't subtracted twice. expenses_total (the display
     # fields) is untouched.
-    cursor.execute('''
-        SELECT COALESCE(SUM(amount), 0) FROM expenses
-        WHERE payment_status IN ('paid', 'postponed')
-        AND COALESCE(source_type, '') != 'followup'
-        AND date(expense_date) BETWEEN ? AND ?
-    ''', (start_str, end_str))
-    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+    if is_dentist_view:
+        general_expenses_for_profit = 0.0
+    else:
+        cursor.execute('''
+            SELECT COALESCE(SUM(amount), 0) FROM expenses
+            WHERE payment_status IN ('paid', 'postponed')
+            AND COALESCE(source_type, '') != 'followup'
+            AND date(expense_date) BETWEEN ? AND ?
+        ''', (start_str, end_str))
+        general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
 
     clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
     # Per-dentist breakdown -- see reports_summary()'s identical comment/rationale.
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT dentist_id,
                COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0),
                COALESCE(SUM(lab_expense), 0)
         FROM patient_followups
-        WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?
+        WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}
         GROUP BY dentist_id
-    ''', (start_str, end_str))
+    ''', (start_str, end_str) + scope_params)
     followup_by_dentist = {row[0]: (float(row[1]), float(row[2])) for row in cursor.fetchall()}
 
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT dentist_id, COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?
+        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}
         GROUP BY dentist_id
-    ''', (start_str, end_str))
+    ''', (start_str, end_str) + scope_params)
     billing_by_dentist = {row[0]: float(row[1]) for row in cursor.fetchall()}
 
     cursor.execute('SELECT id, display_name FROM users')
@@ -5083,33 +5115,38 @@ def reports_weekly():
     for did in all_dentist_ids:
         f_charge, f_lab = followup_by_dentist.get(did, (0.0, 0.0))
         b_charge = billing_by_dentist.get(did, 0.0)
-        revenue = f_charge + b_charge
+        # Named distinctly from the outer `revenue` (payment-collected total)
+        # -- reusing that name here used to silently clobber it once the loop
+        # ran, corrupting the top-level 'revenue' field whenever 2+ dentist
+        # buckets existed (fixed as part of Task 13's scoping work).
+        dentist_revenue = f_charge + b_charge
         lab_expense = f_lab
         dentist_breakdown.append({
             'dentist_id': did,
             'dentist_name': dentist_names.get(did, 'Unassigned') if did is not None else 'Unassigned',
-            'revenue': revenue,
+            'revenue': dentist_revenue,
             'lab_expense': lab_expense,
-            'gross_margin': revenue - lab_expense,
+            'gross_margin': dentist_revenue - lab_expense,
         })
     dentist_breakdown.sort(key=lambda d: (d['dentist_id'] is None, d['dentist_name']))
 
+    # treatment_plans has no dentist_id column -- clinic-wide for all roles
     cursor.execute('SELECT COUNT(*) FROM treatment_plans WHERE date(start_date) BETWEEN ? AND ?', (start_str, end_str))
     plans_count = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COUNT(*) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COUNT(*) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     invoice_count = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     session_count = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COUNT(DISTINCT patient_id) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COUNT(DISTINCT patient_id) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     patient_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND entry_type = 'followup' AND date(followup_date) BETWEEN ? AND ?", (start_str, end_str))
+    cursor.execute(f"SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND entry_type = 'followup' AND date(followup_date) BETWEEN ? AND ?{scope_sql}", (start_str, end_str) + scope_params)
     followups_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND (entry_type = 'new' OR entry_type IS NULL OR entry_type = '') AND date(followup_date) BETWEEN ? AND ?", (start_str, end_str))
+    cursor.execute(f"SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND (entry_type = 'new' OR entry_type IS NULL OR entry_type = '') AND date(followup_date) BETWEEN ? AND ?{scope_sql}", (start_str, end_str) + scope_params)
     new_entries_count = cursor.fetchone()[0]
 
     conn.close()
