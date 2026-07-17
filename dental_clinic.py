@@ -2402,6 +2402,9 @@ _PERMISSION_RULES = (
 
     # Staff management itself (added in Task 4) — gated on staff.manage.
     (None, r'^/api/staff(/.*)?$', 'staff.manage'),
+
+    # Admin recovery-code generation — same trust tier as managing staff.
+    (None, r'^/api/settings/recovery-code$', 'staff.manage'),
 )
 
 _PERMISSION_RULE_CACHE = tuple((methods, re.compile(pattern), key) for methods, pattern, key in _PERMISSION_RULES)
@@ -2530,7 +2533,8 @@ _CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
 # model (hijacking an authenticated session) doesn't apply pre-auth anyway.
 # Anti-enumeration + auth_codes' attempt/expiry limits are the abuse guard
 # here instead of a token.
-_CSRF_FORM_ROUTES = {'/login', '/change-password', '/api/login/forgot', '/api/login/reset'}
+_CSRF_FORM_ROUTES = {'/login', '/change-password', '/api/login/forgot', '/api/login/reset',
+                     '/api/login/recover'}
 _CSRF_ENABLED = os.environ.get('CLINIC_DISABLE_CSRF', '0').strip().lower() \
     not in ('1', 'true', 'yes', 'on')
 if not _CSRF_ENABLED:
@@ -2786,6 +2790,55 @@ def api_login_reset():
     conn.close()
     _alert_admins('password_changed', f"password reset via email for '{user['username']}'")
     return jsonify({'success': True})
+
+
+@app.route('/api/settings/recovery-code', methods=['POST'])
+def api_settings_recovery_code():
+    """Generate (and rotate) the clinic's one-time admin recovery code.
+    Plaintext is returned exactly once for the admin to print/store offline;
+    only its pbkdf2 hash persists. staff.manage-gated via _PERMISSION_RULES."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    code = auth_codes.issue_recovery_code(cursor)
+    append_audit_log(cursor, 'create', 'admin_recovery_code', None, {'rotated': True})
+    conn.commit()
+    conn.close()
+    return jsonify({'code': code})
+
+
+@app.route('/api/login/recover', methods=['POST'])
+def api_login_recover():
+    """Offline lockout escape: redeem the printed one-time recovery code to
+    reset the OLDEST active admin's password (no email involved). Redeeming
+    always rotates: a fresh code is issued and returned exactly once so the
+    clinic is never left without a valid escape hatch."""
+    data = request.json or {}
+    code = str(data.get('code') or '').strip()
+    new_password = str(data.get('new_password') or '')
+    if len(new_password) < 4:
+        return jsonify({'error': 'New password must be at least 4 characters.'}), 400
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    admin = cursor.execute(
+        "SELECT id, username FROM users WHERE role = 'admin' AND is_active = 1 "
+        'ORDER BY id LIMIT 1').fetchone()
+    if not admin or not auth_codes.redeem_recovery_code(cursor, code):
+        conn.commit()  # persist the used_at stamp if redemption half-applied
+        conn.close()
+        return jsonify({'error': 'Invalid recovery code'}), 400
+    cursor.execute(
+        'UPDATE users SET password_hash = ?, failed_login_count = 0, '
+        'locked_until = NULL, must_change_password = 0 WHERE id = ?',
+        (hash_password(new_password), admin['id']))
+    fresh_code = auth_codes.issue_recovery_code(cursor)
+    append_audit_log(cursor, 'update', 'admin_recovery_used', admin['id'],
+                     {'username': admin['username']})
+    conn.commit()
+    conn.close()
+    _alert_admins('recovery_used',
+                  f"recovery code redeemed — password reset for '{admin['username']}'")
+    return jsonify({'success': True, 'username': admin['username'],
+                    'new_recovery_code': fresh_code})
 
 
 @app.route('/api/auth/me')
