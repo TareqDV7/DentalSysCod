@@ -833,6 +833,22 @@ def get_table_columns(cursor, table_name):
     return [row[1] for row in cursor.fetchall()]
 
 
+def migrate_user_roles(cursor):
+    """Derive role for users whose role is NULL/empty. admin (holds
+    staff.manage) > dentist (is_dentist=1) > staff. Idempotent: rows with a
+    role already set are never touched, so later manual demotions stick."""
+    rows = cursor.execute(
+        "SELECT id, is_dentist FROM users WHERE role IS NULL OR role = ''"
+    ).fetchall()
+    for row in rows:
+        uid, is_dentist = row[0], row[1]
+        has_manage = cursor.execute(
+            'SELECT 1 FROM user_permissions WHERE user_id = ? AND '
+            "permission_key = 'staff.manage' AND granted = 1", (uid,)).fetchone()
+        role = 'admin' if has_manage else ('dentist' if is_dentist else 'staff')
+        cursor.execute('UPDATE users SET role = ? WHERE id = ?', (role, uid))
+
+
 def init_database():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1189,6 +1205,29 @@ def init_database():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS auth_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            purpose TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            attempts INTEGER DEFAULT 0,
+            consumed INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admin_recovery (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            used_at TEXT
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS pairing_requests (
             pair_code TEXT PRIMARY KEY,
             device_name TEXT NOT NULL,
@@ -1356,6 +1395,14 @@ def init_database():
     ensure_table_column(cursor, 'users', 'must_change_password', 'INTEGER DEFAULT 0')
     ensure_table_column(cursor, 'license_serials', 'serial_token', 'TEXT')
     ensure_table_column(cursor, 'license_serials', 'clinic_name', 'TEXT')
+    ensure_table_column(cursor, 'users', 'email', 'TEXT')
+    ensure_table_column(cursor, 'users', 'email_verified', 'INTEGER DEFAULT 0')
+    ensure_table_column(cursor, 'users', 'role', 'TEXT')
+    ensure_table_column(cursor, 'users', 'failed_login_count', 'INTEGER DEFAULT 0')
+    ensure_table_column(cursor, 'users', 'locked_until', 'TEXT')
+    # SQLite can't add UNIQUE via ALTER; partial unique index instead.
+    cursor.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
+                      ON users (email) WHERE email IS NOT NULL AND email != '' ''')
 
     # New tables for features
     cursor.execute('''
@@ -1537,6 +1584,7 @@ def init_database():
 
     import permissions as _permissions
     _permissions.migrate_default_grants(cursor)
+    migrate_user_roles(cursor)
 
     conn.commit()
     conn.close()
@@ -2201,8 +2249,10 @@ CLINIC_CONFIG = {
 # HTML templates extracted to templates.py (see that module).
 from templates import HTML_TEMPLATE, MOBILE_PORTAL_TEMPLATE, LOGIN_TEMPLATE, FORCE_CHANGE_TEMPLATE
 # Data-tools helpers (pure, no Flask).
+import auth_codes
 import db_import
 import db_merge
+import email_templates
 import inventory
 import patient_dedupe
 import patient_import
@@ -2352,6 +2402,9 @@ _PERMISSION_RULES = (
 
     # Staff management itself (added in Task 4) — gated on staff.manage.
     (None, r'^/api/staff(/.*)?$', 'staff.manage'),
+
+    # Admin recovery-code generation — same trust tier as managing staff.
+    (None, r'^/api/settings/recovery-code$', 'staff.manage'),
 )
 
 _PERMISSION_RULE_CACHE = tuple((methods, re.compile(pattern), key) for methods, pattern, key in _PERMISSION_RULES)
@@ -2365,6 +2418,44 @@ def _permission_required_for(method, path):
         if compiled.match(path):
             return key
     return None
+
+
+def _session_role(cursor):
+    """Role of the signed-in user ('' when anonymous). Role gates DATA
+    VISIBILITY (whose rows you see); the permission keys above keep gating
+    feature access — the two are deliberately orthogonal."""
+    uid = session.get('uid')
+    if not uid:
+        return ''
+    row = cursor.execute('SELECT role FROM users WHERE id = ?', (uid,)).fetchone()
+    return (row[0] if row else '') or ''
+
+
+def dentist_scope(cursor, alias=''):
+    """SQL fragment confining reads to the signed-in dentist's own rows.
+
+    role='dentist' → (' AND <alias.>dentist_id = ?', [uid]); anyone else →
+    ('', []). NULL-dentist rows are handled by callers that must keep
+    legacy/front-desk bookings visible (they OR in `dentist_id IS NULL`).
+    This is a security boundary, not a UI filter: it is applied server-side
+    in every scoped read, and client-supplied dentist filters are ignored
+    for the dentist role."""
+    if _session_role(cursor) != 'dentist':
+        return '', []
+    prefix = f'{alias}.' if alias else ''
+    return f' AND {prefix}dentist_id = ?', [session['uid']]
+
+
+def _dentist_owns_or_403(cursor, table, row_id):
+    """For mutating routes: 403 when a dentist touches a row that isn't
+    theirs (including NULL-dentist rows — those stay read-only for
+    dentists). Returns (row_exists, error_response_or_None)."""
+    row = cursor.execute(f'SELECT dentist_id FROM {table} WHERE id = ?', (row_id,)).fetchone()
+    if row is None:
+        return False, None
+    if _session_role(cursor) == 'dentist' and row[0] != session.get('uid'):
+        return True, (jsonify({'error': 'Not your record'}), 403)
+    return True, None
 
 
 @app.before_request
@@ -2407,9 +2498,12 @@ def _enforce_staff_permission():
 
 
 # Endpoints that stay writable even in view-only mode: licensing (so you can renew),
-# auth (login/logout), cloud connectivity, and health. Everything else clinical is
-# read-only once the subscription lapses.
-_VIEW_ONLY_WRITE_ALLOW_PREFIXES = ('/api/license/', '/api/auth/', '/api/cloud/', '/api/onboarding/')
+# auth (login/logout, forgot/reset password), cloud connectivity, and health.
+# Everything else clinical is read-only once the subscription lapses. A locked-out
+# staffer must still be able to recover their own account while the license is
+# lapsed — otherwise an expired license could compound into a permanent lockout.
+_VIEW_ONLY_WRITE_ALLOW_PREFIXES = ('/api/license/', '/api/auth/', '/api/cloud/',
+                                   '/api/onboarding/', '/api/login/')
 _VIEW_ONLY_WRITE_ALLOW_EXACT = {'/healthz'}
 
 
@@ -2469,7 +2563,16 @@ def _require_password_change():
 
 
 _CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
-_CSRF_FORM_ROUTES = {'/login', '/change-password'}
+# '/login' and '/change-password' are no-JS form posts that self-validate (see
+# _form_csrf_ok) + re-render on failure. The two /api/login/* routes are JSON
+# posts reachable by a signed-out visitor who has no session-bound CSRF token
+# to send yet (there is no HTML page in this codebase that seeds one before
+# they're used) — same pre-auth posture as /login itself, and CSRF's threat
+# model (hijacking an authenticated session) doesn't apply pre-auth anyway.
+# Anti-enumeration + auth_codes' attempt/expiry limits are the abuse guard
+# here instead of a token.
+_CSRF_FORM_ROUTES = {'/login', '/change-password', '/api/login/forgot', '/api/login/reset',
+                     '/api/login/recover'}
 _CSRF_ENABLED = os.environ.get('CLINIC_DISABLE_CSRF', '0').strip().lower() \
     not in ('1', 'true', 'yes', 'on')
 if not _CSRF_ENABLED:
@@ -2557,7 +2660,57 @@ def change_password_page():
     )
     conn.commit()
     conn.close()
+    _alert_admins('password_changed', f"user '{user['username']}' changed their password")
     return redirect(url_for('index'))
+
+
+# Per-user lockout (Task 6): 5 consecutive failed sign-ins locks the account for
+# 15 minutes. Threshold/duration are module-level constants so Task 9 (or ops)
+# can tune them without hunting through login_page().
+LOCKOUT_THRESHOLD = 5
+LOCKOUT_MINUTES = 15
+
+
+def _alert_admins(event, detail):
+    """Notify every active, verified admin of a security-relevant event
+    (lockout, password change/reset, new staff account) via a fire-and-forget
+    email. Opens its own DB connection since callers may already have closed
+    theirs (or be mid-transaction) by the time this runs. Never raises: this
+    is called deep inside auth-critical paths (login, password reset/change,
+    staff creation) that must never break because an alert failed to send."""
+    try:
+        conn = get_db_connection(with_row_factory=True)
+        admins = conn.execute(
+            "SELECT email FROM users WHERE role = 'admin' AND is_active = 1 "
+            "AND email IS NOT NULL AND email != '' AND email_verified = 1"
+        ).fetchall()
+        conn.close()
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        for admin in admins:
+            send_system_email_async(admin['email'], 'security_alert',
+                                    {'clinic_name': clinic_name, 'event': event,
+                                     'detail': detail}, 'en')
+    except Exception:  # noqa: BLE001 - alerting must never break the caller's auth flow
+        logging.getLogger(__name__).exception('_alert_admins failed')
+
+
+def _login_tiles():
+    """Users shown as sign-in tiles on the login screen. Returns [] (no tile
+    grid — falls back to the classic identifier+password form) once there are
+    more than 12 active users; beyond that a grid stops being useful. Each
+    tile's display_name falls back to username when blank so the template
+    never has to special-case an empty avatar/label."""
+    conn = get_db_connection(with_row_factory=True)
+    rows = conn.execute(
+        'SELECT id, username, display_name, role FROM users WHERE is_active = 1 '
+        'ORDER BY display_name').fetchall()
+    conn.close()
+    tiles = []
+    for r in rows:
+        t = dict(r)
+        t['display_name'] = t['display_name'] or t['username']
+        tiles.append(t)
+    return tiles if len(tiles) <= 12 else []
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -2568,15 +2721,30 @@ def login_page():
             return render_template_string(
                 LOGIN_TEMPLATE,
                 error='Security check failed — please reload and try again.',
-                next_url=next_url, csrf_token=_get_or_create_csrf_token()), 400
-        username = (request.form.get('username') or '').strip()
+                next_url=next_url, csrf_token=_get_or_create_csrf_token(),
+                tiles=_login_tiles()), 400
+        identifier = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
         conn = get_db_connection(with_row_factory=True)
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE username = ? AND is_active = 1', (username,))
+        cursor.execute(
+            'SELECT * FROM users WHERE (username = ? OR (email IS NOT NULL AND '
+            "email != '' AND lower(email) = lower(?))) AND is_active = 1",
+            (identifier, identifier))
         user = cursor.fetchone()
+        now_iso = datetime.utcnow().isoformat(timespec='seconds')
+        if user and user['locked_until'] and user['locked_until'] > now_iso:
+            conn.close()
+            return render_template_string(
+                LOGIN_TEMPLATE,
+                error='Too many failed attempts — try again in a few minutes.',
+                next_url=next_url, csrf_token=_get_or_create_csrf_token(),
+                tiles=_login_tiles()), 401
         if user and check_password_hash(user['password_hash'], password):
-            cursor.execute('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?', (user['id'],))
+            cursor.execute(
+                'UPDATE users SET last_login_at = CURRENT_TIMESTAMP, '
+                'failed_login_count = 0, locked_until = NULL WHERE id = ?',
+                (user['id'],))
             conn.commit()
             conn.close()
             session.clear()
@@ -2584,14 +2752,28 @@ def login_page():
             session['uname'] = user['username']
             session['csrf_token'] = _new_csrf_token()  # rotate on privilege change
             return redirect(next_url or url_for('index'))
+        if user:
+            failed = (user['failed_login_count'] or 0) + 1
+            locked_until = None
+            if failed >= LOCKOUT_THRESHOLD:
+                locked_until = (datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+                                ).isoformat(timespec='seconds')
+                _alert_admins('account_locked', f"user '{user['username']}' locked after "
+                              f'{failed} failed sign-ins')  # Task 9 wires a real alert; stub no-ops for now
+            cursor.execute(
+                'UPDATE users SET failed_login_count = ?, locked_until = ? WHERE id = ?',
+                (failed, locked_until, user['id']))
+            conn.commit()
         conn.close()
         return render_template_string(LOGIN_TEMPLATE, error='Invalid username or password.',
                                       next_url=next_url,
-                                      csrf_token=_get_or_create_csrf_token()), 401
+                                      csrf_token=_get_or_create_csrf_token(),
+                                      tiles=_login_tiles()), 401
     if session.get('uid'):
         return redirect(next_url or url_for('index'))
     return render_template_string(LOGIN_TEMPLATE, error=None, next_url=next_url,
-                                  csrf_token=_get_or_create_csrf_token())
+                                  csrf_token=_get_or_create_csrf_token(),
+                                  tiles=_login_tiles())
 
 
 @app.route('/logout')
@@ -2600,16 +2782,144 @@ def logout():
     return redirect(url_for('login_page'))
 
 
+_USER_LOOKUP_SQL = (
+    'SELECT * FROM users WHERE (username = ? OR (email IS NOT NULL AND '
+    "email != '' AND lower(email) = lower(?))) AND is_active = 1")
+
+
+@app.route('/api/login/forgot', methods=['POST'])
+def api_login_forgot():
+    """Request a password-reset code by email. ALWAYS returns the same 200
+    {'sent': True} response — whether the identifier matches no account, an
+    account with no/unverified email, or the relay itself fails — so a caller
+    can never distinguish account existence from the response (anti-
+    enumeration). The real outcome is only ever logged server-side."""
+    data = request.json or {}
+    identifier = str(data.get('identifier') or '').strip()
+    generic = jsonify({'sent': True})
+    if not identifier:
+        return generic
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    cursor.execute(_USER_LOOKUP_SQL, (identifier, identifier))
+    user = cursor.fetchone()
+    log = logging.getLogger(__name__)
+    if user and user['email'] and user['email_verified']:
+        code = auth_codes.issue_code(cursor, user['id'], 'password_reset')
+        conn.commit()
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        ok, reason = send_system_email(user['email'], 'password_reset',
+                                       {'clinic_name': clinic_name, 'code': code}, 'en')
+        if ok:
+            log.info('password reset code sent for user id %s', user['id'])
+        else:
+            log.info('password reset email not sent for user id %s: %s', user['id'], reason)
+    else:
+        log.info('password reset requested for unknown/unverified identifier')
+    conn.close()
+    return generic
+
+
+@app.route('/api/login/reset', methods=['POST'])
+def api_login_reset():
+    """Complete a password reset with the emailed code. Returns one generic
+    400 for every failure kind (unknown identifier, wrong/expired/locked
+    code) so a caller can't distinguish them (anti-enumeration) — only the
+    too-short-password 400 differs, since that's pre-validation before any
+    account lookup happens."""
+    data = request.json or {}
+    identifier = str(data.get('identifier') or '').strip()
+    code = str(data.get('code') or '').strip()
+    new_password = str(data.get('new_password') or '')
+    fail = (jsonify({'error': 'Invalid or expired code'}), 400)
+    if len(new_password) < 4:
+        return jsonify({'error': 'New password must be at least 4 characters.'}), 400
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    cursor.execute(_USER_LOOKUP_SQL, (identifier, identifier))
+    user = cursor.fetchone()
+    if not user or auth_codes.verify_code(cursor, user['id'], 'password_reset', code) != 'ok':
+        conn.commit()  # persist the auth_codes attempt counter even on failure
+        conn.close()
+        return fail
+    cursor.execute(
+        'UPDATE users SET password_hash = ?, failed_login_count = 0, '
+        'locked_until = NULL, must_change_password = 0 WHERE id = ?',
+        (hash_password(new_password), user['id']))
+    append_audit_log(cursor, 'update', 'password_reset', user['id'], {'via': 'email_code'})
+    conn.commit()
+    conn.close()
+    _alert_admins('password_changed', f"password reset via email for '{user['username']}'")
+    return jsonify({'success': True})
+
+
+@app.route('/api/settings/recovery-code', methods=['POST'])
+def api_settings_recovery_code():
+    """Generate (and rotate) the clinic's one-time admin recovery code.
+    Plaintext is returned exactly once for the admin to print/store offline;
+    only its pbkdf2 hash persists. staff.manage-gated via _PERMISSION_RULES."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    code = auth_codes.issue_recovery_code(cursor)
+    append_audit_log(cursor, 'create', 'admin_recovery_code', None, {'rotated': True})
+    conn.commit()
+    conn.close()
+    return jsonify({'code': code})
+
+
+@app.route('/api/login/recover', methods=['POST'])
+def api_login_recover():
+    """Offline lockout escape: redeem the printed one-time recovery code to
+    reset the OLDEST active admin's password (no email involved). Redeeming
+    always rotates: a fresh code is issued and returned exactly once so the
+    clinic is never left without a valid escape hatch."""
+    data = request.json or {}
+    code = str(data.get('code') or '').strip()
+    new_password = str(data.get('new_password') or '')
+    if len(new_password) < 4:
+        return jsonify({'error': 'New password must be at least 4 characters.'}), 400
+    conn = get_db_connection(with_row_factory=True)
+    cursor = conn.cursor()
+    admin = cursor.execute(
+        "SELECT id, username FROM users WHERE role = 'admin' AND is_active = 1 "
+        'ORDER BY id LIMIT 1').fetchone()
+    if not admin or not auth_codes.redeem_recovery_code(cursor, code):
+        conn.commit()  # persist the used_at stamp if redemption half-applied
+        conn.close()
+        return jsonify({'error': 'Invalid recovery code'}), 400
+    cursor.execute(
+        'UPDATE users SET password_hash = ?, failed_login_count = 0, '
+        'locked_until = NULL, must_change_password = 0 WHERE id = ?',
+        (hash_password(new_password), admin['id']))
+    fresh_code = auth_codes.issue_recovery_code(cursor)
+    append_audit_log(cursor, 'update', 'admin_recovery_used', admin['id'],
+                     {'username': admin['username']})
+    conn.commit()
+    conn.close()
+    _alert_admins('recovery_used',
+                  f"recovery code redeemed — password reset for '{admin['username']}'")
+    return jsonify({'success': True, 'username': admin['username'],
+                    'new_recovery_code': fresh_code})
+
+
 @app.route('/api/auth/me')
 def auth_me():
     uid = session.get('uid')
     granted = []
+    role, email, email_verified = None, '', False
     if uid:
-        conn = get_db_connection()
-        granted = sorted(permissions.get_permissions(conn.cursor(), uid))
+        conn = get_db_connection(with_row_factory=True)
+        cursor = conn.cursor()
+        granted = sorted(permissions.get_permissions(cursor, uid))
+        row = cursor.execute('SELECT role, email, email_verified FROM users WHERE id = ?', (uid,)).fetchone()
+        if row:
+            role = row['role']
+            email = row['email'] or ''
+            email_verified = bool(row['email_verified'])
         conn.close()
     return jsonify({'authenticated': bool(uid), 'username': session.get('uname', ''),
-                    'permissions': granted})
+                    'permissions': granted, 'role': role, 'email': email,
+                    'email_verified': email_verified})
 
 
 def _count_users_with_permission(cursor, permission_key, exclude_user_id=None):
@@ -2641,14 +2951,17 @@ def list_dentists():
     return jsonify([dict(r) for r in rows])
 
 
+_VALID_ROLES = ('admin', 'dentist', 'staff')
+
+
 @app.route('/api/staff', methods=['GET', 'POST'])
 def staff_accounts():
     conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
     if request.method == 'GET':
         rows = cursor.execute(
-            'SELECT id, username, display_name, is_active, is_dentist, created_at, last_login_at FROM users '
-            'ORDER BY username'
+            'SELECT id, username, display_name, is_active, is_dentist, role, email, email_verified, '
+            'created_at, last_login_at FROM users ORDER BY username'
         ).fetchall()
         conn.close()
         return jsonify([dict(r) for r in rows])
@@ -2656,25 +2969,99 @@ def staff_accounts():
     data = request.json or {}
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
-    if not username or not password:
+    email = data.get('email')
+    if email is not None:
+        email = str(email).strip().lower()
+    # A missing password is only allowed when an email is supplied — that's
+    # the invite path below, where a one-time code becomes the password.
+    if not username or (not password and not email):
         conn.close()
         return jsonify({'error': 'Username and password are required'}), 400
     existing = cursor.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
     if existing:
         conn.close()
         return jsonify({'error': 'That username is already in use'}), 400
-    cursor.execute(
-        'INSERT INTO users (username, password_hash, display_name, is_dentist) VALUES (?, ?, ?, ?)',
-        (username, hash_password(password), data.get('display_name') or username,
-         1 if data.get('is_dentist') else 0))
-    new_id = cursor.lastrowid
+    # role, when supplied, drives is_dentist (sync: is_dentist = 1 iff role ==
+    # 'dentist'), overriding any is_dentist field passed alongside it. When
+    # role is omitted, fall back to the legacy is_dentist-only behavior (role
+    # defaults to 'staff') so older callers keep working unchanged.
+    if 'role' in data:
+        role = str(data.get('role') or '').strip().lower()
+        if role not in _VALID_ROLES:
+            conn.close()
+            return jsonify({'error': 'Role must be one of admin, dentist, staff'}), 400
+        is_dentist = 1 if role == 'dentist' else 0
+    else:
+        role = 'staff'
+        is_dentist = 1 if data.get('is_dentist') else 0
+    if email:
+        if not ('@' in email and 3 <= len(email) <= 254):
+            conn.close()
+            return jsonify({'error': 'Please enter a valid email address.'}), 400
+        dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?)', (email,)).fetchone()
+        if dup:
+            conn.close()
+            return jsonify({'error': 'That email is already in use'}), 400
+
+    # Invite path: email present, no password supplied. A one-time 6-digit
+    # code (auth_codes — same mechanism as OTP login/reset) becomes the
+    # temporary password; must_change_password forces a real one on first
+    # sign-in. email_verified is set immediately — receiving and using the
+    # invite code from that inbox already proves ownership, so there's no
+    # separate verify-email step to redo.
+    invite = bool(email) and not password
+    invite_code = None
+    if invite:
+        cursor.execute(
+            'INSERT INTO users (username, password_hash, display_name, is_dentist, role, email, '
+            'must_change_password, email_verified) VALUES (?, ?, ?, ?, ?, ?, 1, 1)',
+            (username, hash_password(secrets.token_urlsafe(24)),
+             data.get('display_name') or username, is_dentist, role, email))
+        new_id = cursor.lastrowid
+        # The code needs the new user's id (FK), so it's issued after insert;
+        # the placeholder hash above is immediately overwritten with it.
+        invite_code = auth_codes.issue_code(cursor, new_id, 'invite')
+        cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?',
+                       (hash_password(invite_code), new_id))
+    else:
+        cursor.execute(
+            'INSERT INTO users (username, password_hash, display_name, is_dentist, role, email) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (username, hash_password(password), data.get('display_name') or username,
+             is_dentist, role, email or None))
+        new_id = cursor.lastrowid
     requested_perms = data.get('permissions') or []
     for key in requested_perms:
         permissions.set_permission(cursor, new_id, key, True)
     append_audit_log(cursor, 'create', 'staff_account', new_id, {'username': username})
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'id': new_id})
+
+    sent = None
+    if invite:
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        ok, reason = send_system_email(email, 'staff_invite',
+                                       {'clinic_name': clinic_name, 'username': username,
+                                        'code': invite_code}, 'en')
+        sent = ok
+        if not ok:
+            logging.getLogger(__name__).info(
+                'staff invite email not sent for user id %s: %s', new_id, reason)
+    _alert_admins('user_created', f"staff account '{username}' created")
+
+    resp = {'success': True, 'id': new_id}
+    if invite:
+        resp['invited'] = True
+        resp['sent'] = sent
+    return jsonify(resp)
+
+
+def _count_active_admins(cursor, exclude_user_id=None):
+    if exclude_user_id is not None:
+        return cursor.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1 AND id != ?",
+            (exclude_user_id,)).fetchone()[0]
+    return cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1").fetchone()[0]
 
 
 @app.route('/api/staff/<int:user_id>', methods=['PUT'])
@@ -2692,21 +3079,75 @@ def staff_account_update(user_id):
             if remaining == 0:
                 conn.close()
                 return jsonify({'error': 'Cannot deactivate the last account with staff management access'}), 400
+    new_role = None
+    if 'role' in data:
+        new_role = str(data.get('role') or '').strip().lower()
+        if new_role not in _VALID_ROLES:
+            conn.close()
+            return jsonify({'error': 'Role must be one of admin, dentist, staff'}), 400
+        # Refuse to demote the last active admin — role and permissions are
+        # independent (changing role never touches user_permissions), but
+        # losing the last admin would still leave the clinic without anyone
+        # in the Owner role.
+        current = cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,)).fetchone()
+        current_role = current[0] if current else None
+        if current_role == 'admin' and new_role != 'admin':
+            remaining = _count_active_admins(cursor, exclude_user_id=user_id)
+            if remaining == 0:
+                conn.close()
+                return jsonify({'error': 'Cannot demote the last active admin account'}), 400
+    new_email = None
+    if 'email' in data:
+        new_email = str(data.get('email') or '').strip().lower()
+        if new_email:
+            if not ('@' in new_email and 3 <= len(new_email) <= 254):
+                conn.close()
+                return jsonify({'error': 'Please enter a valid email address.'}), 400
+            dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?) AND id != ?',
+                                 (new_email, user_id)).fetchone()
+            if dup:
+                conn.close()
+                return jsonify({'error': 'That email is already in use'}), 400
     sets, vals = [], []
     if 'is_active' in data:
         sets.append('is_active = ?'); vals.append(1 if data['is_active'] else 0)
     if 'display_name' in data:
         sets.append('display_name = ?'); vals.append(data['display_name'])
-    if 'is_dentist' in data:
+    if 'is_dentist' in data and 'role' not in data:
         sets.append('is_dentist = ?'); vals.append(1 if data['is_dentist'] else 0)
+    if 'role' in data:
+        sets.append('role = ?'); vals.append(new_role)
+        sets.append('is_dentist = ?'); vals.append(1 if new_role == 'dentist' else 0)
+    if 'email' in data:
+        sets.append('email = ?'); vals.append(new_email or None)
+        sets.append('email_verified = ?'); vals.append(0)
+    if 'new_password' in data:
+        new_password = str(data.get('new_password') or '')
+        if len(new_password) < 4:
+            conn.close()
+            return jsonify({'error': 'New password must be at least 4 characters.'}), 400
+        sets.append('password_hash = ?'); vals.append(hash_password(new_password))
+        sets.append('must_change_password = ?'); vals.append(1)
+        sets.append('failed_login_count = ?'); vals.append(0)
+        sets.append('locked_until = ?'); vals.append(None)
     if not sets:
         conn.close()
         return jsonify({'error': 'No fields to update'}), 400
     vals.append(user_id)
     cursor.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", vals)
+    verify_code = None
+    if 'email' in data and new_email:
+        verify_code = auth_codes.issue_code(cursor, user_id, 'email_verify')
     append_audit_log(cursor, 'update', 'staff_account', user_id, data)
     conn.commit()
     conn.close()
+    if verify_code:
+        clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+        ok, reason = send_system_email(new_email, 'email_verify',
+                                       {'clinic_name': clinic_name, 'code': verify_code}, 'en')
+        if not ok:
+            logging.getLogger(__name__).info(
+                'staff email verification code not sent for user id %s: %s', user_id, reason)
     return jsonify({'success': True})
 
 
@@ -2756,6 +3197,66 @@ def auth_change_password():
         return jsonify({'error': 'Current password is incorrect.'}), 400
     cursor.execute('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
                    (hash_password(new), user['id']))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+def _valid_email_format(email):
+    return bool(email) and '@' in email and 3 <= len(email) <= 254
+
+
+@app.route('/api/profile/email', methods=['POST'])
+def api_profile_email():
+    """Self-service: any logged-in user sets/changes their own email. Stores
+    it lowercased, resets email_verified=0, and issues + sends a fresh
+    'email_verify' OTP. The send itself is best-effort — a relay failure is
+    logged server-side but never fails the request, since the email is
+    already stored and the user can request a fresh code."""
+    uid = session.get('uid')
+    if not uid:
+        return jsonify({'error': 'Authentication required'}), 401
+    data = request.json or {}
+    email = str(data.get('email') or '').strip().lower()
+    if not _valid_email_format(email):
+        return jsonify({'error': 'Please enter a valid email address.'}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    dup = cursor.execute('SELECT id FROM users WHERE lower(email) = lower(?) AND id != ?',
+                         (email, uid)).fetchone()
+    if dup:
+        conn.close()
+        return jsonify({'error': 'That email is already in use'}), 400
+    cursor.execute('UPDATE users SET email = ?, email_verified = 0 WHERE id = ?', (email, uid))
+    code = auth_codes.issue_code(cursor, uid, 'email_verify')
+    conn.commit()
+    conn.close()
+    clinic_name = CLINIC_CONFIG.get('CLINIC_NAME') or 'DentaCare'
+    ok, reason = send_system_email(email, 'email_verify', {'clinic_name': clinic_name, 'code': code}, 'en')
+    if not ok:
+        logging.getLogger(__name__).info(
+            'email verification code not sent for user id %s: %s', uid, reason)
+    return jsonify({'success': True, 'sent': ok})
+
+
+@app.route('/api/profile/email/verify', methods=['POST'])
+def api_profile_email_verify():
+    """Self-service: consume the OTP issued by api_profile_email. 'ok' sets
+    email_verified=1; any other outcome (wrong/expired/locked/no code) is one
+    generic 400."""
+    uid = session.get('uid')
+    if not uid:
+        return jsonify({'error': 'Authentication required'}), 401
+    data = request.json or {}
+    code = str(data.get('code') or '').strip()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    result = auth_codes.verify_code(cursor, uid, 'email_verify', code)
+    if result != 'ok':
+        conn.commit()  # persist the auth_codes attempt counter even on failure
+        conn.close()
+        return jsonify({'error': 'Invalid or expired code'}), 400
+    cursor.execute('UPDATE users SET email_verified = 1 WHERE id = ?', (uid,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -2990,30 +3491,39 @@ def patient_full_profile(patient_id):
         cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
+    # Patients are clinic-shared, but the dentist role only sees its own
+    # clinical/financial rows (plus unassigned NULL rows) inside the profile.
+    scope_sql, scope_params = dentist_scope(cursor)
+    if scope_sql:
+        scope_sql = f' AND (dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+    pf_scope, pf_params = dentist_scope(cursor, 'pf')
+    if pf_scope:
+        pf_scope = f' AND (pf.dentist_id IS NULL OR ({pf_scope.removeprefix(" AND ")}))'
+
     profile = {
         'patient': dict(patient),
-        'appointments': fetch_all('''
-            SELECT * FROM appointments WHERE patient_id = ? ORDER BY appointment_date DESC
-        ''', (patient_id,)),
+        'appointments': fetch_all(f'''
+            SELECT * FROM appointments WHERE patient_id = ?{scope_sql} ORDER BY appointment_date DESC
+        ''', [patient_id] + scope_params),
         'visits': fetch_all('''
             SELECT * FROM visits WHERE patient_id = ? ORDER BY visit_date DESC
         ''', (patient_id,)),
         'treatments': fetch_all('''
             SELECT * FROM treatments WHERE patient_id = ? ORDER BY id DESC
         ''', (patient_id,)),
-        'billing': fetch_all('''
-            SELECT * FROM billing WHERE patient_id = ? ORDER BY id DESC
-        ''', (patient_id,)),
+        'billing': fetch_all(f'''
+            SELECT * FROM billing WHERE patient_id = ?{scope_sql} ORDER BY id DESC
+        ''', [patient_id] + scope_params),
         'treatment_plans': fetch_all('''
             SELECT * FROM treatment_plans WHERE patient_id = ? ORDER BY id DESC
         ''', (patient_id,)),
-        'followups': fetch_all('''
+        'followups': fetch_all(f'''
             SELECT pf.*, tp.requires_lab as procedure_requires_lab
             FROM patient_followups pf
             LEFT JOIN treatment_procedures tp ON tp.id = pf.procedure_id
-            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0
+            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0{pf_scope}
             ORDER BY pf.followup_date DESC, pf.id DESC
-        ''', (patient_id,)),
+        ''', [patient_id] + pf_params),
         'medical_images': fetch_all('''
             SELECT * FROM medical_images WHERE patient_id = ? ORDER BY uploaded_at DESC
         ''', (patient_id,))
@@ -3278,13 +3788,16 @@ def patient_followups(patient_id):
         # Self-heal stored running balances, then return rows in chronological order.
         _recompute_followup_balances(cursor, patient_id)
         conn.commit()
-        cursor.execute('''
+        scope_sql, scope_params = dentist_scope(cursor, 'pf')
+        if scope_sql:
+            scope_sql = f' AND (pf.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+        cursor.execute(f'''
             SELECT pf.*, tp.requires_lab as procedure_requires_lab
             FROM patient_followups pf
             LEFT JOIN treatment_procedures tp ON tp.id = pf.procedure_id
-            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0
+            WHERE pf.patient_id = ? AND COALESCE(pf.is_deleted, 0) = 0{scope_sql}
             ORDER BY pf.followup_date ASC, pf.id ASC
-        ''', (patient_id,))
+        ''', [patient_id] + scope_params)
         rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify(rows)
@@ -3356,6 +3869,11 @@ def patient_followups(patient_id):
         lab_expense = 0
         clinic_profit = price - discount
 
+    # A dentist-role session always records work as themself — client-sent
+    # dentist_id (forged or stale UI state) is overridden, never trusted.
+    if _session_role(cursor) == 'dentist':
+        data = dict(data)
+        data['dentist_id'] = session['uid']
     dentist_id = data.get('dentist_id')
     if dentist_id not in (None, ''):
         try:
@@ -3473,6 +3991,11 @@ def patient_followups(patient_id):
 def followup_detail(patient_id, followup_id):
     conn = get_db_connection(with_row_factory=True)
     cursor = conn.cursor()
+
+    exists, err = _dentist_owns_or_403(cursor, 'patient_followups', followup_id)
+    if err is not None:
+        conn.close()
+        return err
 
     if request.method == 'DELETE':
         cursor.execute(
@@ -3816,12 +4339,18 @@ def appointments():
     cursor = conn.cursor()
 
     if request.method == 'GET':
-        cursor.execute('''
+        scope_sql, scope_params = dentist_scope(cursor, 'a')
+        if scope_sql:
+            # own rows + unassigned (NULL) rows — legacy/front-desk bookings
+            # must stay visible to dentists (read-only)
+            scope_sql = f' WHERE (a.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+        cursor.execute(f'''
             SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
             FROM appointments a
             JOIN patients p ON a.patient_id = p.id
+            {scope_sql}
             ORDER BY datetime(a.appointment_date) DESC, a.id DESC
-        ''')
+        ''', scope_params)
         appointments = [appointment_row_to_dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify(appointments)
@@ -3863,6 +4392,11 @@ def appointments():
             conn.close()
             return jsonify({'error': 'Patient not found'}), 404
 
+        # A dentist-role session always books for themself — any client-sent
+        # dentist_id (forged or stale UI state) is overridden, never trusted.
+        if _session_role(cursor) == 'dentist':
+            data = dict(data)
+            data['dentist_id'] = session['uid']
         dentist_id = data.get('dentist_id')
         if dentist_id not in (None, ''):
             try:
@@ -3932,13 +4466,17 @@ def appointments():
 def recent_appointments():
     conn = get_db_connection(with_row_factory=True)  # see appointments()'s comment on dentist_id column order
     cursor = conn.cursor()
-    cursor.execute('''
+    scope_sql, scope_params = dentist_scope(cursor, 'a')
+    if scope_sql:
+        scope_sql = f' WHERE (a.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+    cursor.execute(f'''
         SELECT a.*, p.first_name || ' ' || p.last_name as patient_name
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
+        {scope_sql}
         ORDER BY datetime(a.appointment_date) DESC, a.id DESC
         LIMIT 10
-    ''')
+    ''', scope_params)
     appointments = [appointment_row_to_dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify(appointments)
@@ -3952,6 +4490,10 @@ def update_appointment_status(appointment_id):
     if status not in {'scheduled', 'confirmed', 'completed', 'cancelled'}:
         conn.close()
         return jsonify({'error': 'Invalid appointment status'}), 400
+    exists, err = _dentist_owns_or_403(cursor, 'appointments', appointment_id)
+    if err is not None:
+        conn.close()
+        return err
     cursor.execute('UPDATE appointments SET status = ? WHERE id = ?', (status, appointment_id))
     if cursor.rowcount == 0:
         conn.close()
@@ -3965,6 +4507,10 @@ def update_appointment_status(appointment_id):
 def delete_appointment(appointment_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    exists, err = _dentist_owns_or_403(cursor, 'appointments', appointment_id)
+    if err is not None:
+        conn.close()
+        return err
     cursor.execute('DELETE FROM appointments WHERE id = ?', (appointment_id,))
     if cursor.rowcount == 0:
         conn.close()
@@ -4335,10 +4881,14 @@ def reports_summary():
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    scope_sql, scope_params = dentist_scope(cursor)
+    is_dentist_view = bool(scope_sql)
+
     clause, params = build_date_clause('appointment_date', start_date, end_date)
-    cursor.execute(f'SELECT COUNT(*) FROM appointments WHERE 1=1{clause}', params)
+    cursor.execute(f'SELECT COUNT(*) FROM appointments WHERE 1=1{clause}{scope_sql}', params + scope_params)
     appointments_count = cursor.fetchone()[0]
 
+    # visits has no dentist_id column -- clinic-wide for all roles
     clause, params = build_date_clause('visit_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM visits WHERE 1=1{clause}', params)
     visits_count = cursor.fetchone()[0]
@@ -4346,23 +4896,29 @@ def reports_summary():
     # Revenue = payments collected across BOTH ledgers (follow-up sheet + billing)
     # so reports, the dashboard, and the mobile app all agree.
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
+    cursor.execute(f"SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}", params + scope_params)
     revenue = float(cursor.fetchone()[0] or 0)
     bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE 1 = 1{bclause}', bparams)
+    cursor.execute(f'SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE 1 = 1{bclause}{scope_sql}', bparams + scope_params)
     revenue += float(cursor.fetchone()[0] or 0)
 
     clause, params = build_date_clause('followup_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}', params)
+    cursor.execute(f"SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}", params + scope_params)
     lab_expenses = cursor.fetchone()[0]
 
-    clause, params = build_date_clause('expense_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND 1=1{clause}', params)
-    expenses_paid = cursor.fetchone()[0]
+    # General clinic expenses are never a single dentist's cost -- zeroed for
+    # the dentist view (same rationale as the per-dentist breakdown below).
+    if is_dentist_view:
+        expenses_paid = 0
+        expenses_postponed = 0
+    else:
+        clause, params = build_date_clause('expense_date', start_date, end_date)
+        cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND 1=1{clause}', params)
+        expenses_paid = cursor.fetchone()[0]
 
-    clause, params = build_date_clause('expense_date', start_date, end_date)
-    cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND 1=1{clause}', params)
-    expenses_postponed = cursor.fetchone()[0]
+        clause, params = build_date_clause('expense_date', start_date, end_date)
+        cursor.execute(f'SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND 1=1{clause}', params)
+        expenses_postponed = cursor.fetchone()[0]
 
     expenses_total = float(expenses_paid or 0) + float(expenses_postponed or 0)
 
@@ -4374,15 +4930,15 @@ def reports_summary():
     clause, params = build_date_clause('followup_date', start_date, end_date)
     cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0)
-        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}
-    ''', params)
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}
+    ''', params + scope_params)
     followup_net_charge = float(cursor.fetchone()[0] or 0)
 
     bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
     cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE 1 = 1{bclause}
-    ''', bparams)
+        FROM billing WHERE 1 = 1{bclause}{scope_sql}
+    ''', bparams + scope_params)
     billing_net_charge = float(cursor.fetchone()[0] or 0)
 
     # Every lab-requiring follow-up auto-mirrors its lab_expense into the
@@ -4393,13 +4949,16 @@ def reports_summary():
     # lab_expenses directly from patient_followups -- counting the mirrored
     # expense row too would double-subtract the same cost. Exclude
     # source_type='followup' from ONLY the general-expenses term used here.
-    clause, params = build_date_clause('expense_date', start_date, end_date)
-    cursor.execute(f'''
-        SELECT COALESCE(SUM(amount), 0) FROM expenses
-        WHERE payment_status IN ('paid', 'postponed')
-        AND COALESCE(source_type, '') != 'followup'{clause}
-    ''', params)
-    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+    if is_dentist_view:
+        general_expenses_for_profit = 0.0
+    else:
+        clause, params = build_date_clause('expense_date', start_date, end_date)
+        cursor.execute(f'''
+            SELECT COALESCE(SUM(amount), 0) FROM expenses
+            WHERE payment_status IN ('paid', 'postponed')
+            AND COALESCE(source_type, '') != 'followup'{clause}
+        ''', params)
+        general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
 
     clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
@@ -4412,17 +4971,17 @@ def reports_summary():
         SELECT dentist_id,
                COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0),
                COALESCE(SUM(lab_expense), 0)
-        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0{clause}{scope_sql}
         GROUP BY dentist_id
-    ''', params)
+    ''', params + scope_params)
     followup_by_dentist = {row[0]: (float(row[1]), float(row[2])) for row in cursor.fetchall()}
 
     bclause, bparams = build_date_clause('COALESCE(payment_date, created_at)', start_date, end_date)
     cursor.execute(f'''
         SELECT dentist_id, COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE 1 = 1{bclause}
+        FROM billing WHERE 1 = 1{bclause}{scope_sql}
         GROUP BY dentist_id
-    ''', bparams)
+    ''', bparams + scope_params)
     billing_by_dentist = {row[0]: float(row[1]) for row in cursor.fetchall()}
 
     # No is_dentist filter here: a dentist_id on a historical row was valid
@@ -4436,17 +4995,22 @@ def reports_summary():
     for did in all_dentist_ids:
         f_charge, f_lab = followup_by_dentist.get(did, (0.0, 0.0))
         b_charge = billing_by_dentist.get(did, 0.0)
-        revenue = f_charge + b_charge
+        # Named distinctly from the outer `revenue` (payment-collected total)
+        # -- reusing that name here used to silently clobber it once the loop
+        # ran, corrupting the top-level 'revenue' field whenever 2+ dentist
+        # buckets existed (fixed as part of Task 13's scoping work).
+        dentist_revenue = f_charge + b_charge
         lab_expense = f_lab
         dentist_breakdown.append({
             'dentist_id': did,
             'dentist_name': dentist_names.get(did, 'Unassigned') if did is not None else 'Unassigned',
-            'revenue': revenue,
+            'revenue': dentist_revenue,
             'lab_expense': lab_expense,
-            'gross_margin': revenue - lab_expense,
+            'gross_margin': dentist_revenue - lab_expense,
         })
     dentist_breakdown.sort(key=lambda d: (d['dentist_id'] is None, d['dentist_name']))
 
+    # treatment_plans has no dentist_id column -- clinic-wide for all roles
     clause, params = build_date_clause('start_date', start_date, end_date)
     cursor.execute(f'SELECT COUNT(*) FROM treatment_plans WHERE 1=1{clause}', params)
     plans_count = cursor.fetchone()[0]
@@ -4485,80 +5049,94 @@ def reports_weekly():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute('SELECT COUNT(*) FROM appointments WHERE date(appointment_date) BETWEEN ? AND ?', (start_str, end_str))
+    scope_sql, scope_params = dentist_scope(cursor)
+    is_dentist_view = bool(scope_sql)
+    scope_params = tuple(scope_params)
+
+    cursor.execute(f'SELECT COUNT(*) FROM appointments WHERE date(appointment_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     appointments_count = cursor.fetchone()[0]
 
+    # visits has no dentist_id column -- clinic-wide for all roles
     cursor.execute('SELECT COUNT(*) FROM visits WHERE date(visit_date) BETWEEN ? AND ?', (start_str, end_str))
     visits_count = cursor.fetchone()[0]
 
     # Count distinct teeth (excluding follow-ups marked as 'مراجعة')
-    cursor.execute('''
-        SELECT COUNT(DISTINCT tooth_no) FROM patient_followups 
-        WHERE date(followup_date) BETWEEN ? AND ? 
-        AND COALESCE(is_deleted, 0) = 0 
-        AND treatment_procedure != 'مراجعة'
-    ''', (start_str, end_str))
+    cursor.execute(f'''
+        SELECT COUNT(DISTINCT tooth_no) FROM patient_followups
+        WHERE date(followup_date) BETWEEN ? AND ?
+        AND COALESCE(is_deleted, 0) = 0
+        AND treatment_procedure != 'مراجعة'{scope_sql}
+    ''', (start_str, end_str) + scope_params)
     distinct_teeth = cursor.fetchone()[0] or 0
 
-    cursor.execute('SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COALESCE(SUM(payment), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     revenue = float(cursor.fetchone()[0] or 0)
-    cursor.execute('SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COALESCE(SUM(paid_amount), 0) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     revenue += float(cursor.fetchone()[0] or 0)
 
-    cursor.execute('SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COALESCE(SUM(COALESCE(lab_expense, 0)), 0) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     lab_expenses = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
-    expenses_paid = cursor.fetchone()[0]
+    # General clinic expenses are never a single dentist's cost -- zeroed for
+    # the dentist view (same rationale as the per-dentist breakdown below).
+    if is_dentist_view:
+        expenses_paid = 0
+        expenses_postponed = 0
+    else:
+        cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "paid" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
+        expenses_paid = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
-    expenses_postponed = cursor.fetchone()[0]
+        cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE payment_status = "postponed" AND date(expense_date) BETWEEN ? AND ?', (start_str, end_str))
+        expenses_postponed = cursor.fetchone()[0]
 
     expenses_total = float(expenses_paid or 0) + float(expenses_postponed or 0)
 
     # Unified gross profit -- see Task 1's identical comment/rationale.
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0)
-        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?
-    ''', (start_str, end_str))
+        FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}
+    ''', (start_str, end_str) + scope_params)
     followup_net_charge = float(cursor.fetchone()[0] or 0)
 
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?
-    ''', (start_str, end_str))
+        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}
+    ''', (start_str, end_str) + scope_params)
     billing_net_charge = float(cursor.fetchone()[0] or 0)
 
     # See Task 1's identical comment: excludes the auto-mirrored lab_expense
     # rows (source_type='followup') already counted via `lab_expenses` above,
     # so the same cost isn't subtracted twice. expenses_total (the display
     # fields) is untouched.
-    cursor.execute('''
-        SELECT COALESCE(SUM(amount), 0) FROM expenses
-        WHERE payment_status IN ('paid', 'postponed')
-        AND COALESCE(source_type, '') != 'followup'
-        AND date(expense_date) BETWEEN ? AND ?
-    ''', (start_str, end_str))
-    general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
+    if is_dentist_view:
+        general_expenses_for_profit = 0.0
+    else:
+        cursor.execute('''
+            SELECT COALESCE(SUM(amount), 0) FROM expenses
+            WHERE payment_status IN ('paid', 'postponed')
+            AND COALESCE(source_type, '') != 'followup'
+            AND date(expense_date) BETWEEN ? AND ?
+        ''', (start_str, end_str))
+        general_expenses_for_profit = float(cursor.fetchone()[0] or 0)
 
     clinic_gross_profit = followup_net_charge + billing_net_charge - float(lab_expenses or 0) - general_expenses_for_profit
 
     # Per-dentist breakdown -- see reports_summary()'s identical comment/rationale.
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT dentist_id,
                COALESCE(SUM(COALESCE(price, 0) - COALESCE(discount, 0)), 0),
                COALESCE(SUM(lab_expense), 0)
         FROM patient_followups
-        WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?
+        WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}
         GROUP BY dentist_id
-    ''', (start_str, end_str))
+    ''', (start_str, end_str) + scope_params)
     followup_by_dentist = {row[0]: (float(row[1]), float(row[2])) for row in cursor.fetchall()}
 
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT dentist_id, COALESCE(SUM(COALESCE(subtotal, 0) - COALESCE(discount, 0)), 0)
-        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?
+        FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}
         GROUP BY dentist_id
-    ''', (start_str, end_str))
+    ''', (start_str, end_str) + scope_params)
     billing_by_dentist = {row[0]: float(row[1]) for row in cursor.fetchall()}
 
     cursor.execute('SELECT id, display_name FROM users')
@@ -4569,33 +5147,38 @@ def reports_weekly():
     for did in all_dentist_ids:
         f_charge, f_lab = followup_by_dentist.get(did, (0.0, 0.0))
         b_charge = billing_by_dentist.get(did, 0.0)
-        revenue = f_charge + b_charge
+        # Named distinctly from the outer `revenue` (payment-collected total)
+        # -- reusing that name here used to silently clobber it once the loop
+        # ran, corrupting the top-level 'revenue' field whenever 2+ dentist
+        # buckets existed (fixed as part of Task 13's scoping work).
+        dentist_revenue = f_charge + b_charge
         lab_expense = f_lab
         dentist_breakdown.append({
             'dentist_id': did,
             'dentist_name': dentist_names.get(did, 'Unassigned') if did is not None else 'Unassigned',
-            'revenue': revenue,
+            'revenue': dentist_revenue,
             'lab_expense': lab_expense,
-            'gross_margin': revenue - lab_expense,
+            'gross_margin': dentist_revenue - lab_expense,
         })
     dentist_breakdown.sort(key=lambda d: (d['dentist_id'] is None, d['dentist_name']))
 
+    # treatment_plans has no dentist_id column -- clinic-wide for all roles
     cursor.execute('SELECT COUNT(*) FROM treatment_plans WHERE date(start_date) BETWEEN ? AND ?', (start_str, end_str))
     plans_count = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COUNT(*) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COUNT(*) FROM billing WHERE date(COALESCE(payment_date, created_at)) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     invoice_count = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     session_count = cursor.fetchone()[0]
 
-    cursor.execute('SELECT COUNT(DISTINCT patient_id) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?', (start_str, end_str))
+    cursor.execute(f'SELECT COUNT(DISTINCT patient_id) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND date(followup_date) BETWEEN ? AND ?{scope_sql}', (start_str, end_str) + scope_params)
     patient_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND entry_type = 'followup' AND date(followup_date) BETWEEN ? AND ?", (start_str, end_str))
+    cursor.execute(f"SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND entry_type = 'followup' AND date(followup_date) BETWEEN ? AND ?{scope_sql}", (start_str, end_str) + scope_params)
     followups_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND (entry_type = 'new' OR entry_type IS NULL OR entry_type = '') AND date(followup_date) BETWEEN ? AND ?", (start_str, end_str))
+    cursor.execute(f"SELECT COUNT(*) FROM patient_followups WHERE COALESCE(is_deleted, 0) = 0 AND (entry_type = 'new' OR entry_type IS NULL OR entry_type = '') AND date(followup_date) BETWEEN ? AND ?{scope_sql}", (start_str, end_str) + scope_params)
     new_entries_count = cursor.fetchone()[0]
 
     conn.close()
@@ -6010,12 +6593,17 @@ def billing():
     cursor = conn.cursor()
     
     if request.method == 'GET':
-        cursor.execute('''
+        scope_sql, scope_params = dentist_scope(cursor, 'b')
+        if scope_sql:
+            # dentist: own rows + unassigned (NULL) rows, read-only elsewhere
+            scope_sql = f' WHERE (b.dentist_id IS NULL OR ({scope_sql.removeprefix(" AND ")}))'
+        cursor.execute(f'''
             SELECT b.*, p.first_name || ' ' || p.last_name as patient_name
             FROM billing b
             JOIN patients p ON b.patient_id = p.id
+            {scope_sql}
             ORDER BY b.id DESC
-        ''')
+        ''', scope_params)
         billing_records = []
         for row in cursor.fetchall():
             row_data = dict(row)
@@ -6089,6 +6677,11 @@ def billing():
         else:
             payment_status = 'pending'
 
+        # A dentist-role session always bills as themself — client-sent
+        # dentist_id (forged or stale UI state) is overridden, never trusted.
+        if _session_role(cursor) == 'dentist':
+            data = dict(data)
+            data['dentist_id'] = session['uid']
         dentist_id = data.get('dentist_id')
         if dentist_id not in (None, ''):
             try:
@@ -6166,6 +6759,10 @@ def billing():
 def delete_billing(billing_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    exists, err = _dentist_owns_or_403(cursor, 'billing', billing_id)
+    if err is not None:
+        conn.close()
+        return err
     cursor.execute('DELETE FROM billing WHERE id = ?', (billing_id,))
     record_tombstone(cursor, 'billing', billing_id)
     append_audit_log(cursor, 'delete', 'billing', billing_id, {'id': billing_id})
@@ -6561,6 +7158,110 @@ def register_clinic():
         'success': True, 'already_registered': False,
         'clinic_id': clinic_id, 'clinic_name': clinic_name, 'clinic_token': clinic_token,
     })
+
+
+# --- system email relay (cloud node only) -----------------------------------
+# Stateless relay: a clinic's LOCAL server calls this so cloud-side email
+# templates/branding stay consistent and the Resend API key never has to be
+# distributed to every clinic's machine. Auth is the same clinic_token every
+# other /api/* route uses (already validated once by _cloud_tenant_routing
+# before this handler even runs — see :511); rate limiting here is PER CLINIC,
+# not per caller IP, because the caller is always that clinic's own local
+# server (often sharing a NAT IP with other clinics, which would make an
+# IP-keyed limiter both leaky and unfair). _check_relay_attempts below mirrors
+# _check_attempts's (:419) sliding-window/lock contract but takes an explicit
+# key instead of always deriving it from _client_ip().
+_RELAY_HOURLY_LIMIT = _env_int('CLINIC_RELAY_HOURLY_LIMIT', 10)
+_RELAY_DAILY_LIMIT = _env_int('CLINIC_RELAY_DAILY_LIMIT', 30)
+_relay_attempts_hour = {}  # clinic_id -> list[timestamps]; sliding window (relay, hourly)
+_relay_attempts_day = {}   # clinic_id -> list[timestamps]; sliding window (relay, daily)
+_relay_attempts_lock = threading.Lock()
+
+
+def _check_relay_attempts(store, clinic_id, limit, window, what):
+    """Same sliding-window/lock contract as _check_attempts (:419) — return
+    None if allowed, else a (response, 429) tuple — but keyed by clinic_id
+    instead of client IP."""
+    if limit <= 0:
+        return None
+    now = time.monotonic()
+    cutoff = now - window
+    with _relay_attempts_lock:
+        bucket = [t for t in store.get(clinic_id, []) if t > cutoff]
+        if len(bucket) >= limit:
+            store[clinic_id] = bucket
+            return jsonify({
+                'error': f'Too many {what} — try again later '
+                         f'(limit {limit} per {window}s).'
+            }), 429
+        bucket.append(now)
+        store[clinic_id] = bucket
+    return None
+
+
+def _send_via_resend(to, subject, body):
+    """POST to Resend HTTP API. Raises on any failure (caller maps to 502).
+    stdlib urllib only, per the codebase convention (see _cloud_http_request)."""
+    api_key = os.environ.get('RESEND_API_KEY', '').strip()
+    sender = os.environ.get('CLINIC_EMAIL_FROM', 'DentaCare <no-reply@dentacare.tech>').strip()
+    if not api_key:
+        raise RuntimeError('RESEND_API_KEY not configured')
+    payload = json.dumps({'from': sender, 'to': [to], 'subject': subject,
+                          'text': body}).encode('utf-8')
+    req = urllib.request.Request(
+        'https://api.resend.com/emails', data=payload, method='POST',
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        if resp.status >= 300:
+            raise RuntimeError(f'Resend status {resp.status}')
+
+
+@app.route('/api/relay/email', methods=['POST'])
+def api_relay_email():
+    """Cloud node only: render a system email template and send it via Resend
+    on behalf of a clinic's local server. Auth: X-Clinic-Token — already
+    checked once by _cloud_tenant_routing, but we re-resolve the clinics row
+    here too, both defensively and to get clinic_id for the per-clinic rate
+    limit (the before_request hook doesn't stash it anywhere this handler can
+    read)."""
+    if not CLOUD_MODE:
+        return jsonify({'error': 'Not found'}), 404
+    token = _resolve_clinic_token()
+    conn = sqlite3.connect(MASTER_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute('SELECT id, active FROM clinics WHERE clinic_token = ?', (token,)).fetchone()
+    conn.close()
+    if not token or not row or int(row['active']) != 1:
+        return jsonify({'error': 'Unauthorized'}), 401
+    clinic_id = row['id']
+
+    err = _check_relay_attempts(_relay_attempts_hour, clinic_id, _RELAY_HOURLY_LIMIT, 3600, 'relay emails')
+    if err is None:
+        err = _check_relay_attempts(_relay_attempts_day, clinic_id, _RELAY_DAILY_LIMIT, 86400, 'relay emails')
+    if err is not None:
+        return err
+
+    data = request.json or {}
+    to = str(data.get('to') or '').strip()
+    if '@' not in to or len(to) > 254:
+        return jsonify({'error': 'Invalid recipient address'}), 400
+    params = data.get('params') or {}
+    if not isinstance(params, dict):
+        # non-dict params would TypeError inside render's dict merge — reject
+        # cleanly instead of burning the clinic's rate budget on a 500
+        return jsonify({'error': 'Invalid params'}), 400
+    try:
+        subject, body = email_templates.render(
+            str(data.get('template') or ''), str(data.get('lang') or 'en'),
+            params)
+    except ValueError:
+        return jsonify({'error': 'Unknown template'}), 400
+    try:
+        _send_via_resend(to, subject, body)
+    except Exception as exc:  # noqa: BLE001 — provider/network failure maps to 502
+        logging.getLogger(__name__).warning('relay email send failed: %s', exc)
+        return jsonify({'error': 'Email provider failure'}), 502
+    return jsonify({'sent': True})
 
 
 @app.route('/api/license/validate', methods=['POST'])
@@ -9073,6 +9774,49 @@ def _cloud_sync_config():
         except _db_errors('Error'):
             pass
     return (url.rstrip('/') or None), (token or None), CLOUD_SYNC_INTERVAL_MINUTES
+
+
+def send_system_email(to, template, params, lang='en'):
+    """Send one system email through the cloud relay (POST /api/relay/email —
+    see api_relay_email). Returns (True, '') on success or (False, reason)
+    where reason is one of 'not_paired' | 'unreachable' | 'rate_limited' |
+    'rejected' | 'provider'. Never raises, so callers (invites, OTP,
+    recovery-code alerts) can branch on the tuple without wrapping every call
+    site in try/except. Never logs the recipient address or email body."""
+    cloud_url, clinic_token, _interval = _cloud_sync_config()
+    if not (cloud_url and clinic_token):
+        return False, 'not_paired'
+    try:
+        status, _resp = _cloud_http_request(
+            'POST', cloud_url.rstrip('/') + '/api/relay/email',
+            headers={'X-Clinic-Token': clinic_token},
+            body={'to': to, 'template': template, 'params': params, 'lang': lang},
+            timeout=10)
+    except Exception:  # noqa: BLE001 — offline/DNS/connect failure is an expected offline state
+        return False, 'unreachable'
+    if status == 200:
+        return True, ''
+    if status == 429:
+        return False, 'rate_limited'
+    if status in (400, 401):
+        return False, 'rejected'
+    return False, 'provider'
+
+
+def send_system_email_async(to, template, params, lang='en'):
+    """Fire-and-forget wrapper for security alerts (OTP / recovery-code /
+    staff-invite emails): runs send_system_email on a daemon thread so a slow
+    or offline cloud relay never blocks the request that triggered it. Never
+    raises; failures are only logged as a skip reason or an exception
+    traceback — never the recipient address or email body."""
+    def _run():
+        try:
+            ok, reason = send_system_email(to, template, params, lang)
+            if not ok:
+                logging.getLogger(__name__).info('alert email skipped: %s', reason)
+        except Exception:  # noqa: BLE001 — this thread must never crash unnoticed
+            logging.getLogger(__name__).exception('alert email crashed')
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _run_cloud_sync_once(cloud_url, clinic_token, http=None):

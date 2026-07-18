@@ -3061,6 +3061,21 @@ HTML_TEMPLATE = '''
                         <input type="password" id="acct-confirm-password" autocomplete="new-password">
                     </div>
                     <button class="btn btn-primary" type="button" onclick="changeAccountPassword()" data-i18n="change_password">Change Password</button>
+                    <div class="form-group" style="margin-top:18px;">
+                        <label data-i18n="email">Email</label>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <input type="email" id="acct-email" autocomplete="off" style="flex:1;min-width:180px;">
+                            <span id="acct-email-badge"></span>
+                        </div>
+                        <button class="btn btn-secondary" type="button" style="margin-top:8px;" onclick="saveAccountEmail()" data-i18n="save_email">Save Email</button>
+                    </div>
+                    <div class="form-group" id="acct-email-verify-row" style="display:none;">
+                        <label data-i18n="verify_code">Verification Code</label>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <input type="text" id="acct-email-verify-code" autocomplete="off" style="flex:1;min-width:120px;">
+                            <button class="btn btn-secondary" type="button" onclick="verifyAccountEmail()" data-i18n="verify_email">Verify</button>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="manage-staff-section">
@@ -3079,13 +3094,19 @@ HTML_TEMPLATE = '''
                             <thead><tr>
                                 <th data-i18n="username">Username</th>
                                 <th data-i18n="display_name">Display Name</th>
+                                <th data-i18n="email">Email</th>
+                                <th data-i18n="role">Role</th>
                                 <th class="center-cell" data-i18n="status">Status</th>
                                 <th data-i18n="last_login">Last Login</th>
                                 <th class="actions-cell" data-i18n="actions">Actions</th>
                             </tr></thead>
-                            <tbody id="staff-accounts-body"><tr><td colspan="5" data-i18n="no_data">No data</td></tr></tbody>
+                            <tbody id="staff-accounts-body"><tr><td colspan="7" data-i18n="no_data">No data</td></tr></tbody>
                         </table>
                     </div>
+                </div>
+                <div class="section-card" style="max-width:760px;margin-bottom:18px;">
+                    <p data-i18n="recovery_code_hint">Print or save an offline recovery code. If the clinic ever loses internet and the admin gets locked out, this code resets the admin password without email.</p>
+                    <button class="btn btn-secondary" type="button" onclick="generateRecoveryCode()" data-i18n="generate_recovery_code">Generate Recovery Code</button>
                 </div>
                 </div>
 
@@ -3632,17 +3653,22 @@ HTML_TEMPLATE = '''
                 <div class="form-row">
                     <div class="form-group"><label data-i18n="username">Username *</label>
                         <input type="text" id="staff-add-username" autocomplete="off" required></div>
-                    <div class="form-group"><label data-i18n="password">Password *</label>
-                        <input type="password" id="staff-add-password" autocomplete="new-password" required></div>
+                    <div class="form-group"><label data-i18n="password">Password</label>
+                        <input type="password" id="staff-add-password" autocomplete="new-password"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label data-i18n="email">Email</label>
+                        <input type="email" id="staff-add-email" autocomplete="off"></div>
+                    <div class="form-group"><label data-i18n="role">Role</label>
+                        <select id="staff-add-role">
+                            <option value="admin" data-i18n="role_admin">Admin</option>
+                            <option value="dentist" data-i18n="role_dentist">Dentist</option>
+                            <option value="staff" selected data-i18n="role_staff">Staff</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="form-group"><label data-i18n="display_name">Display Name</label>
                     <input type="text" id="staff-add-display-name" autocomplete="off"></div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="staff-add-is-dentist">
-                        <span data-i18n="staff_is_dentist">Is dentist</span>
-                    </label>
-                </div>
                 <div class="form-group">
                     <label data-i18n="permissions">Permissions</label>
                     <div id="staff-add-permissions-grid" class="perm-grid"></div>
@@ -3661,6 +3687,18 @@ HTML_TEMPLATE = '''
             <input type="hidden" id="staff-permissions-user-id" value="">
             <div id="staff-permissions-grid" class="perm-grid"></div>
             <div class="toolbar-row"><button class="btn btn-primary" type="button" onclick="saveStaffPermissions()" data-i18n="save">Save</button></div>
+        </div>
+    </div>
+
+    <div id="recovery-code-modal" class="modal" onclick="if(event.target===this)closeModal('recovery-code-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close-modal" onclick="closeModal('recovery-code-modal')">&times;</span>
+                <h3 data-i18n="generate_recovery_code">Generate Recovery Code</h3>
+            </div>
+            <p class="muted" style="font-size:0.9em;line-height:1.6;" data-i18n="recovery_code_warning">Save this now — it will not be shown again. Generating a new one invalidates it.</p>
+            <p style="font-family:monospace;font-size:1.3em;letter-spacing:1px;text-align:center;padding:10px;background:var(--accent-soft);border-radius:8px;" id="recovery-code-value"></p>
+            <div class="toolbar-row"><button class="btn btn-secondary" type="button" onclick="copyRecoveryCode()" data-i18n="copy">Copy</button></div>
         </div>
     </div>
 
@@ -3727,6 +3765,7 @@ HTML_TEMPLATE = '''
         let currentCatalogSubTab = localStorage.getItem('catalog-subtab') || 'procedure';
         let currentAdministrationFocus = 'all';
         let currentPermissions = new Set();
+        let currentUserRole = '';
 
         // Language translations map
         const translations = {
@@ -4286,6 +4325,29 @@ HTML_TEMPLATE = '''
                 perm_data_tools_use: 'Use Data Tools',
                 perm_settings_manage: 'Manage Settings',
                 perm_staff_manage: 'Manage Staff Accounts',
+                reset_password: 'Reset Password',
+                reset_password_prompt: 'Enter a new temporary password for {username} (min 4 characters):',
+                reset_password_success: 'Password reset. They must set a new one at next sign-in.',
+                role: 'Role',
+                role_admin: 'Admin',
+                role_dentist: 'Dentist',
+                role_staff: 'Staff',
+                email_verified_badge: 'Verified',
+                email_unverified_badge: 'Unverified',
+                save_email: 'Save Email',
+                verify_email: 'Verify',
+                verify_code: 'Verification Code',
+                verify_code_sent: 'Verification code sent.',
+                verify_code_send_failed: "Email saved, but the code couldn't be sent — try again from Settings.",
+                email_verified_success: 'Email verified.',
+                generate_recovery_code: 'Generate Recovery Code',
+                recovery_code_hint: 'Print or save an offline recovery code. If the clinic ever loses internet and the admin gets locked out, this code resets the admin password without email.',
+                recovery_code_generated: 'Recovery code generated.',
+                recovery_code_warning: 'Save this now — it will not be shown again. Generating a new one invalidates it.',
+                copy: 'Copy',
+                copied: 'Copied.',
+                invite_sent: 'Invite sent.',
+                invite_created_not_sent: 'Invite created — email delivery may have failed.',
             },
             ar: {
                 undo: 'تراجع',
@@ -4842,6 +4904,29 @@ HTML_TEMPLATE = '''
                 perm_data_tools_use: 'استخدام أدوات البيانات',
                 perm_settings_manage: 'إدارة الإعدادات',
                 perm_staff_manage: 'إدارة حسابات الموظفين',
+                reset_password: 'إعادة تعيين كلمة المرور',
+                reset_password_prompt: 'أدخل كلمة مرور مؤقتة جديدة لـ {username} (4 أحرف على الأقل):',
+                reset_password_success: 'تمت إعادة تعيين كلمة المرور. يجب عليه تعيين كلمة مرور جديدة عند تسجيل الدخول القادم.',
+                role: 'الدور',
+                role_admin: 'مدير',
+                role_dentist: 'طبيب',
+                role_staff: 'موظف',
+                email_verified_badge: 'موثّق',
+                email_unverified_badge: 'غير موثّق',
+                save_email: 'حفظ البريد الإلكتروني',
+                verify_email: 'تحقّق',
+                verify_code: 'رمز التحقق',
+                verify_code_sent: 'تم إرسال رمز التحقق.',
+                verify_code_send_failed: 'تم حفظ البريد الإلكتروني، لكن تعذّر إرسال الرمز — حاول مجددًا من الإعدادات.',
+                email_verified_success: 'تم توثيق البريد الإلكتروني.',
+                generate_recovery_code: 'إنشاء رمز الاسترداد',
+                recovery_code_hint: 'اطبع أو احفظ رمز استرداد للعمل دون إنترنت. إذا انقطع الإنترنت عن العيادة وتعذّر دخول المدير، يعيد هذا الرمز تعيين كلمة مرور المدير دون الحاجة إلى بريد إلكتروني.',
+                recovery_code_generated: 'تم إنشاء رمز الاسترداد.',
+                recovery_code_warning: 'احفظ هذا الرمز الآن — لن يُعرض مرة أخرى. إنشاء رمز جديد يُبطل هذا الرمز.',
+                copy: 'نسخ',
+                copied: 'تم النسخ.',
+                invite_sent: 'تم إرسال الدعوة.',
+                invite_created_not_sent: 'تم إنشاء الدعوة — قد يكون إرسال البريد الإلكتروني قد فشل.',
             }
         };
 
@@ -6164,6 +6249,7 @@ HTML_TEMPLATE = '''
             m.querySelector('.confirm-modal__icon').textContent = '⚠';
             m.querySelector('.confirm-modal__typed').hidden = false;
             const input = m.querySelector('.confirm-modal__input');
+            input.type = 'text';
             input.value = '';
             m.querySelector('.confirm-modal__hint').textContent =
                 t('type_to_confirm', 'Type {word} to confirm.').replace('{word}', word);
@@ -6173,6 +6259,30 @@ HTML_TEMPLATE = '''
             input.oninput = function () { okBtn.disabled = input.value.trim() !== word; };
             m.querySelector('.confirm-modal__cancel').textContent = t('cancel', 'Cancel');
             return _openConfirm(input);
+        }
+
+        function showPromptModal(opts) {
+            const o = opts || {};
+            const minLength = typeof o.minLength === 'number' ? o.minLength : 1;
+            const m = _confirmModalEl();
+            if (!m) return Promise.resolve(null);
+            if (_confirmResolver) _closeConfirm(false);
+            m.classList.remove('confirm-modal--danger');
+            m.classList.add('confirm-modal--neutral');
+            m.querySelector('#confirm-modal-title').textContent = o.title || t('please_confirm', 'Please confirm');
+            m.querySelector('.confirm-modal__msg').textContent = o.message || '';
+            m.querySelector('.confirm-modal__icon').textContent = 'ℹ';
+            m.querySelector('.confirm-modal__typed').hidden = false;
+            const input = m.querySelector('.confirm-modal__input');
+            input.type = o.inputType || 'text';
+            input.value = o.defaultValue || '';
+            m.querySelector('.confirm-modal__hint').textContent = o.hint || '';
+            const okBtn = m.querySelector('.confirm-modal__ok');
+            okBtn.textContent = o.confirmLabel || t('confirm', 'Confirm');
+            okBtn.disabled = input.value.trim().length < minLength;
+            input.oninput = function () { okBtn.disabled = input.value.trim().length < minLength; };
+            m.querySelector('.confirm-modal__cancel').textContent = o.cancelLabel || t('cancel', 'Cancel');
+            return _openConfirm(input).then(function (ok) { return ok ? input.value : null; });
         }
 
         function _openConfirm(focusEl) {
@@ -7013,6 +7123,7 @@ HTML_TEMPLATE = '''
             loadBranding();
             loadReminderSettings();
             loadStaffAccounts();
+            loadAccountEmailSection();
         }
 
         async function loadBranding() {
@@ -7181,7 +7292,7 @@ HTML_TEMPLATE = '''
                     icon: '👤',
                     title: t('no_staff_yet', 'No staff accounts yet'),
                     text: t('add_staff_hint', 'Add a staff account to give them their own login.'),
-                    colSpan: 5
+                    colSpan: 7
                 });
                 return;
             }
@@ -7193,17 +7304,30 @@ HTML_TEMPLATE = '''
                     : t('never_logged_in', 'Never');
                 const toggleLabel = isActive ? t('deactivate', 'Deactivate') : t('reactivate', 'Reactivate');
                 const toggleClass = isActive ? 'btn-danger' : 'btn-secondary';
+                const emailCell = u.email
+                    ? `${escapeHtml(u.email)} <span class="badge ${u.email_verified ? 'badge-active' : 'badge-muted'}">${u.email_verified ? t('email_verified_badge', 'Verified') : t('email_unverified_badge', 'Unverified')}</span>`
+                    : '<span class="muted">—</span>';
+                const role = u.role || 'staff';
+                const roleCell = `
+                    <select onchange="updateStaffRole(${u.id}, this.value)">
+                        <option value="admin" ${role === 'admin' ? 'selected' : ''}>${t('role_admin', 'Admin')}</option>
+                        <option value="dentist" ${role === 'dentist' ? 'selected' : ''}>${t('role_dentist', 'Dentist')}</option>
+                        <option value="staff" ${role === 'staff' ? 'selected' : ''}>${t('role_staff', 'Staff')}</option>
+                    </select>
+                `;
                 return `
                     <tr>
                         <td>${escapeHtml(u.username || '')}</td>
                         <td>${escapeHtml(u.display_name || '')}</td>
+                        <td>${emailCell}</td>
+                        <td>${roleCell}</td>
                         <td class="center-cell"><span class="badge ${isActive ? 'badge-active' : 'badge-blocked'}">${statusText}</span></td>
                         <td>${lastLogin}</td>
                         <td class="actions-cell">
                             <div style="display:flex;gap:6px;flex-wrap:wrap;">
                                 <button class="btn btn-primary" type="button" onclick="openStaffPermissionsModal(${u.id})">${t('edit_permissions', 'Edit Permissions')}</button>
                                 <button class="btn ${toggleClass}" type="button" onclick="toggleStaffActive(${u.id}, ${!isActive})">${toggleLabel}</button>
-                                <button class="btn btn-secondary" type="button" onclick="toggleStaffIsDentist(${u.id}, ${parseInt(u.is_dentist, 10) !== 1})">${parseInt(u.is_dentist, 10) === 1 ? t('unmark_dentist', 'Unmark dentist') : t('mark_dentist', 'Mark as dentist')}</button>
+                                <button class="btn btn-secondary" type="button" onclick="resetStaffPassword(${u.id}, '${escapeHtml(u.username)}')">${t('reset_password', 'Reset Password')}</button>
                             </div>
                         </td>
                     </tr>
@@ -7215,7 +7339,8 @@ HTML_TEMPLATE = '''
             document.getElementById('staff-add-username').value = '';
             document.getElementById('staff-add-password').value = '';
             document.getElementById('staff-add-display-name').value = '';
-            document.getElementById('staff-add-is-dentist').checked = false;
+            document.getElementById('staff-add-email').value = '';
+            document.getElementById('staff-add-role').value = 'staff';
             const allKeys = await ensureStaffPermissionKeys();
             renderPermissionGrid('staff-add-permissions-grid', allKeys, []);
             document.getElementById('staff-add-modal').classList.add('active');
@@ -7226,21 +7351,32 @@ HTML_TEMPLATE = '''
             const username = document.getElementById('staff-add-username').value.trim();
             const password = document.getElementById('staff-add-password').value;
             const displayName = document.getElementById('staff-add-display-name').value.trim();
-            if (!username || !password) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
+            const email = document.getElementById('staff-add-email').value.trim();
+            const role = document.getElementById('staff-add-role').value;
+            // Mirrors the backend's own check: username is always required;
+            // password is only required when no email is supplied (the invite
+            // path issues a one-time code as the temporary password instead).
+            if (!username || (!password && !email)) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
             const checked = Array.from(document.querySelectorAll('#staff-add-permissions-grid .perm-checkbox:checked')).map(el => el.value);
+            const body = { username, display_name: displayName || username, permissions: checked, role };
+            if (password) body.password = password;
+            if (email) body.email = email;
             try {
                 const res = await fetch('/api/staff', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        username, password, display_name: displayName || username, permissions: checked,
-                        is_dentist: document.getElementById('staff-add-is-dentist').checked
-                    })
+                    body: JSON.stringify(body)
                 });
                 const payload = await res.json().catch(() => ({}));
                 if (!res.ok) { showToast(payload.error || t('unable_save_staff', 'Unable to save staff account.'), 'error'); return; }
                 closeModal('staff-add-modal');
-                showToast(t('staff_saved', 'Staff account saved.'), 'success');
+                if (payload.invited) {
+                    showToast(payload.sent
+                        ? t('invite_sent', 'Invite sent.')
+                        : t('invite_created_not_sent', 'Invite created — email delivery may have failed.'), 'success');
+                } else {
+                    showToast(t('staff_saved', 'Staff account saved.'), 'success');
+                }
                 await loadStaffAccounts();
             } catch (_) {
                 showToast(t('unable_save_staff', 'Unable to save staff account.'), 'error');
@@ -7317,18 +7453,67 @@ HTML_TEMPLATE = '''
             }
         }
 
-        async function toggleStaffIsDentist(userId, makeDentist) {
+        async function updateStaffRole(userId, role) {
             try {
                 const res = await fetch(`/api/staff/${userId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ is_dentist: makeDentist })
+                    body: JSON.stringify({ role })
                 });
-                if (!res.ok) throw new Error(res.status);
+                if (!res.ok) {
+                    const payload = await res.json().catch(() => ({}));
+                    showToast(payload.error || t('unable_save_staff', 'Unable to save staff account.'), 'error');
+                }
+            } catch (_) {
+                showToast(t('unable_save_staff', 'Unable to save staff account.'), 'error');
+            }
+            await loadStaffAccounts();
+        }
+
+        async function resetStaffPassword(userId, username) {
+            const newPassword = await showPromptModal({
+                title: t('reset_password_title', 'Reset password'),
+                message: t('reset_password_prompt', 'Enter a new temporary password for {username} (min 4 characters):').replace('{username}', username),
+                minLength: 4,
+                inputType: 'password',
+                confirmLabel: t('confirm', 'Confirm')
+            });
+            if (newPassword === null) return;
+            if (newPassword.length < 4) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
+            try {
+                const res = await fetch(`/api/staff/${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_password: newPassword })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) { showToast(payload.error || t('unable_save_staff', 'Unable to save staff account.'), 'error'); return; }
+                showToast(t('reset_password_success', 'Password reset. They must set a new one at next sign-in.'), 'success');
                 await loadStaffAccounts();
             } catch (_) {
                 showToast(t('unable_save_staff', 'Unable to save staff account.'), 'error');
             }
+        }
+
+        let __recoveryCodeValue = '';
+        async function generateRecoveryCode() {
+            try {
+                const res = await fetch('/api/settings/recovery-code', { method: 'POST' });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) { showToast(payload.error || t('save_failed', 'Save failed'), 'error'); return; }
+                __recoveryCodeValue = payload.code || '';
+                document.getElementById('recovery-code-value').textContent = __recoveryCodeValue;
+                document.getElementById('recovery-code-modal').classList.add('active');
+            } catch (_) {
+                showToast(t('save_failed', 'Save failed'), 'error');
+            }
+        }
+
+        function copyRecoveryCode() {
+            if (!__recoveryCodeValue) return;
+            navigator.clipboard.writeText(__recoveryCodeValue).then(() => {
+                showToast(t('copied', 'Copied.'), 'success');
+            });
         }
 
         async function loadReceivables() {
@@ -8273,6 +8458,68 @@ HTML_TEMPLATE = '''
                 document.getElementById('acct-new-password').value = '';
                 document.getElementById('acct-confirm-password').value = '';
                 showToast(t('password_changed', 'Password changed successfully.'), 'success');
+            } catch (_) {
+                showToast(t('save_failed', 'Save failed'), 'error');
+            }
+        }
+
+        // ── Profile email + verify (Settings → Account) ───────────────────────
+        function _renderAcctEmailBadge(verified) {
+            const badge = document.getElementById('acct-email-badge');
+            if (!badge) return;
+            badge.innerHTML = verified
+                ? `<span class="badge badge-active">${t('email_verified_badge', 'Verified')}</span>`
+                : `<span class="badge badge-muted">${t('email_unverified_badge', 'Unverified')}</span>`;
+        }
+
+        async function loadAccountEmailSection() {
+            try {
+                const me = await fetch('/api/auth/me').then(r => r.json());
+                const emailEl = document.getElementById('acct-email');
+                const verifyRow = document.getElementById('acct-email-verify-row');
+                if (emailEl) emailEl.value = me.email || '';
+                _renderAcctEmailBadge(!!me.email_verified);
+                if (verifyRow) verifyRow.style.display = (me.email && !me.email_verified) ? '' : 'none';
+            } catch (_) {}
+        }
+
+        async function saveAccountEmail() {
+            const email = document.getElementById('acct-email')?.value.trim() || '';
+            if (!email) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
+            try {
+                const res = await fetch('/api/profile/email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) { showToast(payload.error || t('save_failed', 'Save failed'), 'error'); return; }
+                _renderAcctEmailBadge(false);
+                const verifyRow = document.getElementById('acct-email-verify-row');
+                if (verifyRow) verifyRow.style.display = '';
+                showToast(payload.sent
+                    ? t('verify_code_sent', 'Verification code sent.')
+                    : t('verify_code_send_failed', "Email saved, but the code couldn't be sent — try again from Settings."), payload.sent ? 'success' : 'warning');
+            } catch (_) {
+                showToast(t('save_failed', 'Save failed'), 'error');
+            }
+        }
+
+        async function verifyAccountEmail() {
+            const code = document.getElementById('acct-email-verify-code')?.value.trim() || '';
+            if (!code) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
+            try {
+                const res = await fetch('/api/profile/email/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) { showToast(payload.error || t('save_failed', 'Save failed'), 'error'); return; }
+                const verifyRow = document.getElementById('acct-email-verify-row');
+                if (verifyRow) verifyRow.style.display = 'none';
+                _renderAcctEmailBadge(true);
+                showToast(t('email_verified_success', 'Email verified.'), 'success');
             } catch (_) {
                 showToast(t('save_failed', 'Save failed'), 'error');
             }
@@ -10099,12 +10346,17 @@ HTML_TEMPLATE = '''
             if (staffSection && !hasPermission('staff.manage')) {
                 staffSection.style.display = 'none';
             }
+            // Dentists only ever see their own scoped data server-side, so a
+            // filter that offers "which dentist" is meaningless for them.
+            const filter = document.getElementById('calendar-dentist-filter');
+            if (filter && currentUserRole === 'dentist') filter.style.display = 'none';
         }
         async function applyAuthMe() {
             try {
                 const res = await fetch('/api/auth/me');
                 const me = await res.json();
                 currentPermissions = new Set(me.permissions || []);
+                currentUserRole = me.role || '';
                 applyPermissionGating();
             } catch (e) { /* offline/error: leave nav as-is, never hide over a fetch error */ }
         }
@@ -10533,7 +10785,7 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
       linear-gradient(160deg, #0b1220, #111a2d);
   }
   .card {
-    position:relative; width:100%; max-width:380px; overflow:hidden;
+    position:relative; width:100%; max-width:420px; overflow:hidden;
     background:var(--panel); border:1px solid var(--line); border-radius:20px;
     box-shadow:0 30px 80px rgba(0,0,0,0.45); padding:36px 32px 30px;
   }
@@ -10566,24 +10818,320 @@ LOGIN_TEMPLATE = '''<!DOCTYPE html>
     margin-top:18px; padding:10px 13px; border-radius:12px; font-size:13px; font-weight:600;
     color:#ffb3bd; background:rgba(218,76,88,0.14); border:1px solid rgba(218,76,88,0.45);
   }
+
+  .hidden { display:none !important; }
+
+  #login-tiles {
+    display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-top:6px;
+  }
+  .login-tile {
+    display:flex; flex-direction:column; align-items:center; gap:8px;
+    padding:14px 6px 12px; background:var(--bg-1); border:1.5px solid var(--line);
+    border-radius:14px; cursor:pointer; color:var(--text); font-family:inherit;
+    transition:0.16s ease;
+  }
+  .login-tile:hover { border-color:#7bb6e2; transform:translateY(-2px); box-shadow:0 10px 24px rgba(29,127,183,0.25); }
+  .login-tile:focus-visible { outline:none; border-color:#7bb6e2; box-shadow:0 0 0 4px rgba(61,149,211,0.16); }
+  .tile-avatar {
+    width:46px; height:46px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:17px; font-weight:800; color:#fff;
+    background:linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+  }
+  .tile-name { font-size:12px; font-weight:700; text-align:center; line-height:1.25; word-break:break-word; }
+  .tile-role {
+    font-size:9.5px; font-weight:800; letter-spacing:0.05em; text-transform:uppercase;
+    color:var(--muted); padding:2px 8px; border-radius:20px; background:rgba(255,255,255,0.06);
+  }
+
+  .link-row { text-align:center; margin-top:16px; }
+  .stack-links { display:flex; flex-direction:column; gap:8px; align-items:center; margin-top:16px; }
+  .link-btn {
+    background:none; border:none; padding:0; color:#7bb6e2; font-size:12.5px; font-weight:700;
+    cursor:pointer; text-decoration:underline; text-underline-offset:2px; font-family:inherit;
+  }
+  .link-btn:hover { color:#a7d1f2; }
+
+  .signing-as { text-align:center; font-size:13px; font-weight:700; color:var(--muted); margin:0 0 4px; }
+  .signing-as strong { color:var(--text); }
+
+  .panel-note {
+    margin:14px 0 0; padding:10px 13px; border-radius:12px; font-size:12.5px; font-weight:600; line-height:1.45;
+    color:#cfe3ff; background:rgba(29,127,183,0.14); border:1px solid rgba(29,127,183,0.40);
+  }
+
+  .recovery-code-box {
+    margin-top:14px; padding:14px; border-radius:12px; background:rgba(19,181,167,0.10);
+    border:1.5px dashed var(--accent); text-align:center;
+  }
+  .recovery-code-box code {
+    display:block; margin-top:6px; font-size:15px; font-weight:800; letter-spacing:0.02em;
+    color:var(--text); word-break:break-all;
+  }
+  .recovery-warn {
+    margin-top:8px; font-size:11px; font-weight:800; color:#ffcf6b;
+    text-transform:uppercase; letter-spacing:0.03em;
+  }
 </style>
 </head>
 <body>
-  <form class="card" method="POST" action="/login">
+  <div class="card">
     <div class="brand">
       <img src="/logo" alt="DentaCare">
       <h1>DentaCare</h1>
       <p>Dental Management System</p>
     </div>
+
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
-    <input type="hidden" name="next" value="{{ next_url }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label for="username">Username</label>
-    <input type="text" id="username" name="username" autocomplete="username" autofocus required>
-    <label for="password">Password</label>
-    <input type="password" id="password" name="password" autocomplete="current-password" required>
-    <button type="submit">Sign in</button>
-  </form>
+
+    {% if tiles %}
+    <div id="login-tiles" class="{% if error %}hidden{% endif %}">
+      {% for t in tiles %}
+      <button type="button" class="login-tile" data-username="{{ t.username }}" data-role="{{ t.role or '' }}" data-display="{{ t.display_name }}">
+        <span class="tile-avatar">{{ t.display_name[0]|upper }}</span>
+        <span class="tile-name">{{ t.display_name }}</span>
+        <span class="tile-role">{% if t.role == 'admin' %}Admin{% elif t.role == 'dentist' %}Dentist{% else %}Staff{% endif %}</span>
+      </button>
+      {% endfor %}
+    </div>
+    <div class="link-row"><button type="button" class="link-btn" id="show-classic-login">Sign in another way</button></div>
+    {% endif %}
+
+    <form id="classic-login-form" class="{% if tiles and not error %}hidden{% endif %}" method="POST" action="/login">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div id="signing-as-note" class="signing-as hidden">Signing in as <strong id="signing-as-name"></strong></div>
+      <div id="username-field">
+        <label for="username">Username or email</label>
+        <input type="text" id="username" name="username" autocomplete="username" required>
+      </div>
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+
+    <div class="stack-links">
+      <button type="button" class="link-btn" id="show-forgot-password">Forgot password?</button>
+      <button type="button" class="link-btn" id="show-recovery-code">Use recovery code</button>
+    </div>
+
+    <div id="forgot-password-panel" class="hidden">
+      <div id="forgot-step-1">
+        <label for="forgot-identifier">Username or email</label>
+        <input type="text" id="forgot-identifier" placeholder="Enter your username or email">
+        <button type="button" id="forgot-send-btn">Send reset code</button>
+      </div>
+      <div id="forgot-step-2" class="hidden">
+        <div class="panel-note">If an account exists, a code was sent.</div>
+        <label for="forgot-code">Reset code</label>
+        <input type="text" id="forgot-code" autocomplete="one-time-code">
+        <label for="forgot-new-password">New password</label>
+        <input type="password" id="forgot-new-password" minlength="4" autocomplete="new-password">
+        <button type="button" id="forgot-submit-btn">Reset password</button>
+      </div>
+      <div id="forgot-error" class="error hidden"></div>
+      <div id="forgot-success" class="panel-note hidden">Password updated. You can sign in now.</div>
+      <div class="link-row"><button type="button" class="link-btn" data-back="classic">Back to sign in</button></div>
+    </div>
+
+    <div id="recovery-panel" class="hidden">
+      <div class="panel-note">Offline lockout escape: redeem the printed one-time admin recovery code.</div>
+      <label for="recovery-code">Recovery code</label>
+      <input type="text" id="recovery-code" placeholder="XXXX-XXXX-XXXX-XXXX">
+      <label for="recovery-new-password">New admin password</label>
+      <input type="password" id="recovery-new-password" minlength="4" autocomplete="new-password">
+      <button type="button" id="recovery-submit-btn">Redeem code</button>
+      <div id="recovery-error" class="error hidden"></div>
+      <div id="recovery-result" class="hidden">
+        <div class="panel-note">Signed in as <strong id="recovery-username"></strong>. Password updated.</div>
+        <div class="recovery-code-box">
+          <span>Your new recovery code</span>
+          <code id="recovery-new-code"></code>
+          <div class="recovery-warn">Save this now — it will not be shown again</div>
+        </div>
+      </div>
+      <div class="link-row"><button type="button" class="link-btn" data-back="classic">Back to sign in</button></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  function hide(id) { var el = document.getElementById(id); if (el) { el.classList.add('hidden'); } }
+  function show(id) { var el = document.getElementById(id); if (el) { el.classList.remove('hidden'); } }
+
+  var tilesEl = document.getElementById('login-tiles');
+  var initialShowTiles = !!(tilesEl && !tilesEl.classList.contains('hidden'));
+
+  function showClassicLogin() {
+    hide('login-tiles');
+    hide('forgot-password-panel');
+    hide('recovery-panel');
+    show('classic-login-form');
+    show('username-field');
+    hide('signing-as-note');
+    var u = document.getElementById('username');
+    if (u) { u.value = ''; u.focus(); }
+  }
+
+  function backToStart() {
+    hide('forgot-password-panel');
+    hide('recovery-panel');
+    if (initialShowTiles) {
+      hide('classic-login-form');
+      show('login-tiles');
+    } else {
+      showClassicLogin();
+    }
+  }
+
+  function selectTile(btn) {
+    var username = btn.getAttribute('data-username') || '';
+    var display = btn.getAttribute('data-display') || username;
+    hide('login-tiles');
+    hide('forgot-password-panel');
+    hide('recovery-panel');
+    show('classic-login-form');
+    var u = document.getElementById('username');
+    if (u) { u.value = username; }
+    hide('username-field');
+    var nameEl = document.getElementById('signing-as-name');
+    if (nameEl) { nameEl.textContent = display; }
+    show('signing-as-note');
+    var p = document.getElementById('password');
+    if (p) { p.focus(); }
+  }
+
+  var showClassicBtn = document.getElementById('show-classic-login');
+  if (showClassicBtn) { showClassicBtn.addEventListener('click', showClassicLogin); }
+
+  var showForgotBtn = document.getElementById('show-forgot-password');
+  if (showForgotBtn) {
+    showForgotBtn.addEventListener('click', function () {
+      hide('login-tiles');
+      hide('classic-login-form');
+      hide('recovery-panel');
+      show('forgot-password-panel');
+    });
+  }
+
+  var showRecoveryBtn = document.getElementById('show-recovery-code');
+  if (showRecoveryBtn) {
+    showRecoveryBtn.addEventListener('click', function () {
+      hide('login-tiles');
+      hide('classic-login-form');
+      hide('forgot-password-panel');
+      show('recovery-panel');
+    });
+  }
+
+  var backButtons = document.querySelectorAll('[data-back="classic"]');
+  for (var i = 0; i < backButtons.length; i++) {
+    backButtons[i].addEventListener('click', backToStart);
+  }
+
+  var tileButtons = document.querySelectorAll('.login-tile');
+  for (var j = 0; j < tileButtons.length; j++) {
+    tileButtons[j].addEventListener('click', function (evt) {
+      selectTile(evt.currentTarget);
+    });
+  }
+
+  var forgotSendBtn = document.getElementById('forgot-send-btn');
+  if (forgotSendBtn) {
+    forgotSendBtn.addEventListener('click', function () {
+      var identifierEl = document.getElementById('forgot-identifier');
+      var identifier = identifierEl ? (identifierEl.value || '').trim() : '';
+      hide('forgot-error');
+      fetch('/api/login/forgot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: identifier })
+      }).then(function () {
+        hide('forgot-step-1');
+        show('forgot-step-2');
+      }).catch(function () {
+        hide('forgot-step-1');
+        show('forgot-step-2');
+      });
+    });
+  }
+
+  var forgotSubmitBtn = document.getElementById('forgot-submit-btn');
+  if (forgotSubmitBtn) {
+    forgotSubmitBtn.addEventListener('click', function () {
+      var identifierEl = document.getElementById('forgot-identifier');
+      var codeEl = document.getElementById('forgot-code');
+      var pwEl = document.getElementById('forgot-new-password');
+      var identifier = identifierEl ? (identifierEl.value || '').trim() : '';
+      var code = codeEl ? (codeEl.value || '').trim() : '';
+      var newPassword = pwEl ? (pwEl.value || '') : '';
+      hide('forgot-error');
+      fetch('/api/login/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: identifier, code: code, new_password: newPassword })
+      }).then(function (resp) {
+        return resp.json().then(function (payload) {
+          return { ok: resp.ok, payload: payload };
+        });
+      }).then(function (result) {
+        if (result.ok && result.payload && result.payload.success) {
+          hide('forgot-step-2');
+          show('forgot-success');
+        } else {
+          var msg = (result.payload && result.payload.error) || 'Something went wrong. Please try again.';
+          var errEl = document.getElementById('forgot-error');
+          if (errEl) { errEl.textContent = msg; }
+          show('forgot-error');
+        }
+      }).catch(function () {
+        var errEl = document.getElementById('forgot-error');
+        if (errEl) { errEl.textContent = 'Network error. Please try again.'; }
+        show('forgot-error');
+      });
+    });
+  }
+
+  var recoverySubmitBtn = document.getElementById('recovery-submit-btn');
+  if (recoverySubmitBtn) {
+    recoverySubmitBtn.addEventListener('click', function () {
+      var codeEl = document.getElementById('recovery-code');
+      var pwEl = document.getElementById('recovery-new-password');
+      var code = codeEl ? (codeEl.value || '').trim() : '';
+      var newPassword = pwEl ? (pwEl.value || '') : '';
+      hide('recovery-error');
+      fetch('/api/login/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code, new_password: newPassword })
+      }).then(function (resp) {
+        return resp.json().then(function (payload) {
+          return { ok: resp.ok, payload: payload };
+        });
+      }).then(function (result) {
+        if (result.ok && result.payload && result.payload.success) {
+          var userEl = document.getElementById('recovery-username');
+          if (userEl) { userEl.textContent = result.payload.username || ''; }
+          var newCodeEl = document.getElementById('recovery-new-code');
+          if (newCodeEl) { newCodeEl.textContent = result.payload.new_recovery_code || ''; }
+          show('recovery-result');
+          if (codeEl) { codeEl.disabled = true; }
+          if (pwEl) { pwEl.disabled = true; }
+          recoverySubmitBtn.disabled = true;
+        } else {
+          var msg = (result.payload && result.payload.error) || 'Invalid recovery code';
+          var errEl = document.getElementById('recovery-error');
+          if (errEl) { errEl.textContent = msg; }
+          show('recovery-error');
+        }
+      }).catch(function () {
+        var errEl = document.getElementById('recovery-error');
+        if (errEl) { errEl.textContent = 'Network error. Please try again.'; }
+        show('recovery-error');
+      });
+    });
+  }
+})();
+</script>
 </body>
 </html>'''
 

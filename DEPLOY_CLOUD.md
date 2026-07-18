@@ -41,8 +41,10 @@ mkdir -p /opt/dentacare
 From your workstation (the repo root), copy the needed files up — note: don't `git clone`, the repo isn't pushed and some assets are untracked:
 
 ```bash
-scp dental_clinic.py requirements.txt root@68.183.208.166:/opt/dentacare/
-scp -r cloud root@68.183.208.166:/opt/dentacare/
+scp dental_clinic.py templates.py auth_codes.py email_templates.py \
+    permissions.py patient_dedupe.py db_import.py db_merge.py requirements.txt \
+    root@68.183.208.166:/opt/dentacare/
+scp -r cloud window root@68.183.208.166:/opt/dentacare/
 # optional logo asset (served by /logo, harmless if absent):
 scp DentaCare.PNG root@68.183.208.166:/opt/dentacare/  2>/dev/null || true
 ```
@@ -73,7 +75,9 @@ curl -s -X POST https://app.dentacare.tech/api/clinics/register \
 
 ```bash
 # from your workstation:
-scp dental_clinic.py root@68.183.208.166:/opt/dentacare/
+scp dental_clinic.py templates.py auth_codes.py email_templates.py \
+    permissions.py patient_dedupe.py db_import.py db_merge.py \
+    root@68.183.208.166:/opt/dentacare/
 # on the droplet:
 cd /opt/dentacare/cloud && docker compose up -d --build app
 ```
@@ -97,12 +101,64 @@ Set in `cloud/docker-compose.yml` (`services.app.environment`) or the `Dockerfil
 | `CLINIC_SERIAL_PUBLIC_KEY` | _(unset)_ | Base64 Ed25519 **public** key from `serial_generator.py --genkey`. The cloud verifies vendor-signed serials with it (the matching private seed never leaves the vendor machine). Required whenever the signed-serial gate is on. |
 | `CLINIC_REQUIRE_SIGNED_SERIAL` | `1` | On by default: `/api/clinics/register` and `/api/license/validate` **reject** serials without a valid Ed25519 signature. Set `0` only to accept unsigned serials (e.g. a transitional rollout — see below). |
 | `CLINIC_ADMIN_API_TOKEN` | _(unset)_ | Shared secret gating `POST /api/license/admin/revoke` (sent as `X-Admin-Token`). Unset → the admin endpoint is **closed** (every call returns `401`). Use a high-entropy value, e.g. `openssl rand -base64 32`. |
+| `RESEND_API_KEY` | _(unset)_ | Resend API key for the `/api/relay/email` system-email relay. Unset → the relay returns `502` and local servers skip the email (soft failure). See *Email relay*. |
+| `CLINIC_EMAIL_FROM` | `DentaCare <no-reply@dentacare.tech>` | Sender identity for relay emails. The domain must be verified in Resend (SPF/DKIM). |
+| `CLINIC_RELAY_HOURLY_LIMIT` | `10` | Max relay emails per clinic per hour (sliding window, in-process). |
+| `CLINIC_RELAY_DAILY_LIMIT` | `30` | Max relay emails per clinic per day. |
 
 > The cloud node intentionally does **not** seed a staff admin user — the staff portal isn't served here, so `CLINIC_ADMIN_PASSWORD` is unused in `CLINIC_CLOUD_MODE=1`.
 
 The hostname for TLS lives in `cloud/Caddyfile` (`app.dentacare.tech`) — change it there if the domain changes, then `docker compose up -d caddy`.
 
 > **`X-Forwarded-For` / client IP.** In cloud mode the app wraps its WSGI stack in `ProxyFix(x_for=1)`, so `request.remote_addr` (and the register/validate rate limiter) reflect the real client behind Caddy. This assumes exactly **one** proxy hop and that Caddy **appends** the connecting IP to `X-Forwarded-For` — which is `reverse_proxy`'s default. Do **not** configure a `header_up X-Forwarded-For` that passes the client's header through unchanged, or a client could spoof its source IP and evade the rate limit.
+
+## Email relay (system emails via Resend)
+
+The cloud node exposes one stateless endpoint, `POST /api/relay/email`, that each clinic's **local** server calls to send transactional system emails — password-reset codes, email-verification codes, staff invites, and security alerts. The LAN appliance never holds mail credentials: it authenticates with its `X-Clinic-Token`, and the cloud renders the bilingual (EN/AR, plain-text) template and sends through [Resend](https://resend.com)'s HTTP API (stdlib `urllib`, no SDK). Nothing is persisted and recipient addresses/bodies are never logged (counts only). All email-carried secrets are short **typed codes**, never links — a LAN-only appliance has no public URL a link could reach.
+
+A clinic that is unpaired or offline degrades gracefully: the local server's `send_system_email` returns a soft failure (`not_paired` / `unreachable` / `rate_limited` / `rejected` / `provider`) and the underlying action (staff creation, password change, …) always completes — email is best-effort by design.
+
+### Resend account + DNS for dentacare.tech
+
+1. Create a Resend account and add the sending domain `dentacare.tech` (Resend dashboard → **Domains** → Add Domain).
+2. At the DNS host for `dentacare.tech`, add the records the Resend dashboard displays for the domain — an SPF `TXT` record and the DKIM `TXT` record(s). The values are generated per-account, so copy them exactly from the dashboard. Wait until the domain shows **Verified**.
+3. Create an API key (Resend dashboard → **API Keys**, sending access).
+
+### Configure the cloud
+
+Add to `cloud/.env` on the droplet (gitignored, `chmod 600`), alongside the existing keys:
+
+```bash
+# cloud/.env
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxx
+CLINIC_EMAIL_FROM=DentaCare <no-reply@dentacare.tech>   # optional — this is the default
+```
+
+`cloud/docker-compose.yml` already passes both through to the `app` container. With `RESEND_API_KEY` unset, the relay answers `502` ("Email provider failure") — local servers treat that as a soft failure and carry on.
+
+### Rate limits
+
+Each clinic (identified by its clinic token) has a sliding-window budget; exceeding it returns `429` and the local server skips that email:
+
+| Var | Default | Notes |
+|---|---|---|
+| `CLINIC_RELAY_HOURLY_LIMIT` | `10` | Relay emails per clinic per hour. |
+| `CLINIC_RELAY_DAILY_LIMIT` | `30` | Relay emails per clinic per day. |
+
+To tune them, add the vars to `services.app.environment` in `cloud/docker-compose.yml` (they are read from the process environment and are **not** passed through by default) and redeploy `app`. Counters are in-process — they reset when the container restarts.
+
+### Redeploy
+
+```bash
+# from your workstation:
+scp dental_clinic.py templates.py auth_codes.py email_templates.py \
+    permissions.py patient_dedupe.py db_import.py db_merge.py root@68.183.208.166:/opt/dentacare/
+scp -r cloud window root@68.183.208.166:/opt/dentacare/
+# on the droplet:
+cd /opt/dentacare/cloud && docker compose up -d --build app
+```
+
+Then send one real email end-to-end from a paired local server (e.g. set your admin email, request a verification code) and confirm the message lands in the inbox with SPF/DKIM passing (Gmail: *Show original*).
 
 ## Signed serials (Ed25519) — keys and rollout
 
@@ -183,6 +239,7 @@ Each row is `{serial, status, plan_name, clinic_name, max_devices, used_devices,
 - `POST /api/license/validate` — the license authority. `{serial_token, device_fingerprint, device_name?}` → `{valid, reason?, status, plan_name, expires_at, grace_until, remaining_slots}`. Verifies the Ed25519 signature, registers the serial on first use, enforces status/subscription/renewal, and atomically claims a device slot up to `max_devices`. **No clinic token required** (self-authenticates via the signature). Rate-limited per IP.
 - `POST /api/license/admin/revoke` — admin only, gated by `X-Admin-Token` = `CLINIC_ADMIN_API_TOKEN`. Revoke/suspend/re-activate a serial, or release a device slot. **No clinic token required**; `401` when the admin token is unset or wrong. Rate-limited per IP. See *Revoking / suspending a serial*.
 - `GET /api/system/readiness` — health check. No token required.
+- `POST /api/relay/email` — system-email relay. **Requires a valid `X-Clinic-Token`.** `{to, template, params, lang}` → renders `password_reset` / `email_verify` / `staff_invite` / `security_alert` (EN/AR plain text) and sends via Resend. Per-clinic rate limits; `502` when `RESEND_API_KEY` is unset or the provider fails. See *Email relay*.
 - Everything else under `/api/*` — requires a valid `X-Clinic-Token` (or `?clinic_token=`), routed to that clinic's DB. This includes `/api/sync/export`, `/api/sync/import`, `/api/patients`, etc.
 - Non-`/api/` paths — return a short "use your local server" notice.
 - `/api/medical-images*` — returns `501` on the cloud node (uploads aren't part of cloud sync and the folder isn't tenant-scoped).
