@@ -21,6 +21,11 @@ def _unique_mutex_name(monkeypatch):
     monkeypatch.setattr(single_instance, 'MUTEX_NAME', f'DentaCare-Test-{uuid.uuid4()}')
 
 
+_windows_only = pytest.mark.skipif(
+    sys.platform != 'win32', reason='SingleInstanceGuard mutex is a no-op off Windows')
+
+
+@_windows_only
 def test_first_instance_acquires_mutex():
     guard = SingleInstanceGuard()
     try:
@@ -30,6 +35,7 @@ def test_first_instance_acquires_mutex():
         guard.release()
 
 
+@_windows_only
 def test_second_guard_sees_existing_mutex():
     guard1 = SingleInstanceGuard()
     guard2 = SingleInstanceGuard()
@@ -59,6 +65,7 @@ def test_release_is_idempotent():
     assert guard._handle is None
 
 
+@_windows_only
 def test_context_manager_releases():
     with SingleInstanceGuard() as g:
         assert g.is_first_instance is True
@@ -81,6 +88,7 @@ def test_ctypes_failure_fails_open(monkeypatch):
     assert guard._handle is None
 
 
+@_windows_only
 def test_release_swallows_ctypes_error():
     guard = SingleInstanceGuard()
     assert guard._handle is not None
