@@ -25,12 +25,11 @@ COPY db_import.py db_merge.py ./
 # permissions + patient_dedupe (pre-existing module-load imports that were
 # missing from the image). Without these the container crash-loops on start.
 COPY auth_codes.py email_templates.py permissions.py patient_dedupe.py ./
-# It also does `from window.data_dir import resolve_data_dir` at module load.
-# Only data_dir.py (pure stdlib) + the package __init__ (docstring only, no
-# imports) are needed on the cloud path; the GUI submodules are not imported.
-# resolve_data_dir() honors CLINIC_DATA_DIR=/data (set below), so the cloud
-# node stores its SQLite files on the mounted volume as before.
-COPY window/__init__.py window/data_dir.py ./window/
+# It also imports window.data_dir (resolve_data_dir, honors CLINIC_DATA_DIR=/data
+# set below) and window.service_port (SERVICE_PORT_FILENAME) at module load — both
+# pure stdlib, no GUI deps. The GUI submodules (pywebview etc.) are not imported
+# on the cloud path and are intentionally left out of the image.
+COPY window/__init__.py window/data_dir.py window/service_port.py ./window/
 # /logo serves DentaCare.PNG if present (returns 204 otherwise) — copied opportunistically.
 # (kept as a separate optional layer so the build still works if the asset isn't in the context)
 
