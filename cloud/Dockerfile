@@ -14,17 +14,22 @@ COPY dental_clinic.py ./
 # dental_clinic.py imports templates.py at module load (the portal/login/mobile
 # HTML lives there), so the cloud image needs it even though the staff portal
 # isn't served on the cloud node — without it the container crash-loops on start.
-COPY templates.py ./
+# templates.py itself imports web_assets.py (inlined font/icon data) at module
+# load, so that has to ship too.
+COPY templates.py web_assets.py ./
 # dental_clinic.py also imports the Data-Tools helpers (db_import / db_merge) at
 # module load. The /api/data/* routes are 404 on the cloud node, but the top-level
 # import still runs, so the image needs these (pure-stdlib) files or it crash-loops.
 COPY db_import.py db_merge.py ./
-# Auth/email modules imported by dental_clinic.py at module load (email auth +
-# per-dentist accounts, 2026-07): auth_codes (OTP/recovery), email_templates
-# (relay rendering — the relay endpoint lives HERE on the cloud node),
-# permissions + patient_dedupe (pre-existing module-load imports that were
-# missing from the image). Without these the container crash-loops on start.
-COPY auth_codes.py email_templates.py permissions.py patient_dedupe.py ./
+# Every other same-directory module dental_clinic.py imports at the top of the
+# file (module load, unconditional on CLOUD_MODE) — auth_codes (OTP/recovery),
+# email_templates (relay rendering, the relay endpoint lives HERE on the cloud
+# node), permissions, patient_dedupe, inventory, patient_import. All pure
+# stdlib. Missing any one of these crash-loops the container on start; this
+# whole block has bitten every redeploy so far because nothing enforces it —
+# if dental_clinic.py grows a new top-level `import <local_module>`, add it
+# here too.
+COPY auth_codes.py email_templates.py permissions.py patient_dedupe.py inventory.py patient_import.py ./
 # It also imports window.data_dir (resolve_data_dir, honors CLINIC_DATA_DIR=/data
 # set below) and window.service_port (SERVICE_PORT_FILENAME) at module load — both
 # pure stdlib, no GUI deps. The GUI submodules (pywebview etc.) are not imported
