@@ -2564,15 +2564,20 @@ def _require_password_change():
 
 _CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
 # '/login' and '/change-password' are no-JS form posts that self-validate (see
-# _form_csrf_ok) + re-render on failure. The two /api/login/* routes are JSON
-# posts reachable by a signed-out visitor who has no session-bound CSRF token
-# to send yet (there is no HTML page in this codebase that seeds one before
-# they're used) — same pre-auth posture as /login itself, and CSRF's threat
-# model (hijacking an authenticated session) doesn't apply pre-auth anyway.
-# Anti-enumeration + auth_codes' attempt/expiry limits are the abuse guard
-# here instead of a token.
+# _form_csrf_ok) + re-render on failure. Everything else here is a JSON post
+# reachable by a caller with no session-bound CSRF token to send yet — the
+# /api/login/* routes by a signed-out browser visitor; the license/pairing/
+# registration routes by a machine client (a clinic's local server or a
+# fresh install with no staff session at all) authenticating via a signed
+# token or one-time code in the body, not a session cookie. Same pre-auth
+# posture as /login itself, and CSRF's threat model (hijacking an
+# authenticated session) doesn't apply when there is no session. Each of
+# these has its own abuse guard instead — rate limits, signature checks,
+# one-time-code expiry.
 _CSRF_FORM_ROUTES = {'/login', '/change-password', '/api/login/forgot', '/api/login/reset',
-                     '/api/login/recover'}
+                     '/api/login/recover', '/api/clinics/register', '/api/license/validate',
+                     '/api/license/claim', '/api/license/activate', '/api/license/login',
+                     '/api/license/offline-verify', '/api/pairing/start', '/api/pairing/complete'}
 _CSRF_ENABLED = os.environ.get('CLINIC_DISABLE_CSRF', '0').strip().lower() \
     not in ('1', 'true', 'yes', 'on')
 if not _CSRF_ENABLED:
@@ -2583,11 +2588,12 @@ if not _CSRF_ENABLED:
 def _request_is_csrf_exempt():
     # A classic CSRF vector (an HTML form, or a "simple" cross-origin fetch) cannot
     # set custom request headers without a CORS preflight this server never approves.
-    # So the presence of X-Clinic-Token / X-Device-Token / Authorization proves the
-    # request is not a forged cross-site one. Mobile uses X-Clinic-Token (cloud link)
-    # or X-Device-Token (LAN link); cloud-sync uses X-Clinic-Token.
+    # So the presence of X-Clinic-Token / X-Device-Token / X-Admin-Token / Authorization
+    # proves the request is not a forged cross-site one. Mobile uses X-Clinic-Token
+    # (cloud link) or X-Device-Token (LAN link); cloud-sync uses X-Clinic-Token; the
+    # vendor serial-admin console uses X-Admin-Token.
     return bool(request.headers.get('X-Clinic-Token') or request.headers.get('X-Device-Token')
-                or request.headers.get('Authorization'))
+                or request.headers.get('X-Admin-Token') or request.headers.get('Authorization'))
 
 
 def _form_csrf_ok():
@@ -9944,9 +9950,15 @@ def license_recheck_once(http=None):
             conn.close()
             return
         result = _validate_with_cloud(token, fingerprint) if token else None
-        if not isinstance(result, dict):
+        # 'valid' is only present on a genuine business response from
+        # validate_license — a CSRF block, rate limit, or any other
+        # mid-stack error is a dict too (has 'error'), but never 'valid'.
+        # Those are inconclusive, not a real verdict, so — like offline —
+        # they must never downgrade a clinic to view-only.
+        if not isinstance(result, dict) or 'valid' not in result:
             write_app_setting(cur, 'license_last_recheck_at', utc_now_iso())
-            write_app_setting(cur, 'license_last_recheck_result', 'offline')
+            write_app_setting(cur, 'license_last_recheck_result',
+                              'offline' if not isinstance(result, dict) else 'error')
             conn.commit(); conn.close()
             return
         if result.get('valid'):
