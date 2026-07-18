@@ -19,6 +19,12 @@ COPY templates.py ./
 # module load. The /api/data/* routes are 404 on the cloud node, but the top-level
 # import still runs, so the image needs these (pure-stdlib) files or it crash-loops.
 COPY db_import.py db_merge.py ./
+# Auth/email modules imported by dental_clinic.py at module load (email auth +
+# per-dentist accounts, 2026-07): auth_codes (OTP/recovery), email_templates
+# (relay rendering — the relay endpoint lives HERE on the cloud node),
+# permissions + patient_dedupe (pre-existing module-load imports that were
+# missing from the image). Without these the container crash-loops on start.
+COPY auth_codes.py email_templates.py permissions.py patient_dedupe.py ./
 # It also does `from window.data_dir import resolve_data_dir` at module load.
 # Only data_dir.py (pure stdlib) + the package __init__ (docstring only, no
 # imports) are needed on the cloud path; the GUI submodules are not imported.
