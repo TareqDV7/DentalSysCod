@@ -7210,7 +7210,11 @@ def _send_via_resend(to, subject, body):
                           'text': body}).encode('utf-8')
     req = urllib.request.Request(
         'https://api.resend.com/emails', data=payload, method='POST',
-        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'})
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json',
+                 # Cloudflare (fronting api.resend.com) blocks the default
+                 # urllib User-Agent with a 1010 WAF challenge before the
+                 # request ever reaches Resend — a real UA string clears it.
+                 'User-Agent': 'DentaCare-Cloud/1.0'})
     with urllib.request.urlopen(req, timeout=15) as resp:
         if resp.status >= 300:
             raise RuntimeError(f'Resend status {resp.status}')
