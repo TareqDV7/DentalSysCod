@@ -6249,6 +6249,7 @@ HTML_TEMPLATE = '''
             m.querySelector('.confirm-modal__icon').textContent = '⚠';
             m.querySelector('.confirm-modal__typed').hidden = false;
             const input = m.querySelector('.confirm-modal__input');
+            input.type = 'text';
             input.value = '';
             m.querySelector('.confirm-modal__hint').textContent =
                 t('type_to_confirm', 'Type {word} to confirm.').replace('{word}', word);
@@ -6258,6 +6259,30 @@ HTML_TEMPLATE = '''
             input.oninput = function () { okBtn.disabled = input.value.trim() !== word; };
             m.querySelector('.confirm-modal__cancel').textContent = t('cancel', 'Cancel');
             return _openConfirm(input);
+        }
+
+        function showPromptModal(opts) {
+            const o = opts || {};
+            const minLength = typeof o.minLength === 'number' ? o.minLength : 1;
+            const m = _confirmModalEl();
+            if (!m) return Promise.resolve(null);
+            if (_confirmResolver) _closeConfirm(false);
+            m.classList.remove('confirm-modal--danger');
+            m.classList.add('confirm-modal--neutral');
+            m.querySelector('#confirm-modal-title').textContent = o.title || t('please_confirm', 'Please confirm');
+            m.querySelector('.confirm-modal__msg').textContent = o.message || '';
+            m.querySelector('.confirm-modal__icon').textContent = 'ℹ';
+            m.querySelector('.confirm-modal__typed').hidden = false;
+            const input = m.querySelector('.confirm-modal__input');
+            input.type = o.inputType || 'text';
+            input.value = o.defaultValue || '';
+            m.querySelector('.confirm-modal__hint').textContent = o.hint || '';
+            const okBtn = m.querySelector('.confirm-modal__ok');
+            okBtn.textContent = o.confirmLabel || t('confirm', 'Confirm');
+            okBtn.disabled = input.value.trim().length < minLength;
+            input.oninput = function () { okBtn.disabled = input.value.trim().length < minLength; };
+            m.querySelector('.confirm-modal__cancel').textContent = o.cancelLabel || t('cancel', 'Cancel');
+            return _openConfirm(input).then(function (ok) { return ok ? input.value : null; });
         }
 
         function _openConfirm(focusEl) {
@@ -7446,8 +7471,13 @@ HTML_TEMPLATE = '''
         }
 
         async function resetStaffPassword(userId, username) {
-            const promptMsg = t('reset_password_prompt', 'Enter a new temporary password for {username} (min 4 characters):').replace('{username}', username);
-            const newPassword = prompt(promptMsg);
+            const newPassword = await showPromptModal({
+                title: t('reset_password_title', 'Reset password'),
+                message: t('reset_password_prompt', 'Enter a new temporary password for {username} (min 4 characters):').replace('{username}', username),
+                minLength: 4,
+                inputType: 'password',
+                confirmLabel: t('confirm', 'Confirm')
+            });
             if (newPassword === null) return;
             if (newPassword.length < 4) { showToast(t('fill_all_fields', 'Please fill in all fields.'), 'warning'); return; }
             try {
